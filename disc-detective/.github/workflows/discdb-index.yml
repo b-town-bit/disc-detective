@@ -1,0 +1,87 @@
+# Rebuilds the slim TheDiscDB index every week and publishes it as a release asset that
+# Disc Detective downloads (about 4 MB instead of a 4 GB clone).
+#
+# Setup: push the repo, then run this once
+# from the Actions tab ("Run workflow"). It creates the "discdb-index" release itself.
+name: TheDiscDB index
+
+on:
+  schedule:
+    - cron: "17 9 * * 1"        # Mondays 09:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write                # create/update the release
+
+concurrency:
+  group: discdb-index
+  cancel-in-progress: false
+
+env:
+  TAG: discdb-index
+  ASSET: discdb_index.sqlite.gz
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Only the JSON and MakeMKV logs: no images (about 1.4 GB) and no history.
+      - name: Fetch TheDiscDB data (sparse, no images)
+        run: |
+          git clone --filter=blob:none --no-checkout --depth 1 https://github.com/TheDiscDb/data.git discdb
+          cd discdb
+          git sparse-checkout set --no-cone \
+            '/data/*/*/metadata.json' \
+            '/data/*/*/*/release.json' \
+            '/data/*/*/*/disc*.json' \
+            '/data/*/*/*/disc[0-9]*.txt' \
+            '/LICENSE'
+          git checkout
+          echo "COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Skip if TheDiscDB hasn't changed
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prev=$(gh release view "$TAG" --json body -q .body 2>/dev/null | grep -o 'commit [0-9a-f]\{40\}' | cut -d' ' -f2 || true)
+          if [ "$prev" = "$COMMIT" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "TheDiscDB unchanged since $COMMIT"; echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build index
+        if: steps.check.outputs.skip != '1'
+        run: |
+          python -m disc_detective --build-discdb-index discdb --index-out discdb_index.sqlite --commit "$COMMIT"
+          python - <<'PY'
+          import sqlite3
+          con = sqlite3.connect("discdb_index.sqlite")
+          meta = dict(con.execute("SELECT key, value FROM meta"))
+          print(meta)
+          assert int(meta["discs"]) > 1000 and int(meta["posters"]) > 100, "index looks empty"
+          PY
+          gzip -9 -n -c discdb_index.sqlite > "$ASSET"
+          cp discdb/LICENSE THEDISCDB_LICENSE.txt
+          ls -l "$ASSET"
+
+      - name: Publish release asset
+        if: steps.check.outputs.skip != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Slim index of TheDiscDB for Disc Detective.
+          Built $(date -u +%Y-%m-%dT%H:%MZ) from TheDiscDb/data commit $COMMIT.
+          Disc data from TheDiscDB (thediscdb.com), MIT License, Copyright (c) 2021 Luke Foust (see THEDISCDB_LICENSE.txt)."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET" THEDISCDB_LICENSE.txt --clobber
+            gh release edit "$TAG" --notes "$notes"
+          else
+            gh release create "$TAG" "$ASSET" THEDISCDB_LICENSE.txt --title "TheDiscDB index" --notes "$notes" --latest=false
+          fi

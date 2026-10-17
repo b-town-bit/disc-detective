@@ -1,0 +1,221 @@
+{
+ "format": "DVD",
+ "mastered": "2005-08",
+ "label": "WALLACE_AND_GROMIT",
+ "facts": {
+  "mastered": "2005-08",
+  "episode_minutes": 31,
+  "episode_count": 5,
+  "commentary_flagged": false
+ },
+ "titles": [
+  {
+   "id": "Title 1",
+   "group": "VTS 1",
+   "duration": 3391.5005005005005,
+   "chapters": 7,
+   "role": "play-all"
+  },
+  {
+   "id": "Title 2",
+   "group": "VTS 1",
+   "duration": 1469.2002002002002,
+   "chapters": 4,
+   "role": "episode",
+   "episode_index": 1
+  },
+  {
+   "id": "Title 3",
+   "group": "VTS 1",
+   "duration": 1922.8008008008007,
+   "chapters": 4,
+   "role": "episode",
+   "episode_index": 2
+  },
+  {
+   "id": "Title 4",
+   "group": "VTS 1",
+   "duration": 0.5005005005005005,
+   "chapters": 1,
+   "role": "junk"
+  },
+  {
+   "id": "Title 5",
+   "group": "VTS 2",
+   "duration": 4.0,
+   "chapters": 3,
+   "role": "junk"
+  },
+  {
+   "id": "Title 6",
+   "group": "VTS 3",
+   "duration": 1862.467133800467,
+   "chapters": 5,
+   "role": "episode",
+   "episode_index": 3
+  },
+  {
+   "id": "Title 7",
+   "group": "VTS 3",
+   "duration": 1861.9676343009676,
+   "chapters": 4,
+   "role": "episode",
+   "episode_index": 4
+  },
+  {
+   "id": "Title 8",
+   "group": "VTS 3",
+   "duration": 0.5005005005005005,
+   "chapters": 1,
+   "role": "junk"
+  },
+  {
+   "id": "Title 9",
+   "group": "VTS 3",
+   "duration": 0.5005005005005005,
+   "chapters": 1,
+   "role": "junk"
+  },
+  {
+   "id": "Title 10",
+   "group": "VTS 4",
+   "duration": 25.533867200533866,
+   "chapters": 2,
+   "role": "junk"
+  },
+  {
+   "id": "Title 11",
+   "group": "VTS 5",
+   "duration": 0.5005005005005005,
+   "chapters": 1,
+   "role": "junk"
+  },
+  {
+   "id": "Title 12",
+   "group": "VTS 6",
+   "duration": 10.5005005005005,
+   "chapters": 2,
+   "role": "junk"
+  },
+  {
+   "id": "Title 13",
+   "group": "VTS 6",
+   "duration": 0.5005005005005005,
+   "chapters": 1,
+   "role": "junk"
+  },
+  {
+   "id": "Title 14",
+   "group": "VTS 7",
+   "duration": 0.5005005005005005,
+   "chapters": 1,
+   "role": "junk"
+  },
+  {
+   "id": "Title 15",
+   "group": "VTS 8",
+   "duration": 1.001001001001001,
+   "chapters": 2,
+   "role": "junk"
+  },
+  {
+   "id": "Title 16",
+   "group": "VTS 9",
+   "duration": 1428.5005005005005,
+   "chapters": 22,
+   "role": "episode",
+   "episode_index": 5
+  },
+  {
+   "id": "Title 17",
+   "group": "VTS 9",
+   "duration": 105.53386720053386,
+   "chapters": 3,
+   "role": "junk"
+  },
+  {
+   "id": "Title 18",
+   "group": "VTS 9",
+   "duration": 116.16683350016683,
+   "chapters": 3,
+   "role": "junk"
+  },
+  {
+   "id": "Title 19",
+   "group": "VTS 9",
+   "duration": 100.76743410076743,
+   "chapters": 3,
+   "role": "junk"
+  },
+  {
+   "id": "Title 20",
+   "group": "VTS 9",
+   "duration": 159.36703370036705,
+   "chapters": 3,
+   "role": "extra"
+  },
+  {
+   "id": "Title 21",
+   "group": "VTS 9",
+   "duration": 137.03336670003335,
+   "chapters": 3,
+   "role": "extra"
+  },
+  {
+   "id": "Title 22",
+   "group": "VTS 9",
+   "duration": 131.93426760093428,
+   "chapters": 3,
+   "role": "extra"
+  },
+  {
+   "id": "Title 23",
+   "group": "VTS 9",
+   "duration": 136.06673340006674,
+   "chapters": 3,
+   "role": "extra"
+  },
+  {
+   "id": "Title 24",
+   "group": "VTS 9",
+   "duration": 135.83416750083416,
+   "chapters": 3,
+   "role": "extra"
+  },
+  {
+   "id": "Title 25",
+   "group": "VTS 9",
+   "duration": 140.1001001001001,
+   "chapters": 3,
+   "role": "extra"
+  },
+  {
+   "id": "Title 26",
+   "group": "VTS 9",
+   "duration": 239.96763430096763,
+   "chapters": 3,
+   "role": "extra"
+  },
+  {
+   "id": "Title 27",
+   "group": "VTS 9",
+   "duration": 474.2002002002002,
+   "chapters": 2,
+   "role": "extra"
+  },
+  {
+   "id": "Title 28",
+   "group": "VTS 9",
+   "duration": 179.5005005005005,
+   "chapters": 2,
+   "role": "extra"
+  },
+  {
+   "id": "Title 29",
+   "group": "VTS 10",
+   "duration": 194.86753420086754,
+   "chapters": 7,
+   "role": "extra"
+  }
+ ]
+}

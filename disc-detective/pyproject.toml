@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "disc-detective"
+dynamic = ["version"]
+description = "Identify which movie or show is on a DVD or Blu-ray, and what every title on it is, without reading any video."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY.md"]
+requires-python = ">=3.9"
+dependencies = []          # standard library only
+
+[project.optional-dependencies]
+pictures = ["Pillow"]      # posters and box art (ffmpeg works too)
+dev = ["pytest"]
+
+[project.scripts]
+disc-detective = "disc_detective.core:main"
+
+[project.gui-scripts]
+disc-detective-app = "disc_detective.app:main"
+
+[tool.setuptools]
+packages = ["disc_detective"]
+
+[tool.setuptools.package-data]
+disc_detective = ["icon.png"]
+
+[tool.setuptools.dynamic]
+version = { attr = "disc_detective.core.VERSION" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gui: needs Tkinter and a display",
+    "dev: needs your own disc corpus or a TheDiscDB checkout (see tests/README.md)",
+]

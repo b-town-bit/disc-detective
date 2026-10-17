@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+# built by the Action / by hand; published as a release asset, never committed
+discdb_index.sqlite*
+# your own discs: keep personal test data out of the repo
+dev-corpus/
+*.sqlite
