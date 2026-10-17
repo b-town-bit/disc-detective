@@ -22,6 +22,10 @@ used under IMDb's terms for personal and non-commercial use. Each user's copy is
 downloaded directly from IMDb to their own computer. This project never
 redistributes IMDb data, and IMDb images are not used.
 
+## Pillow
+Images are converted with [Pillow](https://python-pillow.org) (MIT-CMU license), installed
+as a dependency. ffmpeg is used instead if Pillow is missing.
+
 ## TMDB (optional)
 With a TMDB key, posters and a fallback search come from [TMDB](https://www.themoviedb.org).
 

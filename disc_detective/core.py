@@ -48,6 +48,8 @@ import difflib
 import glob
 import hashlib
 import json
+import logging
+import logging.handlers
 import os
 import re
 import shutil
@@ -1527,6 +1529,15 @@ def default_art_dir(db_path=None):
     return os.path.join(os.path.dirname(os.path.abspath(db_path or default_library())), "art")
 
 
+def image_converter():
+    """What can turn a JPEG into something Tk shows: "Pillow", "ffmpeg" or None."""
+    try:
+        import PIL  # noqa: F401
+        return "Pillow"
+    except ImportError:
+        return "ffmpeg" if shutil.which("ffmpeg") else None
+
+
 def to_png(src, dest, box):
     """Scale an image to fit box=(w, h) and save as PNG. Returns dest, or None if no converter."""
     bw, bh = box
@@ -1689,6 +1700,10 @@ def find_artwork(rep, args, index=None):
     repo = getattr(args, "discdb_repo", None)
     key = getattr(args, "tmdb_key", None) or os.environ.get("TMDB_API_KEY")
     errors = []
+    rep["art"], rep["art_note"] = None, None
+    if image_converter() is None:
+        rep["art_note"] = "No picture: install Pillow (pip install pillow) or ffmpeg to show posters"
+        return None
     art = _art_cached(art_dir, rep["content_hash"] + "_disc")
     cover = rep.get("cover") or {}
     if not art and cover.get("image") and os.path.exists(cover["image"]):
@@ -1705,6 +1720,17 @@ def find_artwork(rep, args, index=None):
     rep["art"] = art
     if errors:
         rep["art_errors"] = errors
+    if not art and c:                    # say why, so a missing picture isn't a mystery
+        if index is None and not repo and not key:
+            rep["art_note"] = ("No picture: the TheDiscDB index hasn't downloaded yet "
+                               "(Settings > TheDiscDB > Update now)")
+        elif not online:
+            rep["art_note"] = "No picture: offline"
+        elif errors:
+            rep["art_note"] = "No picture: " + errors[0]
+        else:
+            rep["art_note"] = "No picture for this title in TheDiscDB" + (
+                "" if key else "; a TMDB key in Settings adds more posters")
     return art
 
 
@@ -1994,6 +2020,7 @@ def identify(root, args):
             rep["art"], rep["art_errors"] = None, ["%s: %s" % (type(exc).__name__, exc)]
     if index is not None:
         index.close()
+    log_report(rep)
     if lib is not None and not sample and not getattr(args, "no_record", False):
         rep["evidence_stored"] = record_disc(lib, rep, fp, root, fmt, base, getattr(args, "keep_evidence", False))
         rep["recorded"] = True
@@ -2111,8 +2138,60 @@ def is_split_size(size):
     return 1073741824 - 2 * 1024 * 1024 <= size <= 1073741824
 
 
+logger = logging.getLogger("disc_detective")
+status_hook = None   # front ends show progress messages here (the app's status line); default: stderr
+
+
 def log(msg):
-    print(msg, file=sys.stderr, flush=True)
+    """A progress message: to the log file, and to the screen."""
+    logger.info(msg)
+    if status_hook:
+        status_hook(msg)
+    else:
+        print(msg, file=sys.stderr, flush=True)
+
+
+def log_dir():
+    return os.path.join(data_home(), "logs")
+
+
+def setup_logging(directory=None, level=logging.INFO):
+    """disc_detective.log (everything) and errors.log (warnings and errors, with tracebacks),
+    1 MB each with 3 old copies kept. Safe to call more than once."""
+    d = directory or log_dir()
+    os.makedirs(d, exist_ok=True)
+    for h in list(logger.handlers):
+        if getattr(h, "_disc_detective", False):
+            logger.removeHandler(h)
+            h.close()
+    fmt = logging.Formatter("%(asctime)s  %(levelname)-7s %(message)s", "%Y-%m-%d %H:%M:%S")
+    for name, lvl in (("disc_detective.log", level), ("errors.log", logging.WARNING)):
+        h = logging.handlers.RotatingFileHandler(os.path.join(d, name), maxBytes=1_000_000, backupCount=3,
+                                                 encoding="utf-8", delay=True)
+        h.setLevel(lvl)
+        h.setFormatter(fmt)
+        h._disc_detective = True
+        logger.addHandler(h)
+    logger.setLevel(min(level, logging.INFO))
+    logger.propagate = False
+    return d
+
+
+def log_report(rep):
+    """One line per scan in the log, plus anything that went wrong along the way."""
+    logger.info("scan %s  %s  label=%s  -> %s  [%s; %s]", rep.get("content_hash", "?")[:8], rep.get("format"),
+                rep.get("label") or "-", rep.get("best_guess") or "?", rep.get("identified_by") or "-",
+                rep.get("status") or "-")
+    for e in (rep.get("discdb") or {}).get("errors") or []:
+        logger.warning("TheDiscDB: %s", e)
+    for k in ("candidates_error", "imdb_note"):
+        if rep.get(k):
+            logger.warning("%s", rep[k])
+    for e in rep.get("art_errors") or []:
+        logger.warning("picture: %s", e)
+    note = rep.get("art_note")
+    if note and not rep.get("art"):
+        (logger.warning if re.search(r"Pillow|index|offline", note) else logger.info)("%s", note)
 
 
 def is_probable(c):
@@ -2708,6 +2787,8 @@ def print_report(rep):
         p("  picture     %s from %s: %s" % (a["what"], a["source"], a["image"]))
         if a.get("credit"):
             p("              %s" % a["credit"])
+    if not rep.get("art") and rep.get("art_note"):
+        p("  picture     %s" % rep["art_note"])
     for e in rep.get("art_errors") or []:
         p("  picture     (%s)" % e)
     if rep.get("cover_ocr"):
@@ -2827,12 +2908,27 @@ def makemkv_log_store(h):
 
 
 def main():
-    import tempfile
     ap = make_parser()
     args = ap.parse_args()
     if args.build_discdb_index:
         discdb_build_index(args.build_discdb_index, os.path.abspath(args.index_out), args.commit, log=log)
         return
+    try:
+        setup_logging()
+    except OSError:
+        pass                                  # read-only home: run without log files
+    logger.info("disc-detective %s: %s", VERSION, " ".join(sys.argv[1:]))
+    try:
+        _main(args, ap)
+    except SystemExit:
+        raise
+    except Exception:
+        logger.exception("command failed")
+        raise
+
+
+def _main(args, ap):
+    import tempfile
     if args.offline:
         args.tmdb_key = None
         os.environ.pop("TMDB_API_KEY", None)

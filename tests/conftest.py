@@ -29,6 +29,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "IMDB_BASE", DEAD + "imdb/")
     monkeypatch.setattr(core, "TMDB_API", DEAD + "tmdb")
     monkeypatch.setattr(core, "log", lambda msg: None)
+    monkeypatch.setattr(core, "status_hook", None)
     monkeypatch.setattr(core, "progress", None)
     return home
 
@@ -93,4 +94,4 @@ def can_convert_images():
         return bool(shutil.which("ffmpeg"))
 
 
-needs_images = pytest.mark.skipif(not can_convert_images(), reason="needs Pillow or ffmpeg")
+needs_images = pytest.mark.skipif(not can_convert_images(), reason="needs Pillow (a dependency) or ffmpeg")

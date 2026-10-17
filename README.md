@@ -31,16 +31,17 @@ The app then shows the poster or box art so you can confirm at a glance.
 ## Install
 
 Needs Python 3.9+ with Tkinter (included in the python.org installer for Windows
-and macOS). Nothing else is required.
+and macOS).
 
 ```
-pip install "disc-detective[pictures] @ git+https://github.com/b-town-bit/disc-detective"
+pip install "git+https://github.com/b-town-bit/disc-detective"
 ```
 
-Or download the repo and double-click **Disc Detective.pyw** (Windows), or run
-`python -m disc_detective`.
+That brings along its one dependency, **Pillow** (for posters and box art). To run
+from a downloaded copy of the repo instead, `pip install pillow` once, then
+double-click **Disc Detective.pyw** (Windows) or run `python -m disc_detective`.
 
-Optional: **Pillow** or **ffmpeg** for pictures, **MakeMKV** for ripping,
+Optional: **MakeMKV** for ripping,
 **tesseract** for reading text off cover art, a free **TMDB** key (in Settings) for
 extra posters.
 
@@ -67,6 +68,11 @@ disc-detective --update-data           refresh IMDb and TheDiscDB data now
 
 Your library, the downloaded data, cached pictures and settings live in
 `~/.disc_detective` (set `DISC_DETECTIVE_HOME` to move it).
+
+**Logs** are in `~/.disc_detective/logs` (in the app: Scan ▾ > Open logs folder):
+`disc_detective.log` records every scan, download and rip, including MakeMKV's own
+messages; `errors.log` has only warnings and errors, with full tracebacks.
+Include `errors.log` when reporting a problem.
 
 ## Plex names
 

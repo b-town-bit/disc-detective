@@ -248,7 +248,7 @@ class App:
         self.extras = tk.BooleanVar(value=self.settings.get("extras", False))
         self._build()
         self.refresh_drives(initial=True)
-        di.log = lambda msg: self.post(self.set_status, msg)   # identifier progress -> status line
+        di.status_hook = lambda msg: self.post(self.set_status, msg)   # identifier progress -> status line
         self.data_ui = None
         self._last_prog = 0.0
 
@@ -345,6 +345,7 @@ class App:
         m.add_command(label="Refresh drives", command=self.refresh_drives)
         m.add_separator()
         m.add_command(label="Settings…", command=self.open_settings)
+        m.add_command(label="Open logs folder", command=self.open_logs)
         m.add_command(label="About / credits", command=self.about)
 
     def about(self):
@@ -456,6 +457,14 @@ class App:
         exe = self.settings.get("makemkv")
         return exe if exe and os.path.isfile(exe) else di.find_makemkvcon()
 
+    def open_logs(self):
+        path = di.log_dir()
+        os.makedirs(path, exist_ok=True)
+        if os.name == "nt":
+            os.startfile(path)
+        else:
+            subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", path])
+
     def open_settings(self):
         SettingsDialog(self.root, self)
 
@@ -468,9 +477,12 @@ class App:
 
         def work():
             try:
-                res = di.update_data(args, which, force=force, log=lambda m: self.post(ui.message, m))
+                res = di.update_data(args, which, force=force,
+                                     log=lambda m: (di.logger.info(m), self.post(ui.message, m)))
+                di.logger.info("disc data updated: %s", res)
                 self.post(self._data_done, ui, res, None)
             except Exception as exc:
+                di.logger.exception("disc data update failed")
                 self.post(self._data_done, ui, None, "%s: %s" % (type(exc).__name__, exc))
         threading.Thread(target=work, daemon=True).start()
 
@@ -508,7 +520,7 @@ class App:
 
     def clear_picture(self):
         self.pic_col.pack_forget()
-        self.pic_lbl.config(image="")
+        self.pic_lbl.config(image="", text="")
         for w in self.strip.winfo_children():
             w.destroy()
         self.strip.pack_forget()
@@ -523,6 +535,10 @@ class App:
             self.pic_lbl.config(image=img)
             cap = {"disc": "from the disc", "TheDiscDB": "TheDiscDB", "TMDB": "TMDB"}.get(art.get("source"), "")
             self.pic_cap.config(text="%s · %s" % (art.get("what", "picture"), cap) if cap else "")
+            self.pic_col.pack(side="left", anchor="n", padx=(0, 14), before=self.info)
+        elif rep.get("art_note"):            # tell the user why there's no picture
+            self.pic_lbl.config(text=rep["art_note"], style="Cap.TLabel", wraplength=140, justify="left")
+            self.pic_cap.config(text="")
             self.pic_col.pack(side="left", anchor="n", padx=(0, 14), before=self.info)
         c = (rep.get("candidates") or [None])[0]
         if rep.get("kind") == "collection" and c and c.get("items"):
@@ -602,8 +618,10 @@ class App:
             args.library.close()
             self.post(self.scan_done, rep, None)
         except SystemExit as exc:
+            di.logger.warning("scan of %s: %s", drive, exc)
             self.post(self.scan_done, None, str(exc))
         except Exception as exc:   # show it rather than dying silently in a thread
+            di.logger.exception("scan of %s failed", drive)
             self.post(self.scan_done, None, "%s: %s" % (type(exc).__name__, exc))
 
     def scan_done(self, rep, err):
@@ -612,7 +630,7 @@ class App:
         if err:
             self.title_lbl.config(text="Couldn't read this disc")
             self.facts_lbl.config(text=err)
-            self.set_status("Scan failed · %s" % self.source_name())
+            self.set_status("Scan failed · %s · details in the log (Scan ▾ > Open logs folder)" % self.source_name())
             return
         self.rep = rep
         self.set_busy(False)
@@ -702,6 +720,9 @@ class App:
             with open(store, "w", encoding="utf-8", newline="") as fh:
                 fh.write(info)
             plan = self.current_plan(mk["titles"], extras=opts["extras"], selected=opts["selected"])
+            di.logger.info("rip %s from %s (%s) into %s: %d titles", rep["content_hash"][:8], drive, source, out, len(plan))
+            for item in plan:
+                di.logger.info("  MakeMKV title %s (%s, %s) -> %s", item["mk"], item["title_id"], item["length"], item["dest"])
             done = []
             for i, item in enumerate(plan):
                 if self.cancelled:
@@ -717,13 +738,20 @@ class App:
                     os.makedirs(os.path.dirname(dest), exist_ok=True)
                     shutil.move(os.path.join(work, max(files, key=lambda f: os.path.getsize(os.path.join(work, f)))), dest)
                     done.append(dest)
+                    di.logger.info("  ripped %s", dest)
+                elif not self.cancelled:
+                    di.logger.warning("MakeMKV title %s did not rip (%s)", item["mk"],
+                                      "no file written" if ok else "MakeMKV reported a failure")
                 shutil.rmtree(work, ignore_errors=True)
+            di.logger.info("rip finished: %d of %d titles%s", len(done), len(plan), " (cancelled)" if self.cancelled else "")
             self.post(self.rip_done, done, len(plan), None)
         except Exception as exc:
+            di.logger.exception("rip failed")
             self.post(self.rip_done, [], 0, "%s: %s" % (type(exc).__name__, exc))
 
     def _run_mkv(self, exe, source, idx, work, n, total):
         cmd = [exe, "-r", "--progress=-same", "mkv", source, str(idx), work]
+        di.logger.info("  run: %s", subprocess.list2cmdline(cmd))
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                      encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
         ok = False
@@ -735,10 +763,14 @@ class App:
                     self.post(self.progress.configure, {"value": int(1000 * (n + frac) / total)})
                 except ValueError:
                     pass
-            elif line.startswith("MSG:") and re.search(r'"Copy complete|titles saved', line):
-                ok = True
+            elif line.startswith("MSG:"):
+                di.logger.info("  makemkv: %s", line.strip()[4:])   # MakeMKV's own messages, for the record
+                if re.search(r'"Copy complete|titles saved', line):
+                    ok = True
         self.proc.wait()
         rc, self.proc = self.proc.returncode, None
+        if rc and not ok:
+            di.logger.warning("makemkvcon exited with code %s", rc)
         return ok or rc == 0
 
     def rip_done(self, done, planned, err):
@@ -747,8 +779,8 @@ class App:
         if done:
             self.last_out = os.path.dirname(done[0])
         if err:
-            self.set_status("Rip failed")
-            messagebox.showerror(APP, err)
+            self.set_status("Rip failed · details in the log (Scan ▾ > Open logs folder)")
+            messagebox.showerror(APP, err + "\n\nDetails are in errors.log (Scan ▾ > Open logs folder).")
         elif self.cancelled:
             self.set_status("Cancelled after %d of %d titles" % (len(done), planned))
         else:
@@ -1102,10 +1134,31 @@ def _n(v):
         return None
 
 
+def _log_uncaught(kind):
+    def hook(*exc):
+        di.logger.error("uncaught error (%s)", kind, exc_info=exc[-3:] if len(exc) >= 3 else None)
+    return hook
+
+
 def main():
+    try:
+        di.setup_logging()
+    except OSError:
+        pass
+    di.logger.info("Disc Detective %s started", di.VERSION)
+    sys.excepthook = _log_uncaught("main")
+    threading.excepthook = lambda a: di.logger.error("uncaught error in a background thread",
+                                                     exc_info=(a.exc_type, a.exc_value, a.exc_traceback))
     root = tk.Tk()
+
+    def tk_error(exc, val, tb):               # errors in button handlers etc.
+        di.logger.error("error in the app", exc_info=(exc, val, tb))
+        messagebox.showerror(APP, "%s: %s\n\nDetails are in errors.log (Scan ▾ > Open logs folder)."
+                             % (exc.__name__, val))
+    root.report_callback_exception = tk_error
     App(root)
     root.mainloop()
+    di.logger.info("Disc Detective closed")
 
 
 if __name__ == "__main__":
