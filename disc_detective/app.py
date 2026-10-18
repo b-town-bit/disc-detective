@@ -109,7 +109,7 @@ def clean(s):
 def plan_rip(rep, mk_titles, include_extras, selected=None):
     """Which MakeMKV titles to rip and what to call them (Plex layout)."""
     ours = [{"title_id": t["id"], "role": t["role"], "duration": t["duration"],
-             "clips": t.get("clip_list"), "episode_index": t.get("episode_index")}
+             "clips": t.get("clip_list"), "episode_index": t.get("episode_index"), "edition": t.get("edition")}
             for t in rep.get("titles") or []]
     pairs = di.map_makemkv(mk_titles, ours, rep["format"])
     names = {}
@@ -119,7 +119,7 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
     # TheDiscDB knows exactly what each title is: real extra names, exact episodes.
     hit = (rep.get("discdb") or {}).get("hit") or {}
     known = {str(t.get("source") or "").lower(): t.get("item") or {} for t in hit.get("titles") or []}
-    cand = (rep.get("candidates") or [None])[0] if di.is_probable(rep.get("candidates")) else None
+    cand = (rep.get("candidates") or [None])[0] if di.adopt_guess(rep.get("candidates")) else None
     if cand and cand.get("kind") == "collection" and cand.get("items"):
         first = cand["items"][0]        # extras of a short-film disc go with the first film
         base = "%s (%s) {imdb-%s}" % (clean(first["name"]), first.get("year") or "", first["imdb_id"])
@@ -156,6 +156,9 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
             dest = "%s/Episode %02d.mkv" % (base, (t or {}).get("episode_index") or m["index"])
         elif role in ("feature", "longest"):
             dest = "%s/%s.mkv" % (base, show)
+        elif role == "version" and t and t.get("edition") and "{imdb-" in base:
+            # a ticked widescreen / full-screen / 4K copy: another Plex edition of the same film
+            dest = "%s/%s {edition-%s}.mkv" % (base, show, clean(t["edition"]))
         else:   # hand-picked play-alls, alternate versions, duplicates
             dest = "%s/Other/%s - %s.mkv" % (base, show, (t["title_id"] if t else m["source"]).replace(".", "_"))
         plan.append({"mk": m["index"], "title_id": t["title_id"] if t else m["source"], "role": role,
@@ -277,6 +280,9 @@ class App:
         st.configure("Plan.TLabel", font=("Segoe UI", 10, "bold"))
         st.configure("Sub.TLabel", foreground="#666666")
         st.configure("Cap.TLabel", foreground="#777777", font=("Segoe UI", 8))
+        st.configure("Small.TButton", font=("Segoe UI", 9), padding=(6, 1))
+        st.configure("Detail.TLabel", font=("Segoe UI", 8))
+        st.configure("Picks.Treeview", rowheight=di.ART_PICK[1] + 6)
 
     def _build(self):
         top = ttk.Frame(self.root)
@@ -303,11 +309,19 @@ class App:
         self.title_lbl.pack(anchor="w")
         self.facts_lbl = ttk.Label(info, text="", style="Info.TLabel")
         self.facts_lbl.pack(anchor="w", pady=(2, 0))
+        self.details = ttk.Frame(info)          # small label / value table under the facts
+        self.details.pack(anchor="w", pady=(4, 0))
+        # "Not right?": other matches, typing the answer in, or confirming this one
+        self.match_row = ttk.Frame(info)
+        self.confirm_btn = ttk.Button(self.match_row, text="✓  That's right", style="Small.TButton", command=self.confirm)
+        self.confirmed_lbl = ttk.Label(self.match_row, text="✓ In your library", style="Cap.TLabel")
+        self.match_btn = ttk.Button(self.match_row, text="Not right? ▾", style="Small.TButton", command=self.match_menu)
+        self.match_popup = tk.Menu(self.root, tearoff=0)
         self.plan_lbl = ttk.Label(info, text="", style="Plan.TLabel", wraplength=520, justify="left")
         self.plan_lbl.pack(anchor="w", pady=(8, 0))
         self.dest_lbl = ttk.Label(info, text="", style="Sub.TLabel", wraplength=520, justify="left")
         self.dest_lbl.pack(anchor="w")
-        self.strip = ttk.Frame(info)    # short-film collections: one small poster per film
+        self.strip = ttk.Frame(info)    # short-film collections: each film's poster and name
 
         bottom = ttk.Frame(self.root)
         bottom.pack(fill="x", padx=14, pady=(10, 12))
@@ -440,8 +454,10 @@ class App:
         self.set_busy(False)
         self._build_rip_menu()
         self.clear_picture()
+        self.show_match_button(None)
         self.title_lbl.config(text="Ready to scan")
         self.facts_lbl.config(text=self.source_name())
+        self.show_details(None)
         self.plan_lbl.config(text="")
         self.dest_lbl.config(text="")
         self.set_status("Source: %s" % self.source_name())
@@ -518,6 +534,113 @@ class App:
         self._imgs.append(img)
         return img
 
+    # ---- choosing the match ----
+    def show_details(self, rep):
+        for w in self.details.winfo_children():
+            w.destroy()
+        for r, (k, v) in enumerate(detail_rows(rep) if rep else []):
+            ttk.Label(self.details, text=k, style="Cap.TLabel").grid(row=r, column=0, sticky="nw", padx=(0, 10))
+            ttk.Label(self.details, text=v, style="Detail.TLabel").grid(row=r, column=1, sticky="nw")
+
+    def show_match_button(self, rep):
+        for w in (self.confirm_btn, self.confirmed_lbl, self.match_btn):
+            w.pack_forget()
+        if rep is None:
+            self.match_row.pack_forget()
+            return
+        have = rep.get("match") or rep.get("personal_hit") or (rep.get("discdb") or {}).get("hit")
+        if rep.get("personal_hit"):
+            self.confirmed_lbl.pack(side="left", padx=(0, 10))
+        elif self.confirmable(rep):
+            self.confirm_btn.pack(side="left", padx=(0, 6))
+        self.match_btn.config(text="Not right? ▾" if have else "Choose the match ▾")
+        self.match_btn.pack(side="left")
+        self.match_row.pack(anchor="w", pady=(6, 0), before=self.plan_lbl)
+
+    def confirmable(self, rep):
+        top = (rep.get("candidates") or [None])[0]
+        if top and top.get("kind") == "collection":
+            return bool(di.adopt_guess(rep.get("candidates")) and all(i.get("imdb_id") for i in top["items"]))
+        return bool(di.adopt_guess(rep.get("candidates")) and top)
+
+    def confirm(self):
+        """✓ That's right: remember the current answer for this disc (instant next time)."""
+        rep = self.rep
+        if not rep or self.busy or not self.confirmable(rep):
+            return
+        self.choose(rep["candidates"][0], confirm=True)
+
+    def match_menu(self):
+        rep = self.rep
+        if not rep or self.busy:
+            return
+        m = self.match_popup
+        m.delete(0, "end")
+        self._menu_imgs = []
+        cands = rep.get("candidates") or []
+        sure = bool(di.adopt_guess(cands))           # a match or top guess is in use
+        top = cands[0] if cands else None
+        lp = rep.get("label_parsed") or {}
+        if rep.get("personal_hit"):
+            m.add_command(label="Your answer: %s" % di.strip_tags(rep["personal_hit"]["truth"]), state="disabled")
+            m.add_command(label="Forget my answer and investigate again", command=lambda: self.use_answer(None))
+            m.add_separator()
+        if rep.get("kind") == "collection" and top and top.get("kind") == "collection":
+            m.add_command(label="Change the films…", command=lambda: CollectionDialog(self.root, self))
+            m.add_command(label="It's one film or TV show instead…", command=lambda: MatchDialog(self.root, self))
+            m.add_separator()
+        others = [c for c in cands if c.get("kind") != "collection" and (c is not top or not sure)]
+        if others:
+            m.add_command(label="Other matches:" if sure else "Possible matches:", state="disabled")
+            kinds = {"movie": "film", "tv": "TV series"}
+            for c in others[:6]:
+                img = self._menu_image(c)
+                m.add_command(label="  %s (%s) · %s" % (c["name"], c.get("year") or "?", kinds.get(c["kind"], c["kind"])),
+                              command=lambda c=c: self.choose(c), **({"image": img, "compound": "left"} if img else {}))
+            m.add_separator()
+        m.add_command(label="Enter it myself…", command=lambda: MatchDialog(
+            self.root, self, title=(top or {}).get("name") or rep.get("best_guess", "").split(" | ")[0],
+            year=(top or {}).get("year"), tv=rep.get("kind") == "tv",
+            season=lp.get("season"), disc=lp.get("disc")))
+        btn = self.match_btn
+        try:
+            m.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height())
+        finally:
+            m.grab_release()
+
+    def _menu_image(self, cand):
+        if not cand.get("thumb"):
+            return None
+        try:
+            img = tk.PhotoImage(file=cand["thumb"])
+        except tk.TclError:
+            return None
+        self._menu_imgs.append(img)         # Tk drops images nothing references
+        return img
+
+    def choose(self, cand, confirm=False):
+        lp = (self.rep or {}).get("label_parsed") or {}
+        if cand.get("kind") == "collection":
+            self.use_answer(di.truth_for_collection(cand["name"], [(i["title_id"], i["imdb_id"]) for i in cand["items"]]))
+            return
+        if cand.get("kind") == "tv" and not (lp.get("season") and confirm):
+            MatchDialog(self.root, self, title=cand["name"], year=cand.get("year"), tv=True,
+                        season=lp.get("season"), disc=lp.get("disc"), picked=cand)   # TV needs season/disc
+            return
+        self.use_answer(di.truth_for(cand, lp.get("season") if cand.get("kind") == "tv" else None,
+                                     lp.get("disc") if cand.get("kind") == "tv" else None))
+
+    def use_answer(self, truth):
+        """Save the answer for this disc (or forget it) and investigate again with it."""
+        args = self.scan_args()
+        try:
+            di.set_truth(args.db, self.rep["content_hash"], truth)
+        except Exception as exc:
+            di.logger.exception("saving the answer failed")
+            messagebox.showerror(APP, "Couldn't save the answer: %s" % exc)
+            return
+        self.scan()
+
     def clear_picture(self):
         self.pic_col.pack_forget()
         self.pic_lbl.config(image="", text="")
@@ -534,7 +657,8 @@ class App:
         if img:
             self.pic_lbl.config(image=img)
             cap = {"disc": "from the disc", "TheDiscDB": "TheDiscDB", "TMDB": "TMDB"}.get(art.get("source"), "")
-            self.pic_cap.config(text="%s · %s" % (art.get("what", "picture"), cap) if cap else "")
+            what = "poster of the top guess" if art.get("guess") else art.get("what", "picture")
+            self.pic_cap.config(text="%s · %s" % (what, cap) if cap else what)
             self.pic_col.pack(side="left", anchor="n", padx=(0, 14), before=self.info)
         elif rep.get("art_note"):            # tell the user why there's no picture
             self.pic_lbl.config(text=rep["art_note"], style="Cap.TLabel", wraplength=140, justify="left")
@@ -548,8 +672,7 @@ class App:
                 thumb = self._photo((it.get("art") or {}).get("image")) if it.get("art") else None
                 if thumb:
                     ttk.Label(cell, image=thumb).pack(anchor="w")
-                ttk.Label(cell, text="%s\n%s (%s)" % (it["title_id"], re.sub(r"^.*?:\s*", "", it["name"]),
-                                                        it.get("year") or ""),
+                ttk.Label(cell, text="%s (%s)" % (re.sub(r"^.*?:\s*", "", it["name"]), it.get("year") or "?"),
                           style="Cap.TLabel", wraplength=110, justify="left").pack(anchor="w")
             self.strip.pack(anchor="w", pady=(10, 0))
         self._rewrap()
@@ -598,7 +721,9 @@ class App:
         self.selected = None
         self._build_rip_menu()
         self.clear_picture()
+        self.show_match_button(None)
         self.title_lbl.config(text="Investigating…")
+        self.show_details(None)
         self.facts_lbl.config(text=drive)
         self.plan_lbl.config(text="")
         self.dest_lbl.config(text="")
@@ -630,14 +755,14 @@ class App:
         if err:
             self.title_lbl.config(text="Couldn't read this disc")
             self.facts_lbl.config(text=err)
+            self.show_details(None)
             self.set_status("Scan failed · %s · details in the log (Scan ▾ > Open logs folder)" % self.source_name())
             return
         self.rep = rep
         self.set_busy(False)
         self._build_rip_menu()
-        top = (rep.get("candidates") or [None])[0]
-        title = top["name"] if rep.get("kind") == "collection" and top else rep.get("best_guess")
-        self.title_lbl.config(text=(title or "Unidentified disc").split(" | ")[0])
+        self.title_lbl.config(text=display_title(rep))
+        self.show_details(rep)
         facts = rep.get("facts") or {}
         kind = {"tv": "TV", "movie": "Movie", "collection": "Collection"}.get(rep["kind"], "Disc")
         bits = ["%s %s" % (rep["format"], kind)]
@@ -645,13 +770,23 @@ class App:
             bits.append("%d episodes" % facts["episode_count"])
         if facts.get("feature_minutes"):
             bits.append("%d min" % facts["feature_minutes"])
-        bits.append("identified by %s" % rep.get("identified_by", "?"))
+        m = rep.get("match")
+        if m and not m.get("sure") and not rep.get("personal_hit") and not (rep.get("discdb") or {}).get("hit"):
+            bits.append("best guess")
+        else:
+            bits.append("identified by %s" % rep.get("identified_by", "?"))
         self.facts_lbl.config(text="  ·  ".join(bits))
         self.show_plan_summary()
         self.show_picture(rep)
-        solved = str(rep.get("status", "")).startswith(("identified", "probable"))
-        self.set_status("%s · %s · fingerprint %s" % ("Case closed" if solved else "Still a mystery: check the "
-                                                      "answer before ripping", self.source_name(), rep["content_hash"][:8]))
+        self.show_match_button(rep)
+        st = str(rep.get("status", ""))
+        if st.startswith(("identified", "probable")):
+            msg = "Case closed"
+        elif st.startswith("best guess"):
+            msg = "Best guess: confirm it with ✓ That's right, or change it with Not right? ▾"
+        else:
+            msg = "Still a mystery: Choose the match ▾ to say what it is"
+        self.set_status("%s · %s" % (msg, self.source_name()))
 
     def current_plan(self, mk_titles=None, extras=None, selected="current"):
         """Must run on the Tk thread unless extras/selected are passed in (Tk variables aren't thread-safe)."""
@@ -800,6 +935,45 @@ class App:
         self.root.destroy()
 
 
+def display_title(rep):
+    """The big title: just what it is. Name (year), and season / disc for TV."""
+    top = (rep.get("candidates") or [None])[0]
+    if rep.get("kind") == "collection" and top:
+        return top["name"]
+    m = rep.get("match")
+    if m:
+        t = "%s (%s)" % (m["name"], m["year"]) if m.get("year") else m["name"]
+        if m["kind"] == "tv" and m.get("season"):
+            t += "  ·  Season %s%s" % (m["season"], (", Disc %s" % m["disc"]) if m.get("disc") else "")
+        return t
+    guess = di.strip_tags(rep.get("best_guess") or "").split(" | ")[0]
+    return guess or "Unidentified disc"
+
+
+def detail_rows(rep):
+    """The small print under the title, as (label, value) rows: ids and what the disc itself says."""
+    rows = []
+    m = rep.get("match") or {}
+    if m.get("imdb_id"):
+        rows.append(("IMDb", m["imdb_id"]))
+    hit = (rep.get("discdb") or {}).get("hit")
+    if hit:
+        rows.append(("TheDiscDB", " · ".join(x for x in (hit.get("release"), hit.get("disc")) if x)))
+    if rep.get("label"):
+        rows.append(("Disc label", rep["label"]))
+    names = (rep.get("bd_meta") or {}).get("names") or []
+    if names and names[0] != rep.get("label"):
+        rows.append(("Disc title", names[0]))
+    po = rep.get("playlist_obfuscation")
+    if isinstance(po, dict):
+        rows.append(("Protection", "%d decoy titles · %s %s" % (
+            po["decoys"], "the real film is" if po["sure"] else "best guess for the real film:", po["picked"])))
+    if rep.get("mastered"):
+        rows.append(("Mastered", rep["mastered"]))
+    rows.append(("Fingerprint", rep.get("content_hash", "?")[:8]))
+    return rows
+
+
 def short_path(p, n=48):
     return p if len(p) <= n else p[:n // 2 - 2] + "\u2026" + p[-(n // 2 - 1):]
 
@@ -819,7 +993,11 @@ def describe_plan(plan, custom):
         span = (" (%s–%s)" % (codes[0], codes[-1]) if len(codes) > 1 else " (%s)" % codes[0]) if codes else ""
         head = "Will rip %d episode%s%s" % (len(eps), "" if len(eps) == 1 else "s", span)
     elif roles.count("feature") > 1:
-        head = "Will rip %d films" % roles.count("feature")
+        eds = [(re.search(r"\{edition-([^}]*)\}", p["dest"]), p["length"]) for p in plan if p["role"] == "feature"]
+        if all(m for m, _ in eds):     # one film in several editions (theatrical + extended, say)
+            head = "Will rip %d editions: %s" % (len(eds), ", ".join("%s (%s)" % (m.group(1), n) for m, n in eds))
+        else:
+            head = "Will rip %d films" % roles.count("feature")
     elif "feature" in roles or "longest" in roles:
         f = next(p for p in plan if p["role"] in ("feature", "longest"))
         head = "Will rip the %s (%s)" % ("feature" if f["role"] == "feature" else "longest title", f["length"])
@@ -828,6 +1006,51 @@ def describe_plan(plan, custom):
     if extras and not custom:
         head += " + %d extra%s" % (extras, "" if extras == 1 else "s")
     return head
+
+
+class ScrollArea(ttk.Frame):
+    """A list that grows with its rows up to a share of the screen, then scrolls, so a long
+    list never pushes a window's buttons off screen. Put rows in .inner."""
+
+    def __init__(self, parent, max_frac=0.55):
+        super().__init__(parent)
+        bg = ttk.Style(self).lookup("TFrame", "background") or None
+        self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0, **({"background": bg} if bg else {}))
+        self.bar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.bar.set)
+        self.inner = ttk.Frame(self.canvas)
+        self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.max_h = int(self.winfo_screenheight() * max_frac)
+        self.inner.bind("<Configure>", lambda e: self.fit())
+        for w in (self.canvas, self.inner):
+            w.bind("<Enter>", lambda e: self._wheel(True))
+            w.bind("<Leave>", lambda e: self._wheel(False))
+
+    def fit(self):
+        self.update_idletasks()
+        w, h = self.inner.winfo_reqwidth(), self.inner.winfo_reqheight()
+        self.canvas.configure(width=w, height=min(h, self.max_h), scrollregion=(0, 0, w, h))
+        if h > self.max_h:
+            self.bar.pack(side="right", fill="y")
+        else:
+            self.bar.pack_forget()
+            self.canvas.yview_moveto(0)
+
+    def scrolls(self):
+        return self.inner.winfo_reqheight() > self.max_h
+
+    def _wheel(self, on):
+        if not on:
+            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                self.canvas.unbind_all(seq)
+            return
+        def roll(e):
+            if self.scrolls():
+                step = -1 if (getattr(e, "num", 0) == 4 or getattr(e, "delta", 0) > 0) else 1
+                self.canvas.yview_scroll(step * (1 if abs(getattr(e, "delta", 0) or 120) <= 120 else 3), "units")
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.canvas.bind_all(seq, roll)
 
 
 class TitlePicker:
@@ -847,26 +1070,31 @@ class TitlePicker:
         order = {"feature": 0, "episode": 1, "extra": 2, "version": 3, "play-all": 4, "duplicate": 5}
         rows = sorted((t for t in rep["titles"] if t["role"] in order),
                       key=lambda t: (order[t["role"]], t.get("episode_index") or 0, di._natural(t["id"])))
-        body = ttk.Frame(top)
-        body.pack(fill="both", expand=True, padx=12)
+        btns = ttk.Frame(top)
+        btns.pack(side="bottom", fill="x", padx=12, pady=12)     # packed first: always on screen
+        self.area = ScrollArea(top)
+        self.area.pack(fill="both", expand=True, padx=12)
+        body = self.area.inner
         names = {}
         everything = {t["id"] for t in rows}
         for p in plan_rip(rep, preview_titles(rep), True, selected=everything):
             names[p["title_id"]] = p["dest"].split("/")[-1]
-        for col, head in enumerate(("", "Title", "", "Length", "Saves as")):
+        for col, head in enumerate(("", "Title", "", "Length", "Video", "Saves as")):
             ttk.Label(body, text=head, style="Sub.TLabel").grid(row=0, column=col, sticky="w", padx=(0, 10))
         self.vars = {}
         for r, t in enumerate(rows, 1):
             v = tk.BooleanVar(value=t["id"] in current)
             self.vars[t["id"]] = v
             label = ("Episode %d" % t["episode_index"]) if t.get("episode_index") else t["role"].title()
+            if t["role"] == "version" and t.get("edition"):
+                label = "Version: %s" % t["edition"]
             ttk.Checkbutton(body, variable=v).grid(row=r, column=0, sticky="w")
             ttk.Label(body, text=label).grid(row=r, column=1, sticky="w", padx=(0, 10))
             ttk.Label(body, text=t["id"], style="Sub.TLabel").grid(row=r, column=2, sticky="w", padx=(0, 10))
             ttk.Label(body, text=di.hms(t["duration"])).grid(row=r, column=3, sticky="e", padx=(0, 10))
-            ttk.Label(body, text=names.get(t["id"], ""), style="Sub.TLabel").grid(row=r, column=4, sticky="w")
-        btns = ttk.Frame(top)
-        btns.pack(fill="x", padx=12, pady=12)
+            ttk.Label(body, text=t.get("video") or "", style="Sub.TLabel").grid(row=r, column=4, sticky="w",
+                                                                                padx=(0, 10))
+            ttk.Label(body, text=names.get(t["id"], ""), style="Sub.TLabel").grid(row=r, column=5, sticky="w")
         ttk.Button(btns, text="OK", command=self.ok).pack(side="right")
         ttk.Button(btns, text="Cancel", command=top.destroy).pack(side="right", padx=6)
         ttk.Button(btns, text="Default", command=lambda: [v.set(k in default) for k, v in self.vars.items()]
@@ -921,7 +1149,7 @@ class DataProgress:
 class FirstRunDialog:
     """Shown at startup while the disc data hasn't been downloaded yet."""
 
-    SIZES = {"discdb": "about 4 MB", "imdb": "about 250 MB, then a few minutes to index"}
+    SIZES = {"discdb": "about 4 MB", "imdb": "about 300 MB, then a few minutes to index"}
 
     def __init__(self, root, app, missing):
         self.app, self.missing = app, missing
@@ -975,6 +1203,335 @@ class FirstRunDialog:
     def close(self):
         if not self.app.data_ui:       # don't orphan a running download's progress
             self.top.destroy()
+
+
+class MatchDialog:
+    """Type the answer in: IMDb is searched as you type; pick a result to use that exact entry.
+    Title / year / film-or-TV can also just be typed, for anything IMDb doesn't have."""
+
+    KINDS = {"movie": "film", "tvMovie": "TV film", "video": "video", "tvSeries": "TV series",
+             "tvMiniSeries": "miniseries", "tvSpecial": "TV special", "short": "short", "tvShort": "TV short"}
+
+    def __init__(self, root, app, title="", year=None, tv=False, season=None, disc=None, picked=None, on_pick=None):
+        self.app = app
+        self.on_pick = on_pick          # set: just pick one IMDb entry (one film of a collection)
+        self.picked = picked if picked and picked.get("imdb_id") else None
+        self._filling = False
+        self._after = None
+        try:
+            args = app.scan_args()
+            self.con = di.imdb_open(args.imdb_dir, allow_download=False, log=lambda m: None)
+        except Exception:
+            self.con = None
+        self.top = top = tk.Toplevel(root)
+        top.title("Which film is this?" if on_pick else "What's on this disc?")
+        top.transient(root)
+        top.resizable(False, False)
+        f = ttk.Frame(top, padding=16)
+        f.pack(fill="both")
+        self.title = tk.StringVar(value=title or "")
+        self.year = tk.StringVar(value=str(year or ""))
+        self.tv = tk.BooleanVar(value=bool(tv))
+        self.season = tk.StringVar(value=str(season or ""))
+        self.disc = tk.StringVar(value=str(disc or ""))
+        ttk.Label(f, text="Title").grid(row=0, column=0, sticky="w", padx=(0, 10))
+        e = ttk.Entry(f, textvariable=self.title, width=44)
+        e.grid(row=0, column=1, columnspan=3, sticky="we")
+        # results with a small poster each (posters fill in as they arrive)
+        self.results = ttk.Treeview(f, show="tree", height=4, selectmode="browse", style="Picks.Treeview")
+        self.results.column("#0", width=430)
+        self.results.grid(row=1, column=1, columnspan=3, sticky="we", pady=(2, 0))
+        self.results.bind("<<TreeviewSelect>>", lambda ev: self.pick())
+        self.matches = []
+        self._thumbs = {}            # imdb id -> PhotoImage (kept so Tk doesn't drop them)
+        self._gen = 0
+        self.pick_lbl = ttk.Label(f, text="", style="Sub.TLabel")
+        self.pick_lbl.grid(row=2, column=1, columnspan=3, sticky="w")
+        ttk.Label(f, text="Year").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(f, textvariable=self.year, width=6).grid(row=3, column=1, sticky="w", pady=(6, 0))
+        e.bind("<Down>", lambda ev: (self.results.focus_set(), self.results.selection_set("0"),
+                                     self.results.focus("0")) if self.matches else None)
+        self.title.trace_add("write", lambda *a: self.typed())
+        kinds = ttk.Frame(f)
+        kinds.grid(row=4, column=1, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Radiobutton(kinds, text="Film", variable=self.tv, value=False, command=self.toggle).pack(side="left")
+        ttk.Radiobutton(kinds, text="TV show", variable=self.tv, value=True, command=self.toggle).pack(side="left", padx=(12, 0))
+        self.tv_row = ttk.Frame(f)
+        ttk.Label(self.tv_row, text="Season").pack(side="left")
+        ttk.Entry(self.tv_row, textvariable=self.season, width=4).pack(side="left", padx=(6, 14))
+        ttk.Label(self.tv_row, text="Disc").pack(side="left")
+        ttk.Entry(self.tv_row, textvariable=self.disc, width=4).pack(side="left", padx=(6, 0))
+        self.tv_row.grid(row=5, column=1, columnspan=3, sticky="w", pady=(6, 0))
+        self.note = ttk.Label(f, text=("Pick the right entry from IMDb above, or just type the title and year. "
+                                       if self.con else "IMDb data isn't downloaded, so type the title and year. ") +
+                              "Disc Detective remembers it for this disc.",
+                              style="Sub.TLabel", wraplength=380, justify="left")
+        self.note.grid(row=6, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        btns = ttk.Frame(f)
+        btns.grid(row=7, column=0, columnspan=4, sticky="e", pady=(12, 0))
+        ttk.Button(btns, text="Use this", command=self.ok).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=self.close).pack(side="right", padx=6)
+        top.bind("<Return>", lambda e: self.ok())
+        top.bind("<Escape>", lambda e: self.close())
+        top.protocol("WM_DELETE_WINDOW", self.close)
+        self.toggle()
+        if on_pick:                     # one film of a collection: no film/TV or season choice
+            kinds.grid_remove()
+            self.tv_row.grid_remove()
+            self.note.config(text="Pick the film from the IMDb list.")
+        self.search()
+        self.show_pick()
+        top.after(50, lambda: (top.lift(), e.focus_set(), e.icursor("end")))
+
+    # ---- IMDb type-ahead ----
+    def typed(self):
+        if self._filling:
+            return
+        self.picked = None                          # edited by hand: no longer that exact entry
+        self.show_pick()
+        if self._after:
+            self.top.after_cancel(self._after)
+        self._after = self.top.after(200, self.search)
+
+    def search(self):
+        self._after = None
+        self.results.delete(*self.results.get_children())
+        self.matches = di.imdb_lookup(self.con, self.title.get()) if self.con else []
+        for i, c in enumerate(self.matches):
+            bits = [self.KINDS.get(c["type"], c["type"])]
+            if c.get("runtime"):
+                bits.append("%d min" % c["runtime"])
+            if c.get("votes"):
+                bits.append("%s votes" % format(c["votes"], ","))
+            img = self._thumbs.get(c["imdb_id"])
+            self.results.insert("", "end", iid=str(i), text="  %s (%s)  ·  %s" % (
+                c["name"], c.get("year") or "?", "  ·  ".join(bits)), **({"image": img} if img else {}))
+        if self.picked:
+            for i, c in enumerate(self.matches):
+                if c["imdb_id"] == self.picked["imdb_id"]:
+                    self._filling = True
+                    self.results.selection_set(str(i))
+                    self.results.see(str(i))
+                    self._filling = False
+        self.fetch_thumbs()
+
+    def fetch_thumbs(self):
+        """Posters for the listed results, in the background; each row updates when its arrives."""
+        want = [c for c in self.matches if c["imdb_id"] not in self._thumbs]
+        if not want or not self.app.settings.get("pictures", True):
+            return
+        self._gen += 1
+        gen, args = self._gen, self.app.scan_args()      # settings read here, on the Tk thread
+
+        def work():
+            try:
+                found = di.thumbs_for(want, args)
+            except Exception:
+                di.logger.exception("posters for the type-ahead list")
+                return
+            self.app.post(self.show_thumbs, gen, found)
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_thumbs(self, gen, found):
+        if not self.top.winfo_exists():
+            return
+        for imdb_id, path in found.items():
+            if imdb_id not in self._thumbs:
+                try:
+                    self._thumbs[imdb_id] = tk.PhotoImage(file=path)
+                except tk.TclError:
+                    continue
+        for i, c in enumerate(self.matches):           # the list may have changed meanwhile: match by id
+            img = self._thumbs.get(c["imdb_id"])
+            if img and self.results.exists(str(i)):
+                self.results.item(str(i), image=img)
+
+    def pick(self):
+        if self._filling:
+            return
+        sel = self.results.selection()
+        if not sel:
+            return
+        c = self.matches[int(sel[0])]
+        self._filling = True
+        self.title.set(c["name"])
+        self.year.set(str(c.get("year") or ""))
+        self._filling = False
+        self.tv.set(c["kind"] == "tv")
+        self.toggle()
+        self.picked = c
+        self.show_pick()
+
+    def show_pick(self):
+        self.pick_lbl.config(text=("Using IMDb %s" % self.picked["imdb_id"]) if self.picked else "")
+
+    def close(self):
+        if self.con is not None:
+            self.con.close()
+            self.con = None
+        self.top.destroy()
+
+    def toggle(self):
+        (self.tv_row.grid if self.tv.get() and not self.on_pick else self.tv_row.grid_remove)()
+
+    def truth(self):
+        if self.picked:
+            if self.tv.get() and not self.season.get().strip().isdigit():
+                return None, "Enter the season number."
+            p = dict(self.picked, kind="tv" if self.tv.get() else "movie")
+            s, d = self.season.get().strip(), self.disc.get().strip()
+            return di.truth_for(p, int(s) if self.tv.get() else None,
+                                int(d) if self.tv.get() and d.isdigit() else None), None
+        title = self.title.get().strip()
+        year = self.year.get().strip()
+        if not title:
+            return None, "Enter the title."
+        if year and not re.fullmatch(r"(18|19|20)\d\d", year):
+            return None, "The year should look like 1998."
+        t = "%s (%s)" % (title, year) if year else title
+        if self.tv.get():
+            s, d = self.season.get().strip(), self.disc.get().strip()
+            if not s.isdigit():
+                return None, "Enter the season number."
+            t += " S%d" % int(s) + (" D%d" % int(d) if d.isdigit() else "")
+        return t, None
+
+    def ok(self):
+        if self.on_pick:
+            if not self.picked:
+                self.note.config(text="Pick one of the IMDb results above.", foreground="#b00020")
+                return
+            picked = dict(self.picked)
+            self.close()
+            self.on_pick(picked)
+            return
+        t, err = self.truth()
+        if err:
+            self.note.config(text=err, foreground="#b00020")
+            return
+        self.close()
+        self.app.use_answer(t)
+
+
+class CollectionDialog:
+    """Not right? > Change the films: which film each title is, title by title."""
+
+    def __init__(self, root, app):
+        self.app = app
+        rep = app.rep
+        cand = rep["candidates"][0]
+        self.name = cand["name"]
+        self.assign = {it["title_id"]: {"imdb_id": it["imdb_id"], "name": it["name"], "year": it.get("year")}
+                       for it in cand["items"]}
+        self.rows = [t for t in rep["titles"] if t["duration"] >= 10 * 60
+                     and t["role"] in ("feature", "version", "extra", "episode")]
+        self.rows.sort(key=lambda t: [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", t["id"])])
+        self.versions = {v["title_id"]: v["same_as"] for v in cand.get("versions") or []}
+        self.thumbs = {}
+        self.top = top = tk.Toplevel(root)
+        top.title("Which film is each title?")
+        top.transient(root)
+        top.resizable(False, False)
+        f = ttk.Frame(top, padding=14)
+        f.pack(fill="both")
+        namerow = ttk.Frame(f)
+        namerow.pack(fill="x", pady=(0, 10))
+        ttk.Label(namerow, text="Collection name").pack(side="left", padx=(0, 8))
+        self.name_var = tk.StringVar(value=di.strip_tags(self.name))
+        ttk.Entry(namerow, textvariable=self.name_var, width=44).pack(side="left")
+        ttk.Label(f, text="Each title on the disc and the film it is. Change any that are wrong.",
+                  style="Sub.TLabel").pack(anchor="w", pady=(0, 8))
+        btns = ttk.Frame(f)
+        btns.pack(side="bottom", fill="x", pady=(10, 0))         # packed first: always on screen
+        self.note = ttk.Label(f, text="", style="Sub.TLabel")
+        self.note.pack(side="bottom", anchor="w", pady=(8, 0))
+        self.area = ScrollArea(f, max_frac=0.5)
+        self.area.pack(fill="both", expand=True)
+        self.grid = self.area.inner
+        ttk.Button(btns, text="Save", command=self.save).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=top.destroy).pack(side="right", padx=6)
+        self.draw()
+        self.fetch_thumbs()
+
+    def draw(self):
+        for w in self.grid.winfo_children():
+            w.destroy()
+        for r, t in enumerate(self.rows):
+            a = self.assign.get(t["id"])
+            img = self.thumbs.get(a["imdb_id"]) if a else None
+            if img:
+                pic = ttk.Label(self.grid, image=img)
+            else:                                   # keep the column the width of a poster
+                pic = ttk.Frame(self.grid, width=di.ART_PICK[0], height=di.ART_PICK[1])
+            pic.grid(row=r, column=0, sticky="w", padx=(0, 8), pady=2)
+            ttk.Label(self.grid, text="%s  ·  %s" % (t["id"], di.hms(t["duration"])), style="Sub.TLabel").grid(
+                row=r, column=1, sticky="w", padx=(0, 12))
+            if a:
+                what = "%s (%s)" % (a["name"], a.get("year") or "?")
+            elif t["id"] in self.versions and self.versions[t["id"]] in self.assign:
+                what = "second copy of %s" % self.versions[t["id"]]
+            else:
+                what = "not a film (extra)"
+            ttk.Label(self.grid, text=what, width=42).grid(row=r, column=2, sticky="w")
+            ttk.Button(self.grid, text="Change…", style="Small.TButton",
+                       command=lambda t=t: self.change(t)).grid(row=r, column=3, padx=(8, 4))
+            if a:
+                ttk.Button(self.grid, text="Not a film", style="Small.TButton",
+                           command=lambda t=t: self.clear(t)).grid(row=r, column=4)
+
+    def change(self, t):
+        a = self.assign.get(t["id"]) or {}
+        MatchDialog(self.top, self.app, title=a.get("name", ""), picked=dict(a, kind="movie") if a else None,
+                    on_pick=lambda c, t=t: self.set(t, c))
+
+    def set(self, t, c):
+        self.assign[t["id"]] = {"imdb_id": c["imdb_id"], "name": c["name"], "year": c.get("year")}
+        self.draw()
+        self.fetch_thumbs()
+
+    def clear(self, t):
+        self.assign.pop(t["id"], None)
+        self.draw()
+
+    def fetch_thumbs(self):
+        want = [dict(a) for a in self.assign.values() if a["imdb_id"] not in self.thumbs]
+        if not want or not self.app.settings.get("pictures", True):
+            return
+        args = self.app.scan_args()
+
+        def work():
+            try:
+                found = di.thumbs_for(want, args)
+            except Exception:
+                di.logger.exception("posters for the collection editor")
+                return
+            self.app.post(self.show_thumbs, found)
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_thumbs(self, found):
+        if not self.top.winfo_exists():
+            return
+        for imdb_id, path in found.items():
+            try:
+                self.thumbs[imdb_id] = tk.PhotoImage(file=path)
+            except tk.TclError:
+                pass
+        self.draw()
+
+    def films(self):
+        order = [t["id"] for t in self.rows]
+        return [(tid, self.assign[tid]["imdb_id"]) for tid in sorted(self.assign, key=order.index)
+                if tid in order]
+
+    def save(self):
+        films = self.films()
+        if not films:
+            self.note.config(text="Choose at least one film, or use Not right? > It's one film or TV show instead.",
+                             foreground="#b00020")
+            return
+        name = self.name_var.get().strip() or self.name
+        self.top.destroy()
+        self.app.use_answer(di.truth_for_collection(name, films))
 
 
 class SettingsDialog:
@@ -1047,6 +1604,8 @@ class SettingsDialog:
         top.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh_status()
         self.refresh_mkv()
+        for var in (self.online, self.pictures, self.key, self.mkv):   # saved as you go, not only on Close
+            var.trace_add("write", lambda *a: self.save())
 
     def refresh_status(self):
         args = self.app.scan_args()

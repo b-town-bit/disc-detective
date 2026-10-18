@@ -67,3 +67,72 @@ def test_tmdb_fallback_ranking(monkeypatch):
     monkeypatch.setattr(core, "tmdb_get", lambda key, path, **p: fake.get((path, p.get("query")), {"results": []}))
     c = core.tmdb_candidates("k", [("Anasta", True)], "movie", {"mastered": "1999-09", "feature_minutes": 94})
     assert c[0]["year"] == 1997
+
+
+def test_type_ahead_finds_every_hercules(imdb):
+    found = core.imdb_lookup(imdb, "Hercules")
+    years = [(c["name"], c["year"], c["kind"]) for c in found if c["name"] == "Hercules"]
+    assert ("Hercules", 1997, "movie") in years and ("Hercules", 1998, "tv") in years
+    assert found[0]["year"] == 1997                     # most known first among exact names
+    assert core.imdb_lookup(imdb, "H") == []
+
+
+def test_exact_pick_round_trip(imdb):
+    pick = next(c for c in core.imdb_lookup(imdb, "Hercules") if c["year"] == 2014)
+    truth = core.truth_for(pick)
+    assert truth == "Hercules (2014) {imdb-%s}" % pick["imdb_id"]
+    pt = core.parse_truth(truth)
+    assert (pt["title"], pt["year"], pt["imdb_id"]) == ("Hercules", 2014, pick["imdb_id"])
+    c = core.imdb_by_id(imdb, pick["imdb_id"])
+    assert (c["name"], c["year"], c["score"]) == ("Hercules", 2014, 100.0)
+    tv = core.truth_for(dict(pick, kind="tv"), 1, 2)
+    assert core.parse_truth(tv)["season"] == 1 and core.parse_truth(tv)["disc"] == 2
+
+
+def test_tmdb_matches_carry_their_imdb_id(monkeypatch):
+    fake = {("/search/movie", "Hercules"): {"results": [{"id": 11970, "title": "Hercules", "release_date": "1997-06-13",
+                                                         "poster_path": "/h.jpg"}]},
+            ("/movie/11970", None): {"runtime": 93, "imdb_id": "tt0119282"}}
+    seen = []
+    monkeypatch.setattr(core, "tmdb_get", lambda key, path, **p: seen.append(p) or fake.get((path, p.get("query")), {}))
+    c = core.tmdb_candidates("k", [("Hercules", False)], "movie", {"mastered": "2000-01", "feature_minutes": 93})
+    assert c[0]["imdb_id"] == "tt0119282" and c[0]["poster_path"] == "/h.jpg"
+    assert any(p.get("append_to_response") == "external_ids" for p in seen)
+
+
+def test_code_labels_try_the_title_initials(imdb):
+    """BCS0NNW1: no words to search, but B C = The Black Cauldron (80 min, by far the best known)."""
+    facts = {"mastered": "2010-05", "feature_minutes": 80}
+    c = core.imdb_initials(imdb, "BCS0NNW1", facts)
+    assert c[0]["name"] == "The Black Cauldron" and core.adopt_guess(c) is c[0]
+    assert not core.is_probable(c)                      # a best guess, not a confident match
+    assert all(x["year"] <= 2010 for x in c)            # Big City (2012) is after the mastering date
+    assert core.imdb_initials(imdb, "SHREK", facts) == []          # a word, not a code
+    assert core.imdb_initials(imdb, "SISTER_ACT2", facts) == []    # words with a number, not initials
+    assert core.imdb_initials(imdb, "BLACKCAUL2", facts) == []     # too long a letter run for initials
+    assert core.imdb_initials(imdb, "BCS0NNW1", {"mastered": "2010-05"}) == []   # no feature length
+
+
+def test_initials_can_skip_the_first_word(imdb):
+    """NGE0NNW1: N G = (The Emperor's) New Groove. A title that starts with the initials ranks
+    above one that has them after its first word, unless the latter is far better known."""
+    c = core.imdb_initials(imdb, "NGE0NNW1", {"mastered": "2005-09", "feature_minutes": 78})
+    assert c[0]["name"] == "The Emperor's New Groove" and core.adopt_guess(c) is c[0]
+    assert {"Kronk's New Groove", "No Greater Glory"} <= {x["name"] for x in c}
+    # The Nightmare Before Christmas (N B C) is better known, but B C starts The Black Cauldron
+    c = core.imdb_initials(imdb, "BCS0NNW1", {"mastered": "2005-09", "feature_minutes": 79})
+    assert c[0]["name"] == "The Black Cauldron"
+
+
+def test_initials_also_list_the_alternatives(imdb):
+    c = core.imdb_initials(imdb, "BC2", {"mastered": "2010-05", "feature_minutes": 79})
+    names = [x["name"] for x in c]
+    assert "Booty Call" in names
+
+
+def test_numbered_sequel_title_beats_counting_by_year(imdb):
+    """POCAHONTAS_II: counting "Pocahontas" films by year makes #2 the 1995 Disney film (a 1994
+    look-alike came first); the title that carries the number is the sequel."""
+    c = core.imdb_candidates(imdb, [("Pocahontas Ii", False)], "movie", {"feature_minutes": 73, "mastered": "2012-06"})
+    assert c[0]["name"] == "Pocahontas 2: Journey to a New World" and core.is_probable(c)
+    assert core.parse_label("Pocahontas_II_USA_DES").get("short_query") is None   # II isn't a code

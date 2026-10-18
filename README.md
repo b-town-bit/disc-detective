@@ -46,7 +46,7 @@ Optional: **MakeMKV** for ripping,
 extra posters.
 
 On first launch it offers to download its data: the TheDiscDB index (about 4 MB)
-and IMDb's public title data (about 250 MB, indexed locally). It keeps both up to
+and IMDb's public title data (about 300 MB, indexed locally). It keeps both up to
 date on its own.
 
 ## Use

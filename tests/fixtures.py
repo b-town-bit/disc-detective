@@ -55,6 +55,10 @@ def build_imdb(d):
     add("movie", "An American Tailor", 1984, 75, 900)
     add("movie", "An American Tail", 1986, 80, 90000)
     add("movie", "An American Tail: Fievel Goes West", 1991, 75, 40000)
+    add("video", "Pocahontas", 1994, 45, 257)                   # unrelated look-alikes, released first
+    add("movie", "Pocahontas", 1995, 81, 220681)
+    add("movie", "Pocahontas: The Legend", 1995, 102, 900)
+    add("video", "Pocahontas 2: Journey to a New World", 1998, 73, 19608)
     add("video", "An American Tail: The Treasure of Manhattan Island", 1998, 83, 4000)
     add("video", "An American Tail: The Mystery of the Night Monster", 2000, 75, 3000)
     add("tvSeries", "Fievel's American Tails", 1992, 22, 2000, end=1992)
@@ -81,6 +85,20 @@ def build_imdb(d):
                                                "The Lord of War and Thunder"]})
     series("Justified: City Primeval", 2023, 50, 20000, {1: ["City Primeval"]})
     add("movie", "Justified", 1999, 90, 40)
+    add("movie", "Chicken Run", 2000, 84, 230000)
+    add("movie", "Hercules", 1997, 93, 260000)
+    add("movie", "The Black Cauldron", 1985, 80, 46161)
+    add("movie", "Booty Call", 1997, 79, 10234)
+    add("movie", "The Nightmare Before Christmas", 1993, 76, 417395)   # N B C: B C after its 1st word
+    add("movie", "The Emperor's New Groove", 2000, 78, 253750)
+    add("movie", "Kronk's New Groove", 2005, 75, 18736)
+    add("movie", "No Greater Glory", 1934, 74, 604)
+    add("movie", "Blood Car", 2007, 82, 2873)
+    add("movie", "Big City", 2012, 80, 9000)                 # after the mastering date
+    add("movie", "Hercules", 2014, 98, 160000)
+    add("movie", "Hercules", 1958, 107, 9000)
+    add("tvSeries", "Hercules", 1998, 22, 15000, end=1999)
+    add("movie", "Chicken Run: Dawn of the Nugget", 2023, 101, 30000)
     for name, rows in (("title.basics.tsv.gz", B), ("title.episode.tsv.gz", E), ("title.ratings.tsv.gz", R)):
         with gzip.open(os.path.join(d, name), "wt", encoding="utf-8") as fh:
             fh.write("\n".join(rows) + "\n")
@@ -154,6 +172,39 @@ def make_movie_bluray(root, minutes=99, seed=7):
     return _bluray(root, pls, {"00001": 12, "00800": minutes * 60, "00011": 3600, "00010": 150}, seed=seed)
 
 
+def make_reel_movie_bluray(root, name="Chicken Run"):
+    """A film stored as four ~21-minute reels in one playlist: shaped exactly like a TV
+    play-all, which is how Chicken Run fooled the episode logic."""
+    reel = lambda m, s: (m * 60 + s) * T45
+    reels = [("00101", 0, reel(21, 4)), ("00102", 0, reel(20, 51)), ("00103", 0, reel(21, 13)), ("00104", 0, reel(20, 49))]
+    pls = {"00000.mpls": ([("00001", 0, 12 * T45)], 1), "00800.mpls": (reels, 6),
+           "00010.mpls": ([("00010", 0, 140 * T45)], 1)}
+    clips = {c: t / T45 for c, _, t in reels}
+    clips.update({"00001": 12, "00010": 140})
+    xml = ('<?xml version="1.0" encoding="UTF-8"?>\n<disclib xmlns="urn:BDA:bdmv;disclib" '
+           'xmlns:di="urn:BDA:bdmv;discinfo"><di:discinfo><di:title><di:name>%s</di:name></di:title>'
+           '</di:discinfo></disclib>' % name)
+    return _bluray(root, pls, clips, xml, seed=11)
+
+
+def make_shorts_bluray(root):
+    """Shaped like the Wallace & Gromit DVD: three short films (one of them twice), a play-all
+    of the first two, an extra and a logo. Mastered 2005."""
+    ln = lambda m, s: (m * 60 + s) * T45
+    a, b, c, c2 = ("00011", 0, ln(24, 29)), ("00012", 0, ln(32, 3)), ("00013", 0, ln(31, 2)), ("00014", 0, ln(31, 2) + 22500)
+    pls = {"00000.mpls": ([("00001", 0, 8 * T45)], 1),
+           "00001.mpls": ([a], 4), "00002.mpls": ([b], 4), "00003.mpls": ([c], 5), "00004.mpls": ([c2], 4),
+           "00005.mpls": ([a, b], 8), "00020.mpls": ([("00030", 0, ln(7, 54))], 2)}
+    clips = {x[0]: x[2] / T45 for x in (a, b, c, c2)}
+    clips.update({"00001": 8, "00030": 474})
+    _bluray(root, pls, clips, seed=5)
+    stamp = 1123200000                                   # 2005-08-05: what "mastered" reads
+    for dp, _, fns in os.walk(root):
+        for fn in fns:
+            os.utime(os.path.join(dp, fn), (stamp, stamp))
+    return root
+
+
 # ---------------------------------------------------------------- TheDiscDB
 def build_discdb_repo(root, movie_disc_hash, movie_disc_sizes):
     """A miniature TheDiscDb/data checkout: one movie (whose disc fingerprint we know),
@@ -176,6 +227,7 @@ def build_discdb_repo(root, movie_disc_hash, movie_disc_sizes):
     write(m + "/cover.jpg", POSTER_JPG)
     write(m + "/2012-blu-ray/release.json", {"Slug": "2012-blu-ray", "Title": "2012 Blu-ray", "Year": 2012})
     write(m + "/2012-blu-ray/front.jpg", BOX_JPG)
+    write(m + "/2015-4k/front.jpg", BOX_JPG)              # another release's box (no disc of it)
     write(m + "/2012-blu-ray/disc01.json", {"Index": 1, "Name": "Blu-ray", "Format": "Blu-ray",
         "ContentHash": movie_disc_hash, "Titles": [
             {"SourceFile": "00800.mpls", "Duration": "1:39:00", "DisplaySize": "20 GB",

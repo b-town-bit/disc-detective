@@ -2,7 +2,8 @@
 
   DISC_DETECTIVE_DEV_LIBRARY  a library.sqlite whose discs were scanned with --keep-evidence
                               and confirmed with --set-truth: every disc is re-investigated
-                              from its evidence and graded against your answer.
+                              from its evidence and graded against your answer. Notes like
+                              "features: Title 1" (--set-notes) also check the rip plan.
   DISC_DETECTIVE_DEV_IMDB     IMDb data for that run (default: the test fixture)
   DISC_DETECTIVE_DISCDB       a TheDiscDb/data checkout: the MakeMKV log parser is checked
                               against every disc TheDiscDB has.
@@ -32,6 +33,8 @@ def test_my_discs(imdb_dir, capsys):
         print("\n" + out)
     m = re.search(r"Truth check: (\d+) ok, (\d+) partial, (\d+) wrong, (\d+) missed", out)
     assert m and int(m.group(3)) == 0, "a disc was identified as the wrong title"
+    plan = re.search(r"Rip plan check: (\d+) ok, (\d+) wrong", out)
+    assert not plan or int(plan.group(2)) == 0, "a disc's rip plan picked the wrong feature(s)"
 
 
 @pytest.mark.skipif(not DISCDB, reason="set DISC_DETECTIVE_DISCDB")

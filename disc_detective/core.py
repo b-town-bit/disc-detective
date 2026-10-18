@@ -107,7 +107,8 @@ DISCDB_NOTICE = ("Disc data from TheDiscDB (thediscdb.com, github.com/TheDiscDb/
                  "MIT License, Copyright (c) 2021 Luke Foust.")
 progress = None   # optional hook: progress(label, done_bytes, total_bytes) for GUIs
 ART_POSTER = (200, 300)  # main picture box (w, h) in the GUI: posters fill it, wide stills fit its width
-ART_THUMB = (64, 96)     # per-film thumbnails for short-film collections
+ART_THUMB = (64, 96)     # the row of film posters under a collection's plan
+ART_PICK = (40, 60)      # beside each guess in "Not right?" and the type-ahead list
 
 # Classification thresholds, in seconds.
 JUNK_MAX = 120          # shorter than this: menus, logos, warnings
@@ -690,6 +691,7 @@ def parse_dvd(vts_dir):
             except (OSError, struct.error, IndexError):
                 vts_cache[vtsn] = None
         v = vts_cache[vtsn]
+        vi = {"standard": v["standard"], "aspect": v["aspect"], "letterboxed": v["letterboxed"]} if v else {}
         dur, cells = 0.0, []
         if v and ttn <= len(v["title_pgcs"]):
             for pgcn in v["title_pgcs"][ttn - 1]:
@@ -700,7 +702,8 @@ def parse_dvd(vts_dir):
             "group": "VTS %d" % vtsn, "duration": dur, "chapters": nch,
             "segments": tuple((vtsn,) + c for c in cells),
             "audio": v["audio"] if v else [], "subs": v["subs"] if v else [],
-            "video": ("%s %s%s" % (v["standard"], v["aspect"], " letterboxed" if v["letterboxed"] else "")) if v else "?",
+            "video": video_text(vi) if v else "?",
+            "video_info": vi,
         })
     return {"provider": provider, "titles": titles}
 
@@ -715,12 +718,17 @@ def parse_mpls(data):
     pl, marks = u32(data, 8), u32(data, 12)
     n_items = u16(data, pl + 6)
     o = pl + 10
-    items = []
+    items, video = [], None
     for _ in range(n_items):
         length = u16(data, o)
         clip = data[o + 2:o + 7].decode("latin-1")
         t_in, t_out = u32(data, o + 14), u32(data, o + 18)
         items.append((clip, t_in, t_out))
+        if video is None:
+            try:
+                video = _stn_video(data[o + 2:o + 2 + length])
+            except (IndexError, struct.error):
+                video = {}
         o += length + 2
     n_marks = u16(data, marks + 4)
     per_item = [0] * len(items)
@@ -731,12 +739,155 @@ def parse_mpls(data):
             if ref < len(per_item):
                 per_item[ref] += 1
     duration = sum(max(0, t_out - t_in) for _, t_in, t_out in items) / 45000.0
-    return {"items": items, "chapters": sum(per_item), "item_chapters": per_item, "duration": duration}
+    video = video or {}
+    try:
+        if _mpls_3d(data):
+            video["3d"] = True
+    except (IndexError, struct.error):
+        pass
+    return {"items": items, "chapters": sum(per_item), "item_chapters": per_item, "duration": duration,
+            "video": video}
+
+
+BD_VIDEO_FORMAT = {1: 480, 2: 576, 3: 480, 4: 1080, 5: 720, 6: 1080, 7: 576, 8: 2160}
+BD_INTERLACED = {1, 2, 4}
+BD_RATE = {1: "23.976", 2: "24", 3: "25", 4: "29.97", 6: "50", 7: "59.94"}
+BD_CODEC = {0x01: "MPEG-1", 0x02: "MPEG-2", 0x1B: "H.264", 0x20: "H.264", 0x24: "HEVC", 0xEA: "VC-1"}
+BD_RANGE = {1: "HDR10", 2: "Dolby Vision"}
+
+
+BD_AUDIO = {0x80: "LPCM", 0x81: "AC3", 0x82: "DTS", 0x83: "TrueHD", 0x84: "DD+", 0x85: "DTS-HD",
+            0x86: "DTS-HD MA", 0xA1: "DD+", 0xA2: "DTS-HD"}
+BD_CHANNELS = {1: 1, 3: 2, 6: 6, 12: 8}
+ISO639_2 = {"eng": "en", "spa": "es", "fra": "fr", "fre": "fr", "deu": "de", "ger": "de", "ita": "it",
+            "jpn": "ja", "por": "pt", "nld": "nl", "dut": "nl", "zho": "zh", "chi": "zh", "kor": "ko",
+            "rus": "ru", "ces": "cs", "cze": "cs", "ron": "ro", "rum": "ro", "tha": "th", "pol": "pl",
+            "hun": "hu", "tur": "tr", "swe": "sv", "dan": "da", "nor": "no", "fin": "fi", "ell": "el",
+            "gre": "el", "heb": "he", "ara": "ar", "hin": "hi", "ind": "id", "ukr": "uk", "vie": "vi"}
+
+
+def _bd_lang(b):
+    code = b.decode("latin-1", "replace").strip("\0 ").lower()
+    return ISO639_2.get(code, code or None)
+
+
+def _stn_video(item):
+    """Primary video of a PlayItem (its bytes after the length field): resolution, rate, codec,
+    HDR (UHD discs), 3D (MVC). From the STN table."""
+    q = 32                                    # clip name .. still time
+    if item[10] & 0x10:                       # multi-angle: skip the extra angles
+        q += 2 + (item[32] - 1) * 10
+    stn = item[q + 2:]
+    nv, na, npg, e = stn[2], stn[3], stn[4], 14
+    if not nv:
+        return {}
+
+    def streams(n):
+        nonlocal e
+        out = []
+        for _ in range(n):
+            e += 1 + stn[e]                   # stream entry
+            out.append(bytes(stn[e + 1:e + 1 + stn[e]]))
+            e += 1 + stn[e]
+        return out
+    vids, auds, pgs = streams(nv), streams(na), streams(npg)
+    attr = vids[0]
+    fmt, rate = attr[1] >> 4, attr[1] & 15
+    out = {"codec": BD_CODEC.get(attr[0], "?"), "height": BD_VIDEO_FORMAT.get(fmt),
+           "scan": "i" if fmt in BD_INTERLACED else "p", "fps": BD_RATE.get(rate),
+           "audio": [{"lang": _bd_lang(a[2:5]), "codec": BD_AUDIO.get(a[0], "?"),
+                      "channels": BD_CHANNELS.get(a[1] >> 4, 0), "kind": ""} for a in auds if len(a) >= 5],
+           "subs": [{"lang": _bd_lang(g[1:4]), "kind": ""} for g in pgs if len(g) >= 4 and g[0] == 0x90]}
+    if attr[0] == 0x24 and len(attr) > 2:
+        out["hdr"] = BD_RANGE.get(attr[2] >> 4)
+    if attr[0] == 0x20:                       # MVC: 3D
+        out["3d"] = True
+    if stn[7]:                                # secondary video: picture-in-picture (commentary mode)
+        out["pip"] = True
+    return out
+
+
+def _mpls_3d(data):
+    """A 3D playlist carries an STN_SS table in its extension data (ID 2/1)."""
+    ext = u32(data, 16)
+    if not ext or ext + 12 > len(data) or u32(data, ext) == 0:
+        return False
+    n = data[ext + 11]
+    for i in range(n):
+        e = ext + 12 + i * 12
+        if u16(data, e) == 2 and u16(data, e + 2) == 1:
+            return True
+    return False
+
+
+def clpi_aspect(data):
+    """Frame shape of a clip's video (4:3 / 16:9) from its CLPI ProgramInfo, or None."""
+    if data[:4] != b"HDMV":
+        return None
+    p = u32(data, 12)                         # ProgramInfo
+    if data[p + 5] < 1:
+        return None
+    o = p + 6
+    nstreams = data[o + 6]
+    o += 8
+    for _ in range(nstreams):
+        o += 2                                # PID
+        ln, coding = data[o], data[o + 1]
+        if coding in BD_CODEC:                # video: [format|rate][aspect|...]
+            return {2: "4:3", 3: "16:9"}.get(data[o + 3] >> 4)
+        o += 1 + ln
+    return None
+
+
+def video_text(v):
+    """'1080p 16:9 H.264', '2160p HDR10 HEVC', 'NTSC 4:3' ... for the title list."""
+    if not v:
+        return ""
+    if v.get("standard"):
+        return "%s %s%s" % (v["standard"], v.get("aspect") or "?", " letterboxed" if v.get("letterboxed") else "")
+    bits = ["%s%s" % (v["height"], v.get("scan", "")) if v.get("height") else "",
+            "3D" if v.get("3d") else "", v.get("hdr") or "", v.get("aspect") or "", v.get("codec") or ""]
+    text = " ".join(b for b in bits if b and b != "?")
+    return text + (" + picture-in-picture" if v.get("pip") else "")
+
+
+def video_rank(v):
+    """Which of two copies of a film is the one to keep: higher resolution, then widescreen."""
+    v = v or {}
+    wide = v.get("aspect") == "16:9" or bool(v.get("letterboxed"))
+    height = v.get("height") or (576 if v.get("standard") == "PAL" else 480 if v.get("standard") else 0)
+    return (height, bool(v.get("hdr")), wide)
+
+
+def version_label(v, other):
+    """How this copy differs from the other one: 'Fullscreen', 'Widescreen', '4K', '1080p', '3D'."""
+    v, other = v or {}, other or {}
+    wide = lambda x: x.get("aspect") == "16:9" or bool(x.get("letterboxed"))
+    if bool(v.get("3d")) != bool(other.get("3d")):
+        return "3D" if v.get("3d") else "2D"
+    if bool(v.get("pip")) != bool(other.get("pip")) and v.get("pip"):
+        return "Picture-in-Picture"
+    if (v.get("height") or 0) != (other.get("height") or 0) and v.get("height"):
+        return "4K" if v["height"] >= 2160 else "%dp" % v["height"]
+    if v.get("aspect") and other.get("aspect") and wide(v) != wide(other):
+        return "Widescreen" if wide(v) else "Fullscreen"
+    return None
 
 
 def parse_bluray(bdmv):
     titles = []
     pl_dir = find_child(bdmv, "PLAYLIST")
+    clip_dir = find_child(bdmv, "CLIPINF")
+    aspects = {}
+
+    def clip_aspect(clip):
+        if clip not in aspects:
+            path = find_child(clip_dir, clip + ".clpi") if clip_dir else None
+            try:
+                aspects[clip] = clpi_aspect(read_file(path)) if path else None
+            except (OSError, IndexError, struct.error):
+                aspects[clip] = None
+        return aspects[clip]
     for fn in sorted(os.listdir(pl_dir) if pl_dir else []):
         if not fn.lower().endswith(".mpls"):
             continue
@@ -749,14 +900,18 @@ def parse_bluray(bdmv):
             counts[c] = counts.get(c, 0) + 1
         top_clip, top_n = max(counts.items(), key=lambda kv: kv[1]) if counts else (None, 0)
         loop = top_n >= 4 and top_n * 2 >= len(p["items"])   # one clip repeated: menu background loop
+        v = dict(p["video"])
+        bd_audio, bd_subs = v.pop("audio", []), v.pop("subs", [])
+        if p["items"]:
+            v["aspect"] = clip_aspect(p["items"][0][0])
         titles.append({
-            "id": fn, "source": fn, "group": "playlists",
+            "id": fn, "source": fn, "group": "playlists", "video_info": v,
             "loop": ("clip %s repeated %d times" % (top_clip, top_n)) if loop else None,
             "duration": p["duration"], "chapters": p["chapters"], "item_chapters": p["item_chapters"],
             "segments": tuple(p["items"]),
             "clips": "+".join(c for c, _, _ in p["items"][:6]) + ("..." if len(p["items"]) > 6 else ""),
             "clip_list": ",".join(dict.fromkeys(c for c, _, _ in p["items"])),
-            "audio": [], "subs": [], "video": "",
+            "audio": bd_audio, "subs": bd_subs, "video": video_text(v),
         })
     # Some TV discs have no per-episode playlists: one play-all strings the episode clips
     # together and the menu jumps into it. Expose each episode-length clip as its own title.
@@ -776,7 +931,8 @@ def parse_bluray(bdmv):
                     "id": "%s.m2ts" % item[0], "source": "%s item %d" % (t["id"], k + 1),
                     "group": "playlists", "loop": None, "duration": lens[k],
                     "chapters": t.get("item_chapters", [0] * len(items))[k],
-                    "segments": (item,), "clips": item[0], "clip_list": item[0], "audio": [], "subs": [], "video": "",
+                    "segments": (item,), "clips": item[0], "clip_list": item[0], "audio": [], "subs": [],
+                    "video": t["video"], "video_info": t.get("video_info"),
                 })
     titles += virtual
     meta = {"names": [], "toc": [], "thumbnails": []}
@@ -877,6 +1033,13 @@ def classify(titles, fmt):
                 break
     uniq = [t for t in uniq if t["role"] is None]
 
+    for t in uniq:                     # hours of the same few clips over and over: a background loop
+        segs = t.get("segments") or ()
+        nclips = len({x[0] for x in segs}) if fmt == "Blu-ray" else 0
+        if t["role"] is None and t["duration"] >= FEATURE_MIN and nclips and len(segs) >= 10 * nclips:
+            t["role"], t["note"] = "loop", "repeats %d clips %d times (a background or slideshow loop)" % (
+                nclips, len(segs))
+    uniq = [t for t in uniq if t["role"] != "loop"]
     long_ = [t for t in uniq if t["duration"] >= FEATURE_MIN]
     eps = [t for t in uniq if EPISODE_MIN <= t["duration"] <= EPISODE_MAX]
 
@@ -912,13 +1075,57 @@ def classify(titles, fmt):
     elif long_:
         kind = "movie"
         long_.sort(key=lambda x: -x["duration"])
-        main = long_[0]
+        close = lambda a, b: same_length(a, b, SAME_LENGTH_TOL) or abs(a["duration"] - b["duration"]) <= 5
+        # Copies of the film at the same length (widescreen + full screen, 4K + 1080p): keep the
+        # best picture as the feature: higher resolution, then widescreen, then no PiP overlay.
+        def same_film(t, ref):
+            """Same film with a different opening/ending (or minus one): localized credits, a
+            different studio logo, a picture-in-picture mode. Not different scenes mid-film."""
+            share, where = shared_video(t, ref)
+            if where is None:                 # t is wholly made of ref's pieces: ref minus its opening, say
+                share = max(share, shared_video(ref, t)[0]) if share >= 0.85 else 0
+            return share >= 0.85 and where in ("start", "end", None) and abs(t["duration"] - ref["duration"]) <= 240
+        twins = [t for t in long_ if close(long_[0], t) or same_film(t, long_[0])]
+        num = lambda t: int(re.sub(r"\D", "", t["id"]) or 0)
+        # DVD players start with the lowest title (usually the original-language one)
+        first_lang = lambda t: (t.get("audio") or [{}])[0].get("lang")
+        main = max(twins, key=lambda t: video_rank(t.get("video_info"))
+                   + (not (t.get("video_info") or {}).get("pip"), first_lang(t) in (None, "en"),
+                      -num(t) if fmt == "DVD" else t["duration"]))
         main["role"] = "feature"
-        for t in long_[1:]:
-            if same_length(main, t, SAME_LENGTH_TOL) or abs(main["duration"] - t["duration"]) <= 5:
+        for t in long_:
+            if t is main:
+                continue
+            shared, where = shared_video(t, main)
+            gap = t["duration"] - main["duration"]
+            what = version_label(t.get("video_info"), main.get("video_info"))
+            if same_film(t, main) and what:
+                t["role"], t["edition"] = "version", what
+                t["note"] = "%s version of %s (%s)" % (what.lower(), main["id"], t["video"])
+                continue
+            if same_film(t, main):
+                # The same film with its own opening or end credits: localized title cards / credits.
+                # (Different scenes in the middle is another cut, e.g. an extended edition: kept.)
+                t["role"], t["edition"] = "version", "Alternate %s" % ("Credits" if where == "end" else "Titles")
+                lang_t, lang_m = first_lang(t), first_lang(main)
+                language = LANG_NAMES.get(lang_t, lang_t) if lang_t and lang_t != lang_m else None
+                t["note"] = ("same film as %s except the %s (%d s %s): %s"
+                             % (main["id"], "end credits" if where == "end" else "opening titles",
+                                abs(round(gap)), "longer" if gap > 0 else "shorter",
+                                "the %s version (%s audio first)" % (language, language) if language
+                                else "likely another language's version"))
+                if language:
+                    t["edition"] = language
+                continue
+            if close(main, t):
                 t["role"] = "version"
-                t["note"] = "same length as %s%s" % (main["id"], (" (%s vs %s)" % (main["video"], t["video"]))
-                                                     if main["video"] != t["video"] else "")
+                what = version_label(t.get("video_info"), main.get("video_info"))
+                if what:
+                    t["edition"] = what
+                    t["note"] = "%s version of %s (%s vs %s)" % (what.lower(), main["id"], t["video"], main["video"])
+                else:
+                    t["note"] = "same length as %s%s" % (main["id"], (" (%s vs %s)" % (main["video"], t["video"]))
+                                                         if main["video"] != t["video"] else "")
             else:
                 t["role"] = "feature"
         for t in eps:
@@ -932,12 +1139,117 @@ def classify(titles, fmt):
     # Blu-ray playlist obfuscation: many unique playlists of near-identical feature length
     features = [t for t in titles if t["role"] in ("feature", "version")]
     obfuscated = fmt == "Blu-ray" and len(features) >= 6
+    if fmt == "DVD" and kind == "movie":
+        obfuscated = dvd_decoys(features) or obfuscated
     return kind, obfuscated
+
+
+LANG_NAMES = {"en": "English", "es": "Spanish", "fr": "French", "de": "German", "it": "Italian",
+              "ja": "Japanese", "pt": "Portuguese", "nl": "Dutch", "zh": "Chinese", "ko": "Korean",
+              "ru": "Russian", "pl": "Polish", "sv": "Swedish", "da": "Danish", "no": "Norwegian",
+              "fi": "Finnish", "cs": "Czech", "hu": "Hungarian", "tr": "Turkish", "th": "Thai"}
+
+
+def shared_video(a, b):
+    """How much of title a plays the same pieces of video as b (0..1, weighted by size), and
+    where a's own pieces sit: 'start', 'end' or 'middle'. DVD pieces are cell sector ranges,
+    Blu-ray pieces are clip in/out times."""
+    sa, sb = list(a.get("segments") or ()), set(b.get("segments") or ())
+    size = lambda seg: (seg[2] - seg[1] + 1) if len(seg) == 3 and isinstance(seg[1], int) else 1
+    total = sum(size(x) for x in sa)
+    if not total or not sb:
+        return 0.0, None
+    own = [i for i, x in enumerate(sa) if x not in sb]
+    share = 1 - sum(size(sa[i]) for i in own) / total
+    if not own:
+        return share, None
+    where = "end" if min(own) >= len(sa) * 0.8 else "start" if max(own) < len(sa) * 0.2 else "middle"
+    return share, where
+
+
+def _in_order(t):
+    """How much of a title plays its pieces in disc order (1.0 = straight through). Decoy titles
+    reuse the real film's cells in a scrambled order; the real one runs them sequentially."""
+    cells = [seg[1:] for seg in t.get("segments") or ()]
+    if len(cells) < 2:
+        return 0.5
+    return sum(1 for a, b in zip(cells, cells[1:]) if b[0] == a[1] + 1) / (len(cells) - 1)
+
+
+def dvd_decoys(features):
+    """DVD title obfuscation (many 2009-2012 Disney / Sony / Lionsgate DVDs): dozens of
+    feature-length titles with the same chapter count. Decoys reuse the film's cells in a
+    scrambled order; the real film runs them in order and is often there several times over
+    (title sets pointing at the same video). Keep one real copy; mark copies and decoys so
+    nobody rips 40 titles. Returns what was found, or None."""
+    from collections import Counter
+    if len(features) < 6:
+        return None
+    chapters, n = Counter(t["chapters"] for t in features).most_common(1)[0]
+    if n < 0.6 * len(features):
+        return None
+    num = lambda t: [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", t["id"])]
+    top = max(_in_order(t) for t in features)
+    group = sorted((t for t in features if _in_order(t) >= top - 1e-9), key=num)   # the most in-order
+    same_film = max(t["duration"] for t in group) - min(t["duration"] for t in group) <= 1.0
+    sure = top >= 0.9 and same_film and len(group) < len(features)
+    best = group[0]
+    copies = 0
+    for t in features:
+        if t is best:
+            continue
+        if sure and t in group:
+            t["role"], t["note"] = "duplicate", "another copy of the film (%s)" % best["id"]
+            copies += 1
+        else:
+            t["role"], t["note"] = "decoy", "decoy title (copy protection)"
+    best["role"] = "feature"
+    best["note"] = ("the real film: plays in order, unlike the %d decoys" % (len(features) - 1 - copies)
+                    if sure else "picked from %d look-alike titles (couldn't tell which is real: check it)"
+                    % len(features))
+    return {"decoys": len(features) - 1 - copies, "copies": copies, "picked": best["id"], "sure": sure}
 
 
 # --------------------------------------------------------------------------
 # 4. disc metadata: label, provider, date, cover art
 # --------------------------------------------------------------------------
+
+def as_movie(titles):
+    """The disc turned out to be a film: reread the structure that way. Blu-ray features are
+    often several clips played back to back, which on their own look exactly like a TV
+    disc's play-all of episodes. Returns False if nothing on the disc is film-length."""
+    playable = [t for t in titles if t.get("role") not in ("junk", "loop", "duplicate") and t.get("segments")]
+    if not playable:
+        return False
+    main = max(playable, key=lambda t: t["duration"])
+    if main["duration"] < FEATURE_MIN * 0.75:
+        return False
+    whole = set(main["segments"])
+    for t in titles:
+        t.pop("episode_index", None)
+        if t is main:
+            continue
+        if t.get("role") in ("junk", "loop", "duplicate"):
+            continue
+        if t.get("segments") and set(t["segments"]) <= whole:
+            t["role"], t["note"] = "part", "part of the feature (%s)" % main["id"]
+        elif abs(t["duration"] - main["duration"]) <= 5:
+            t["role"], t["note"] = "version", "same length as %s" % main["id"]
+        elif t.get("role") in ("episode", "feature", "extra"):
+            t["role"], t["note"] = "extra", ""
+    main["role"] = "feature"
+    main["note"] = "the film" + (" (plays %s)" % ", ".join(t["id"] for t in titles if t.get("role") == "part")
+                                 if any(t.get("role") == "part" for t in titles) else "")
+    return True
+
+
+def movie_facts(titles, facts):
+    f = {k: v for k, v in facts.items() if k not in ("episode_minutes", "episode_count")}
+    feats = [t["duration"] for t in titles if t.get("role") == "feature"]
+    if feats:
+        f["feature_minutes"] = round(max(feats) / 60)
+    return f
+
 
 def volume_label(root):
     if os.name == "nt":
@@ -969,6 +1281,7 @@ def volume_label(root):
     return None
 
 
+REGIONS = {"US", "USA", "UK", "CA", "CAN", "EUR", "EU", "AUS", "AU", "NZ", "JPN", "JP", "NA"}
 NOISE = {"DVD", "DVD9", "DVD5", "BD", "BLURAY", "BLU", "RAY", "UHD", "4K", "HD", "WS", "FS",
          "WIDESCREEN", "FULLSCREEN", "FULL", "SCREEN", "NTSC", "PAL", "R1", "R2", "R4", "AC3", "DTS",
          "SE", "CE", "SPECIAL", "COLLECTORS", "EDITION", "ED", "DISC", "DISK", "SIDE", "VIDEO",
@@ -1010,11 +1323,25 @@ def parse_label(label):
         words = s.split()
         info["alt_query"] = raw.capitalize() if re.search(r"\d", raw) else None
     else:
-        words = [w for w in s.split() if w not in NOISE]
+        words = s.split()
+        # POCAHONTAS_USA_DES, TITLE_UK_SE: after a region code comes release / edition codes
+        cut = next((i for i, w in enumerate(words) if i >= 1 and w in REGIONS), None)
+        if cut is not None:
+            words = words[:cut]
+        words = [w for w in words if w not in NOISE]
     # drop a trailing authoring/production code (PRINCE_OF_EGYPT_UPB2) when a real title precedes it
     if len(words) >= 3 and re.fullmatch(r"(?=.*[A-Z])(?=.*\d)[A-Z0-9]{3,6}", words[-1]):
         words = words[:-1]
+    # SISTER_ACT2: a number stuck to the last word is a sequel number (Sister Act 2)
+    if not run_together and len(words) >= 2:
+        m = re.fullmatch(r"([A-Z]{2,})(\d{1,2})", words[-1])
+        if m:
+            words = words[:-1] + [m.group(1), m.group(2)]
     info["query"] = " ".join(w.capitalize() for w in words)
+    # one more try without a short trailing code (..._DES): searched only alongside the full query
+    if not run_together and len(words) >= 2 and re.fullmatch(r"[A-Z]{2,3}", words[-1]) \
+            and words[-1] not in ROMAN:
+        info["short_query"] = " ".join(w.capitalize() for w in words[:-1])
     # Old DVD labels are often cut to 8-11 characters with no separators.
     info["maybe_truncated"] = bool(words) and len(raw) <= 11 and "_" not in raw and " " not in raw
     return info
@@ -1369,14 +1696,25 @@ def imdb_candidates(con, queries, kind, facts):
             continue
         words = lambda x: re.findall(r"[a-z0-9]+", x.lower().replace("&", "and"))
         bw = words(base)
-        family = [r for r in imdb_search(con, base, True, IMDB_MOVIE_TYPES, limit=60)
-                  if words(r[2])[:len(bw)] == bw and r[3] and r[6] >= 100]
-        family.sort(key=lambda r: (r[3], -r[6]))
-        if len(family) < n:
-            continue
-        (fid, ttype, title, year, _, runtime, votes) = family[n - 1]
-        score = 0.85 * 50 + 25
-        why = ["film #%d of %d titled \"%s\u2026\" by release year" % (n, len(family), base)]
+        pool = imdb_search(con, base, True, IMDB_MOVIE_TYPES, limit=60)
+        # A title that carries the number ("Pocahontas 2: Journey to a New World", "Rocky II")
+        # beats counting look-alikes by year (several unrelated "Pocahontas" films came out in 1995).
+        marks = {str(n), {v: k for k, v in ROMAN.items()}.get(n, "").lower()} - {""}
+        numbered = [r for r in pool if words(r[2])[:len(bw)] == bw and len(words(r[2])) > len(bw)
+                    and words(r[2])[len(bw)] in marks]
+        if numbered:
+            pick = max(numbered, key=lambda r: r[6])
+            why = ["titled \"%s %s\u2026\"" % (base, n)]
+            score = 50 + 25
+        else:
+            family = [r for r in pool if words(r[2])[:len(bw)] == bw and r[3] and r[6] >= 100]
+            family.sort(key=lambda r: (r[3], -r[6]))
+            if len(family) < n:
+                continue
+            pick = family[n - 1]
+            why = ["film #%d of %d titled \"%s\u2026\" by release year" % (n, len(family), base)]
+            score = 0.85 * 50 + 25
+        (fid, ttype, title, year, _, runtime, votes) = pick
         if master_year and year:
             score += 10 if year <= master_year else -40
         target = facts.get("feature_minutes")
@@ -1398,6 +1736,12 @@ ROMAN = {"II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7, "VIII": 8, "IX":
 
 def _title_num(t):
     return [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", t["id"])]
+
+
+def collection_name(query):
+    """"Wallace And Gromit" -> "Wallace & Gromit Collection" (the plan already says how many films)."""
+    name = re.sub(r"\bAnd\b", "&", (query or "").strip())
+    return name if re.search(r"\bcollection\b", name, re.I) else "%s Collection" % name
 
 
 def imdb_collection(con, queries, titles, facts):
@@ -1471,12 +1815,71 @@ def imdb_collection(con, queries, titles, facts):
             why.append("%s: same length as another title (second version?)" %
                        ", ".join(v["title_id"] for v in versions))
         score = 60 + 10 * len(pairs) - 10 * len(unmatched)
-        best = {"kind": "collection", "imdb_id": None, "name": "%s - %d short films" % (
-                    re.sub(r"\bAnd\b", "&", query), len(pairs)),
+        best = {"kind": "collection", "imdb_id": None, "name": collection_name(query),
                 "year": min(it["year"] for it in items), "type": "collection", "score": round(score, 1),
                 "why": "; ".join(why), "source": "IMDb", "items": items, "versions": versions,
                 "unmatched": unmatched}
     return best
+
+
+def _initials(title):
+    w = re.findall(r"[A-Za-z0-9']+", title or "")
+    if w and w[0].lower() in ("the", "a", "an"):
+        w = w[1:]
+    return "".join(x[0].upper() for x in w)
+
+
+def imdb_initials(con, label, facts):
+    """Last resort for code-like labels (BCS0NNW1): studios often start them with the title's
+    initials (B C = The Black Cauldron). Sometimes the code skips the first word (NGE0NNW1 =
+    The Emperor's New Groove), so initials starting at the second word count too, ranked below
+    titles that start with them. Films with the feature's length (+-4 min) released by the
+    mastering date, best known first. Only a clear favourite becomes a guess."""
+    import math
+    raw = re.sub(r"[^A-Za-z0-9]", "", label or "")
+    run = re.match(r"[A-Za-z]{2,}", raw)
+    minutes = facts.get("feature_minutes")
+    if not run or not re.search(r"\d", raw) or not minutes:
+        return []
+    # only real codes: a short letter run, no word breaks (SISTER_ACT2 is words, not initials)
+    if len(run.group(0)) > 4 or re.search(r"[\s_.\-]", label or ""):
+        return []
+    master_year = int(facts["mastered"][:4]) if facts.get("mastered") else 9999
+    rows = con.execute(
+        "SELECT t.id, t.type, t.title, t.year, t.runtime, COALESCE(r.votes, 0) FROM titles t "
+        "LEFT JOIN ratings r ON r.id = t.id WHERE t.type IN ('movie', 'video', 'tvMovie') "
+        "AND t.runtime BETWEEN ? AND ? AND t.year <= ? AND COALESCE(r.votes, 0) >= 500",
+        (minutes - 4, minutes + 4, master_year)).fetchall()
+    letters = run.group(0).upper()
+    for k in range(len(letters), 1, -1):           # most specific first: BCS, then BC
+        want = letters[:k]
+        tiers = {0: [], 1: []}                     # 0: title starts with them, 1: from its 2nd word
+        for r in rows:
+            ini = _initials(r[2])
+            if ini.startswith(want):
+                tiers[0].append(r)
+            elif ini[1:].startswith(want):
+                tiers[1].append(r)
+        if not tiers[0] and not tiers[1]:
+            continue
+        out = []
+        for tier, hits in tiers.items():
+            hits.sort(key=lambda r: -r[5])
+            for i, (n, ttype, title, year, runtime, votes) in enumerate(hits[:5]):
+                nxt = hits[i + 1][5] if i + 1 < len(hits) else 0
+                clear = i == 0 and votes >= 5000 and votes >= 3 * max(nxt, 1)
+                score = (30 + min(15, 3 * math.log10(votes + 1)) + (10 if clear else 0)
+                         + 2 * (k - 2) + (6 if tier == 0 else 0))
+                where = "starts with" if tier == 0 else "has, after its first word,"
+                why = "label %s: %s %s the initials %s; %d min like the disc; %s votes%s" % (
+                    label, title, where, " ".join(want), runtime, format(votes, ","),
+                    " (%.0fx the next)" % (votes / max(nxt, 1)) if clear and nxt else "")
+                out.append({"kind": "movie", "imdb_id": tt(n), "_n": n, "name": title, "year": year,
+                            "type": ttype, "runtime": runtime, "score": round(score, 1), "why": why,
+                            "source": "IMDb"})
+        out.sort(key=lambda c: -c["score"])
+        return out[:5]
+    return []
 
 
 def imdb_season(con, cand, season, disc, n_eps):
@@ -1499,7 +1902,7 @@ def imdb_season(con, cand, season, disc, n_eps):
     return info
 
 
-def plex_names(cand, season=None, episode_guess=None, sources=None):
+def plex_names(cand, season=None, episode_guess=None, sources=None, editions=None):
     """Plex-style names with the IMDb id hint Plex's agents understand."""
     if not cand or not cand.get("imdb_id"):
         return None
@@ -1508,6 +1911,9 @@ def plex_names(cand, season=None, episode_guess=None, sources=None):
     sources = list(sources or [])
     tag = lambda i: ("%-14s -> " % sources[i]) if i < len(sources) else ""
     if cand["kind"] == "movie":
+        if editions:          # one folder, one file per edition: Plex shows them as versions of the film
+            return [tag(i) + base + "/" + base.split(" {")[0] + " {edition-%s}.mkv" % safe(editions[src])
+                    for i, src in enumerate(sources)]
         return [tag(0) + base + "/" + base.split(" {")[0] + ".mkv"]
     names = []
     for i, g in enumerate((episode_guess or {}).get("guess", [])):
@@ -1603,6 +2009,23 @@ def _raw(path):
     return DISCDB_RAW + urllib.parse.quote(path, safe="/")
 
 
+def poster_from_tmdb(poster_path, key_name, art_dir, box=ART_POSTER, errors=None):
+    """A TMDB poster we already have the path of (from a TMDB search result)."""
+    name = "%s_%dx%d" % (key_name, box[0], box[1])
+    hit = _art_cached(art_dir, name)
+    if hit or not poster_path:
+        return hit
+    try:
+        orig = os.path.join(art_dir, key_name + ".jpg")
+        if not os.path.exists(orig):
+            _download(TMDB_IMG + poster_path, orig)
+        return _art_entry(art_dir, name, orig, "TMDB", "poster", box, credit=TMDB_CREDIT)
+    except Exception as exc:
+        if errors is not None:
+            errors.append("TMDB poster: %s" % exc)
+    return None
+
+
 def poster_for_imdb(imdb_id, art_dir, repo=None, key=None, online=True, box=ART_POSTER, errors=None, index=None):
     """A poster for an IMDb id: TheDiscDB's cover.jpg (local clone, or via the index), then TMDB."""
     if not imdb_id:
@@ -1651,12 +2074,13 @@ def poster_for_imdb(imdb_id, art_dir, repo=None, key=None, online=True, box=ART_
     return None
 
 
-def discdb_art(rep, art_dir, repo=None, online=True, errors=None):
-    """Box art of this exact release from TheDiscDB, else the title's poster there."""
+def discdb_art(rep, art_dir, repo=None, online=True, errors=None, prefer="poster"):
+    """From TheDiscDB for this disc: the title's poster, else this release's box art
+    (prefer="box": the other way round)."""
     hit = (rep.get("discdb") or {}).get("hit")
     if not hit:
         return None
-    name = rep["content_hash"] + "_box"
+    name = rep["content_hash"] + ("_box" if prefer == "box" else "_discdb")
     cached = _art_cached(art_dir, name)
     if cached:
         return cached
@@ -1676,6 +2100,8 @@ def discdb_art(rep, art_dir, repo=None, online=True, errors=None):
                             q("%s (%s)" % (hit["title"], hit["year"]) if hit.get("year") else hit["title"]))
         tries += [(DISCDB_RAW + folder + "/" + q(hit["slug"]) + "/front.jpg", "box art"),
                   (DISCDB_RAW + folder + "/cover.jpg", "poster")]
+    if prefer != "box":
+        tries.sort(key=lambda t: t[1] != "poster")      # stable: poster first, box art next
     for src, what in tries:
         try:
             if src.startswith("http"):
@@ -1692,6 +2118,198 @@ def discdb_art(rep, art_dir, repo=None, online=True, errors=None):
     return None
 
 
+def thumb_for(cand, art_dir, repo=None, key=None, online=True, index=None, box=ART_PICK):
+    """A small poster for one guess (IMDb id: TheDiscDB then TMDB; TMDB match: its own poster).
+    Reuses downloads already cached for the full-size picture."""
+    try:
+        t = None
+        if cand.get("imdb_id"):
+            t = poster_for_imdb(cand["imdb_id"], art_dir, repo, key, online, box, None, index)
+        if not t and cand.get("tmdb_id") and cand.get("poster_path") and online:
+            t = poster_from_tmdb(cand["poster_path"], "tmdb_%s_%s" % (cand.get("kind"), cand["tmdb_id"]), art_dir, box)
+        return (t or {}).get("image")
+    except Exception:
+        return None
+
+
+def thumbs_for(cands, args):
+    """Small posters for a list of guesses (the app's type-ahead), from a background thread:
+    opens its own connections. Returns {imdb_id: png path}."""
+    art_dir = getattr(args, "art_dir", None) or default_art_dir(getattr(args, "db", None))
+    os.makedirs(art_dir, exist_ok=True)
+    if image_converter() is None or getattr(args, "no_art", False):
+        return {}
+    online = not getattr(args, "offline", False)
+    key = getattr(args, "tmdb_key", None) or os.environ.get("TMDB_API_KEY")
+    index = discdb_index_open(getattr(args, "discdb_dir", None) or default_discdb_dir(), allow_download=False)
+    try:
+        return {c["imdb_id"]: p for c in cands if c.get("imdb_id")
+                for p in [thumb_for(c, art_dir, getattr(args, "discdb_repo", None), key, online, index)] if p}
+    finally:
+        if index is not None:
+            index.close()
+
+
+def _disc_art(rep, art_dir):
+    art = _art_cached(art_dir, rep["content_hash"] + "_disc")
+    cover = rep.get("cover") or {}
+    if not art and cover.get("image") and os.path.exists(cover["image"]):
+        art = _art_entry(art_dir, rep["content_hash"] + "_disc", cover["image"], "disc", "disc art", ART_POSTER)
+    return art
+
+
+def tmdb_collection_poster(name, art_dir, key, errors=None):
+    """TMDB groups films into collections ("Wallace & Gromit Collection"), each with its own poster."""
+    q = re.sub(r"\bcollection\b", "", strip_tags(name), flags=re.I).strip(" -")
+    if not q:
+        return None
+    try:
+        res = tmdb_get(key, "/search/collection", query=q).get("results") or []
+    except Exception as exc:
+        if errors is not None:
+            errors.append("TMDB collection: %s" % exc)
+        return None
+    best = None
+    for r in res:
+        n = re.sub(r"\bcollection\b", "", r.get("name") or "", flags=re.I).strip(" -")
+        sc = name_score(q, n, False)
+        if r.get("poster_path") and sc >= 0.7 and (not best or sc > best[0]):
+            best = (sc, r)
+    if not best:
+        return None
+    art = poster_from_tmdb(best[1]["poster_path"], "tmdbcoll_%s" % best[1]["id"], art_dir, errors=errors)
+    return dict(art, what="collection poster") if art else None
+
+
+# --- choosing a different picture -------------------------------------------
+
+ART_CHOOSE = (100, 150)             # tiles for picking a picture (TheDiscDB submission, later)
+
+
+def art_options(rep, args, index=None, tmdb_max=8):
+    """Every picture we could show for this disc, best first: this release's box front and back,
+    the film's poster, other releases' box art (TheDiscDB), TMDB posters (with a key), the disc's
+    own artwork. Each: {src, source, what, label}; src is a URL or a local file. Nothing is
+    downloaded here except TMDB's list of posters."""
+    repo = getattr(args, "discdb_repo", None)
+    online = not getattr(args, "offline", False)
+    key = getattr(args, "tmdb_key", None) or os.environ.get("TMDB_API_KEY")
+    opts, seen = [], set()
+
+    def add(src, source, what, label):
+        if src and src not in seen:
+            seen.add(src)
+            opts.append({"src": src, "source": source, "what": what, "label": label})
+
+    def img(rel):                       # a TheDiscDB file: local clone or GitHub
+        if repo:
+            f = os.path.join(repo, "data", rel)
+            return f if os.path.exists(f) else None
+        return _raw(rel) if online else None
+
+    cands = rep.get("candidates") or []
+    c = adopt_guess(cands)
+    imdbs = []
+    if c and c.get("kind") == "collection":
+        imdbs = [it["imdb_id"] for it in c.get("items") or [] if it.get("imdb_id")]
+    elif c and c.get("imdb_id"):
+        imdbs = [c["imdb_id"]]
+    hit = (rep.get("discdb") or {}).get("hit") or {}
+    rel_dir = os.path.dirname(hit["path"].replace("\\", "/")) if hit.get("path") else None
+    films = []                          # TheDiscDB film folders: data/<type>/<Title (Year)>
+    if rel_dir and c and c.get("kind") != "collection":
+        films.append(os.path.dirname(rel_dir))
+    for i in imdbs:
+        if index is not None:
+            r = index.execute("SELECT folder FROM posters WHERE imdb=?", (i,)).fetchone()
+            if r and r[0] not in films:
+                films.append(r[0])
+        elif repo:
+            rel = discdb_local_index(repo).get("imdb", {}).get(i)
+            if rel and rel not in films:
+                films.append(rel)
+    if rel_dir:
+        rel_name = hit.get("release") or "this release"
+        add(img(rel_dir + "/front.jpg"), "TheDiscDB", "box art", "Box front (%s)" % rel_name)
+        add(img(rel_dir + "/back.jpg"), "TheDiscDB", "box back", "Box back (%s)" % rel_name)
+    for f in films:
+        name = re.sub(r"^.*/", "", f)
+        add(img(f + "/cover.jpg"), "TheDiscDB", "poster", "Poster: %s" % name)
+    for f in films:                     # the same film's other releases
+        others = []
+        if index is not None:
+            others = [(os.path.dirname(p), rel) for p, rel in index.execute(
+                "SELECT path, release FROM discs WHERE path LIKE ? AND front=1", (f + "/%",))]
+        elif repo:
+            others = [(os.path.relpath(os.path.dirname(x), os.path.join(repo, "data")).replace(os.sep, "/"), None)
+                      for x in glob.glob(os.path.join(repo, "data", f, "*", "front.jpg"))]
+        for d, rel in sorted(set(others)):
+            if d != rel_dir:
+                add(img(d + "/front.jpg"), "TheDiscDB", "box art",
+                    "Box front (%s)" % (rel or d.rsplit("/", 1)[-1].replace("-", " ")))
+    if key and online and imdbs and not (c and c.get("kind") == "collection"):
+        try:
+            found = tmdb_get(key, "/find/%s" % imdbs[0], external_source="imdb_id")
+            kind = "movie" if found.get("movie_results") else "tv"
+            res = (found.get("movie_results") or found.get("tv_results") or [None])[0]
+            if res:
+                ims = tmdb_get(key, "/%s/%s/images" % (kind, res["id"]), include_image_language="en,null")
+                posters = sorted(ims.get("posters") or [], key=lambda x: -(x.get("vote_average") or 0))
+                for n, ptr in enumerate(posters[:tmdb_max], 1):
+                    add(TMDB_IMG + ptr["file_path"], "TMDB", "poster", "TMDB poster %d" % n)
+        except Exception as exc:
+            logger.info("TMDB posters: %s", exc)
+    cover = (rep.get("cover") or {}).get("image")
+    if cover and os.path.exists(cover):
+        add(os.path.abspath(cover), "disc", "disc art", "From the disc")
+    return opts
+
+
+def art_option_load(opt, art_dir, box=ART_POSTER):
+    """Fetch (if needed) and convert one option at a size; None if it isn't there (404) or can't be shown."""
+    import hashlib
+    tag = hashlib.sha1(opt["src"].encode("utf-8")).hexdigest()[:16]
+    name = "opt_%s_%dx%d" % (tag, box[0], box[1])
+    hit = _art_cached(art_dir, name)
+    if hit:
+        return dict(hit, label=opt.get("label"))
+    src = opt["src"]
+    try:
+        if src.startswith("http"):
+            orig = os.path.join(art_dir, "opt_%s.jpg" % tag)
+            if not os.path.exists(orig):
+                _download(src, orig)
+            src = orig
+        if not os.path.exists(src):
+            return None
+        e = _art_entry(art_dir, name, src, opt["source"], opt["what"], box,
+                       credit=TMDB_CREDIT if opt["source"] == "TMDB" else None)
+        return dict(e, label=opt.get("label")) if e else None
+    except Exception as exc:
+        logger.info("picture %s: %s", opt.get("label"), exc)
+        return None
+
+
+def art_options_loaded(rep, args, box=ART_THUMB):
+    """For the app's picture chooser (background thread): the options that actually load, each
+    with a small image. Opens its own index connection."""
+    art_dir = getattr(args, "art_dir", None) or default_art_dir(getattr(args, "db", None))
+    os.makedirs(art_dir, exist_ok=True)
+    if image_converter() is None:
+        return []
+    index = discdb_index_open(getattr(args, "discdb_dir", None) or default_discdb_dir(), allow_download=False)
+    try:
+        out = []
+        for o in art_options(rep, args, index):
+            e = art_option_load(o, art_dir, box)
+            if e:
+                out.append(dict(o, thumb=e["image"]))
+        return out
+    finally:
+        if index is not None:
+            index.close()
+
+
 def find_artwork(rep, args, index=None):
     """Fill rep["art"] (main picture) and, for short-film collections, each film's thumbnail."""
     art_dir = getattr(args, "art_dir", None) or default_art_dir(getattr(args, "db", None))
@@ -1704,33 +2322,62 @@ def find_artwork(rep, args, index=None):
     if image_converter() is None:
         rep["art_note"] = "No picture: install Pillow (pip install pillow) or ffmpeg to show posters"
         return None
-    art = _art_cached(art_dir, rep["content_hash"] + "_disc")
-    cover = rep.get("cover") or {}
-    if not art and cover.get("image") and os.path.exists(cover["image"]):
-        art = _art_entry(art_dir, rep["content_hash"] + "_disc", cover["image"], "disc", "disc art", ART_POSTER)
-    art = art or discdb_art(rep, art_dir, repo, online, errors)
-    c = (rep.get("candidates") or [None])[0] if is_probable(rep.get("candidates")) else None
-    if c and c.get("kind") == "collection":
+    cands = rep.get("candidates") or []
+    c = cands[0] if cands else None
+    collection = bool(c and c.get("kind") == "collection" and adopt_guess(cands))
+    # TheDiscDB: the title's poster first (easiest to recognise), else this release's box art.
+    # A collection keeps its box: its folder's poster is one film's, not the whole disc's.
+    art = discdb_art(rep, art_dir, repo, online, errors, prefer="box" if collection else "poster")
+    sure = is_probable(cands)
+    if collection:
         for it in c["items"]:
             it["art"] = poster_for_imdb(it["imdb_id"], art_dir, repo, key, online, ART_THUMB, errors, index)
-        first = c["items"][0]["imdb_id"]
-        art = art or poster_for_imdb(first, art_dir, repo, key, online, errors=errors, index=index)
-    elif c and c.get("imdb_id"):
-        art = art or poster_for_imdb(c["imdb_id"], art_dir, repo, key, online, errors=errors, index=index)
+        # the big picture should be the whole disc, not one film of it
+        if not art and key and online:
+            art = tmdb_collection_poster(c["name"], art_dir, key, errors)
+        art = art or _disc_art(rep, art_dir)
+        if not art:
+            first = c["items"][0]
+            art = poster_for_imdb(first["imdb_id"], art_dir, repo, key, online, errors=errors, index=index)
+            if art:
+                art = dict(art, what="first film's poster")
+    elif c and not art:
+        # a confident match, or the top guess (labelled as one): a poster helps you check it either way
+        poster = None
+        if c.get("imdb_id"):
+            poster = poster_for_imdb(c["imdb_id"], art_dir, repo, key, online, errors=errors, index=index)
+        if not poster and c.get("tmdb_id") and online:
+            poster = poster_from_tmdb(c.get("poster_path"), "tmdb_%s_%s" % (c.get("kind"), c["tmdb_id"]),
+                                      art_dir, errors=errors)
+        if poster and not sure:
+            poster = dict(poster, guess=True)
+        art = poster
+    if not art:                          # last resort: the disc's own images (often a menu still)
+        art = _disc_art(rep, art_dir)
     rep["art"] = art
+    # small posters beside the other guesses: how most people recognise the right one
+    if online or repo:
+        for g in cands[:6]:
+            if g.get("kind") != "collection":
+                g["thumb"] = thumb_for(g, art_dir, repo, key, online, index)
     if errors:
         rep["art_errors"] = errors
-    if not art and c:                    # say why, so a missing picture isn't a mystery
-        if index is None and not repo and not key:
-            rep["art_note"] = ("No picture: the TheDiscDB index hasn't downloaded yet "
-                               "(Settings > TheDiscDB > Update now)")
+    if not art:                          # say why, so a missing picture isn't a mystery
+        if not c:
+            rep["art_note"] = "No picture: nothing identified yet to look one up for"
         elif not online:
             rep["art_note"] = "No picture: offline"
         elif errors:
             rep["art_note"] = "No picture: " + errors[0]
+        elif index is None and not repo and not key:
+            rep["art_note"] = ("No picture: the TheDiscDB index hasn't downloaded yet "
+                               "(Settings > TheDiscDB > Update now)")
+        elif key:
+            rep["art_note"] = "No picture: neither TheDiscDB nor TMDB has a poster for %s" % (
+                c.get("imdb_id") or "this title")
         else:
-            rep["art_note"] = "No picture for this title in TheDiscDB" + (
-                "" if key else "; a TMDB key in Settings adds more posters")
+            rep["art_note"] = ("No picture for this title in TheDiscDB; a TMDB key in Settings "
+                               "adds more posters")
     return art
 
 
@@ -1788,27 +2435,28 @@ def tmdb_candidates(key, queries, kind, facts):
                     else:
                         score -= 40
                         why.append("released after the disc was mastered")
+                # one details call gives the runtime and the IMDb id (Plex names, TheDiscDB posters)
+                try:
+                    det = tmdb_get(key, "/%s/%d" % (k, r["id"]), append_to_response="external_ids") or {}
+                except Exception:
+                    det = {}
+                imdb_id = det.get("imdb_id") or (det.get("external_ids") or {}).get("imdb_id") or None
                 if k == "movie" and facts.get("feature_minutes"):
-                    try:
-                        rt = tmdb_get(key, "/movie/%d" % r["id"]).get("runtime") or 0
-                    except Exception:
-                        rt = 0
+                    rt = det.get("runtime") or 0
                     if rt:
                         diff = abs(rt - facts["feature_minutes"])
                         score += max(0, 30 - diff * 6)
                         why.append("runtime %d vs disc %d min" % (rt, facts["feature_minutes"]))
                 if k == "tv" and facts.get("episode_minutes"):
-                    try:
-                        det = tmdb_get(key, "/tv/%d" % r["id"])
-                        rts = det.get("episode_run_time") or []
-                    except Exception:
-                        det, rts = {}, []
+                    rts = det.get("episode_run_time") or []
                     if rts:
                         diff = min(abs(x - facts["episode_minutes"]) for x in rts)
                         score += max(0, 20 - diff * 3)
                         why.append("episode length %s vs disc %d min" % (rts, facts["episode_minutes"]))
                 out.append({"kind": k, "tmdb_id": r["id"], "name": name, "year": year,
-                            "score": round(score, 1), "why": "; ".join(why)})
+                            "score": round(score, 1), "why": "; ".join(why),
+                            "poster_path": r.get("poster_path") or det.get("poster_path"),
+                            "imdb_id": imdb_id})
     out.sort(key=lambda c: -c["score"])
     return out[:5]
 
@@ -1832,6 +2480,101 @@ def tmdb_season_guess(key, cand, season, disc, n_eps):
 # --------------------------------------------------------------------------
 # main pipeline
 # --------------------------------------------------------------------------
+
+def discdb_roles(titles, hit):
+    """TheDiscDB names the disc's main movie, so trust it over our length-based guess: other
+    film-length titles become alternate versions (close in length) or extras, and an overlong
+    one (a maximizer or seamless 'everything' playlist) is set aside. Returns what changed."""
+    items = {str(x.get("source") or "").lower(): x.get("item") or {} for x in hit.get("titles") or []}
+    mains = {k for k, it in items.items() if it.get("type") == "MainMovie"}
+    if not mains:
+        return []
+
+    def keys(t):
+        ks = [t["id"].lower()]
+        clips = t.get("clip_list") or ""
+        if clips and "," not in clips:
+            ks.append(clips.lower() + ".m2ts")       # playlist of one clip
+        return ks
+
+    main_len = [t["duration"] for t in titles if any(k in mains for k in keys(t)) and t.get("duration")]
+    if not main_len:
+        return []
+    changed = []
+    for t in titles:
+        ks = keys(t)
+        listed = next((items[k] for k in ks if items.get(k)), None)     # entries TheDiscDB named
+        if listed and listed.get("type") == "MainMovie":
+            t["discdb_title"] = listed.get("title")
+            if t["role"] not in ("feature", "duplicate"):
+                changed.append((t["id"], t["role"], "feature"))
+                t["role"], t["note"] = "feature", "TheDiscDB: main movie"
+            continue
+        if listed and t["role"] == "duplicate" and t.get("note", "").startswith("same video as "):
+            twin = next((x for x in titles if x["id"] == t["note"][len("same video as "):]), None)
+            if twin and not any(items.get(k) for k in keys(twin)):      # keep the copy TheDiscDB names
+                changed.append((t["id"], "duplicate", twin["role"]))
+                t["role"], t["note"], twin["role"], twin["note"] = twin["role"], twin["note"], \
+                    "duplicate", "same video as %s" % t["id"]
+                for x in titles:                                       # other copies point at the named one
+                    if x is not t and x.get("note") == "same video as %s" % twin["id"]:
+                        x["note"] = "same video as %s" % t["id"]
+            continue
+        if t["role"] != "feature":
+            continue
+        d = t.get("duration") or 0
+        if listed:
+            role, note = "extra", "TheDiscDB: %s" % (listed.get("title") or listed.get("type") or "extra")
+        elif any(abs(d - m) <= 0.1 * m for m in main_len):
+            role, note = "version", "film-length, but TheDiscDB's main movie is another title: likely an alternate version"
+            ref = min((x for x in titles if any(k in mains for k in keys(x))),
+                      key=lambda x: abs((x.get("duration") or 0) - d))
+            what = version_label(t.get("video_info"), ref.get("video_info"))
+            if what:
+                t["edition"] = what
+                note = "%s version of %s (TheDiscDB's main movie)" % (what.lower(), ref["id"])
+        elif d > 1.5 * max(main_len):
+            role, note = "junk", "much longer than TheDiscDB's main movie (maximizer or all-in-one playlist)"
+        else:
+            role, note = "extra", "not TheDiscDB's main movie"
+        changed.append((t["id"], t["role"], role))
+        t["role"], t["note"] = role, note
+    return changed
+
+
+def edition_name(title, film):
+    """'The Iron Giant: Signature Edition' -> 'Signature Edition' (None when it's just the film's name)."""
+    if not title:
+        return None
+    norm = lambda x: re.sub(r"[^a-z0-9]", "", (x or "").lower())
+    rest = title
+    words = re.split(r"(\s*[:\-\u2013\u2014(]\s*)", title, maxsplit=1)
+    if len(words) == 3 and norm(words[0]) == norm(film):
+        rest = words[2].rstrip(") ")
+    elif norm(title) == norm(film) or norm(title).startswith(norm(film)) and len(norm(title)) - len(norm(film)) < 3:
+        return None
+    rest = re.sub(r"[{}]", "", rest).strip()
+    return rest or None
+
+
+def editions(titles, film):
+    """Two or more real features (theatrical + extended, say): give each a Plex edition so they
+    don't overwrite each other: named from TheDiscDB when it knows, else by running time."""
+    feats = [t for t in titles if t["role"] == "feature"]
+    if len(feats) < 2:
+        return {}
+    out, seen = {}, set()
+    for t in sorted(feats, key=lambda t: t.get("duration") or 0):
+        others = [x for x in feats if x is not t]
+        diff = version_label(t.get("video_info"), others[0].get("video_info")) if len(others) == 1 else None
+        name = (edition_name(t.get("discdb_title"), film) or diff
+                or "%d Minute Cut" % round((t.get("duration") or 0) / 60))
+        if name.lower() in seen:
+            name = "%s (%d min)" % (name, round((t.get("duration") or 0) / 60))
+        seen.add(name.lower())
+        out[t["id"]] = name
+    return out
+
 
 def identify(root, args):
     sample = load_sample(root)
@@ -1888,6 +2631,7 @@ def identify(root, args):
         rep["structure_error"] = str(exc)
     rep["kind"] = kind
     rep["playlist_obfuscation"] = obfuscated
+    rep["discdb_roles"] = discdb_roles(titles, (db.get("hit") or {}))
     # Episode order: follow the play-all when there is one (file numbers can be interleaved).
     eps_sorted = sorted((t for t in titles if t["role"] == "episode"),
                         key=lambda t: (t.get("play_order") or ("~", 0), _natural(t["id"])))
@@ -1957,6 +2701,13 @@ def identify(root, args):
         facts["truth_year"] = pt["year"]
         if pt["title"] and db["hit"] and kind == "unknown":
             kind = "tv" if pt["season"] else "movie"
+        hit_is_movie = db["hit"] and str(db["hit"].get("type", "")).lower() == "movie"
+        if kind == "tv" and not pt["season"] and not pt["films"] and (hit_is_movie or personal) and as_movie(titles):
+            kind = "movie"                     # your answer / TheDiscDB say film: the "episodes" are reels
+            facts = movie_facts(titles, facts)
+            rep["facts"] = facts
+            rep["kind"] = kind
+            eps = []
     dedup = []
     for q, tr in queries:
         if q and q.lower() not in (x[0].lower() for x in dedup):
@@ -1976,11 +2727,36 @@ def identify(root, args):
                 rep["imdb_note"] = "IMDb data not downloaded yet (run once without --offline)"
             else:
                 with con:
-                    rep["candidates"] = imdb_candidates(con, queries, kind, facts)
-                    if kind == "tv" and not is_probable(rep["candidates"]) and not anchor:
+                    picked = imdb_by_id(con, pt["imdb_id"]) if anchor and pt.get("imdb_id") else None
+                    if anchor and pt.get("films"):
+                        picked = collection_from_ids(con, pt["films"], titles, anchor)
+                    rep["candidates"] = [picked] if picked else imdb_candidates(con, queries, kind, facts)
+                    if not rep["candidates"] and not anchor and lp and lp.get("short_query"):
+                        # nothing for the whole label: try it without its short trailing code (_DES)
+                        rep["candidates"] = imdb_candidates(con, [(lp["short_query"], False)], kind, facts)
+                        rep["search_queries"].append(lp["short_query"])
+                    if kind == "tv" and not anchor:
+                        # a disc of short films looks like TV; a collection that explains the titles wins
+                        # over a TV match it beats (tiny IMDb TV entries can look "confident")
                         coll = imdb_collection(con, queries, titles, facts)
-                        if coll:
+                        top_tv = rep["candidates"][0]["score"] if rep["candidates"] else 0
+                        if coll and (not is_probable(rep["candidates"]) or coll["score"] > top_tv):
                             rep["candidates"].insert(0, coll)
+                    if kind == "tv" and not is_probable(rep["candidates"]) and not anchor:
+                        longest = max((t["duration"] for t in titles
+                                       if t.get("role") not in ("junk", "loop", "duplicate")), default=0)
+                        if longest >= FEATURE_MIN * 0.75:
+                            mf = dict(movie_facts(titles, facts), feature_minutes=round(longest / 60))
+                            mc = imdb_candidates(con, queries, "movie", mf)
+                            tv_best = rep["candidates"][0]["score"] if rep["candidates"] else 0
+                            if is_probable(mc) and mc[0]["score"] > tv_best and as_movie(titles):
+                                kind = rep["kind"] = "movie"
+                                facts = movie_facts(titles, facts)
+                                rep["facts"] = facts
+                                rep["candidates"] = mc
+                                eps = []
+                    if not rep["candidates"] and not anchor and kind == "movie" and rep.get("label"):
+                        rep["candidates"] = imdb_initials(con, rep["label"], facts)   # BCS0NNW1-style codes
                     top = rep["candidates"][0] if rep["candidates"] else None
                     if top and top["kind"] == "tv" and season:
                         rep["episode_guess"] = imdb_season(con, top, season, disc_no, len(eps))
@@ -1992,22 +2768,42 @@ def identify(root, args):
             tm = tmdb_candidates(key, queries, kind, facts)
             for c in tm:
                 c["source"] = "TMDB"
-            rep["candidates"] = sorted(rep["candidates"] + tm, key=lambda c: -c["score"])[:5]
+            merged = {}
+            for c in sorted(rep["candidates"] + tm, key=lambda c: -c["score"]):
+                k = c.get("imdb_id") or ("tmdb", c.get("kind"), c.get("tmdb_id")) or id(c)
+                if k not in merged:
+                    merged[k] = c
+                elif c.get("poster_path") and not merged[k].get("poster_path"):
+                    merged[k]["poster_path"], merged[k]["tmdb_id"] = c["poster_path"], c.get("tmdb_id")
+            rep["candidates"] = list(merged.values())[:5]
             top = rep["candidates"][0] if rep["candidates"] else None
             if top and top.get("source") == "TMDB" and top["kind"] == "tv" and season:
                 rep["episode_guess"] = tmdb_season_guess(key, top, season, disc_no, len(eps))
         except Exception as exc:
             rep["candidates_error"] = "TMDB: %s" % exc
-    if is_probable(rep["candidates"]) and rep["candidates"][0]["kind"] == "collection":
+    if adopt_guess(rep["candidates"]) and rep["candidates"][0]["kind"] == "collection":
         rep["kind"] = "collection"
         rep["plex_names"] = apply_collection(rep["candidates"][0], titles)
-    elif is_probable(rep["candidates"]):
+    elif adopt_guess(rep["candidates"]):
+        eds = {}
         if rep["candidates"][0]["kind"] == "movie":
             srcs = [t["id"] for t in titles if t["role"] == "feature"][:1]
+            eds = editions(titles, rep["candidates"][0]["name"])
+            if eds:
+                srcs = list(eds)
         else:
             srcs = [t["id"] for t in sorted((t for t in titles if t.get("episode_index")),
                                             key=lambda t: t["episode_index"])]
-        rep["plex_names"] = plex_names(rep["candidates"][0], season, rep.get("episode_guess"), srcs)
+        rep["plex_names"] = plex_names(rep["candidates"][0], season, rep.get("episode_guess"), srcs,
+                                       editions=eds)
+    rep["titles"] = [{k: v for k, v in t.items() if k not in ("segments", "in_play_all", "item_chapters", "play_order")}
+                     for t in titles]
+    m = adopt_guess(rep["candidates"])
+    rep["match"] = {"name": m["name"], "year": m.get("year"), "kind": m["kind"], "imdb_id": m.get("imdb_id"),
+                    "sure": is_probable(rep["candidates"]), "source": m.get("source"),
+                    "season": season if m["kind"] == "tv" else None,
+                    "disc": disc_no if m["kind"] == "tv" else None,
+                    "films": len(m.get("items") or []) or None} if m else None
     for c in rep["candidates"]:
         c.pop("_n", None)
     rep["siblings"] = find_siblings(lib, fp, fp["hash"])
@@ -2051,20 +2847,20 @@ def apply_collection(cand, titles):
 def best_guess(rep):
     """Name the most likely title and which signal produced it (confirmed or not)."""
     if rep.get("personal_hit"):
-        return rep["personal_hit"]["truth"], "your library"
+        return strip_tags(rep["personal_hit"]["truth"]), "your library"
     hit = rep["discdb"]["hit"]
     if hit:
         return "%s | %s" % (hit.get("title"), hit.get("disc") or hit.get("release")), "TheDiscDB"
     c = rep.get("candidates") or []
-    if rep["status"].startswith("probable") and c and c[0]["kind"] == "collection":
+    if rep["status"].startswith(("probable", "best guess")) and c and c[0]["kind"] == "collection":
         return "%s: %s" % (c[0]["name"], ", ".join("%s (%s)" % (i["name"], i["year"]) for i in c[0]["items"])), \
             "IMDb short films"
-    if rep["status"].startswith("probable") and c:
+    if rep["status"].startswith(("probable", "best guess")) and c:
         g = "%s (%s)" % (c[0]["name"], c[0]["year"])
         lp = rep.get("label_parsed") or {}
         if c[0]["kind"] == "tv":
             g += "".join(" %s%s" % (k[0].upper(), lp[k]) for k in ("season", "disc") if lp.get(k))
-        return g, "%s ranking" % c[0].get("source", "TMDB")
+        return g, ("%s ranking" if rep["status"].startswith("probable") else "%s best guess") % c[0].get("source", "TMDB")
     lp = rep.get("label_parsed") or {}
     tail = ""
     if lp.get("season"):
@@ -2090,12 +2886,19 @@ def best_guess(rep):
 def parse_truth(truth):
     """'Gone in 60 Seconds (2000)' / 'Psych S1 D2' -> title, year, season, disc."""
     t = truth or ""
+    imdb = re.search(r"\{imdb-(tt\d+)\}", t)
+    t = re.sub(r"\{imdb-tt\d+\}", " ", t)
+    films = re.search(r"\{films:([^}]*)\}", t)
+    t = re.sub(r"\{films:[^}]*\}", " ", t)
+    films = [tuple(x.split("=", 1)) for x in films.group(1).split("|") if "=" in x] if films else []
     year = re.search(r"\((\d{4})\)", t)
     season = re.search(r"\b(?:S|season\s*)0*(\d+)\b", t, re.I)
     disc = re.search(r"\b(?:D|dis[ck]\s*)0*(\d+)\b", t, re.I)
     title = re.sub(r"\(\d{4}\)|\b(?:S|season\s*)\d+\b|\b(?:D|dis[ck]\s*)\d+\b", " ", t, flags=re.I)
     return {"title": " ".join(title.split()), "year": int(year.group(1)) if year else None,
-            "season": int(season.group(1)) if season else None, "disc": int(disc.group(1)) if disc else None}
+            "season": None if films else (int(season.group(1)) if season else None),
+            "disc": None if films else (int(disc.group(1)) if disc else None),
+            "imdb_id": imdb.group(1) if imdb else None, "films": films}
 
 
 def truth_verdict(guess, truth):
@@ -2189,9 +2992,30 @@ def log_report(rep):
             logger.warning("%s", rep[k])
     for e in rep.get("art_errors") or []:
         logger.warning("picture: %s", e)
+    a = rep.get("art")
+    if a:
+        logger.info("picture: %s from %s%s", a.get("what"), a.get("source"), " (top guess)" if a.get("guess") else "")
     note = rep.get("art_note")
     if note and not rep.get("art"):
         (logger.warning if re.search(r"Pillow|index|offline", note) else logger.info)("%s", note)
+
+
+GUESS_MIN = 45   # below this, the top candidate isn't worth acting on: the disc stays unidentified
+
+
+def adopt_guess(c):
+    """The candidate to go ahead with: a confident match, or else a reasonable top guess
+    (names, rip plan and picture follow it; "Not right?" corrects it)."""
+    if not c:
+        return None
+    if is_probable(c):
+        return c[0]
+    return c[0] if c[0].get("score", 0) >= GUESS_MIN else None
+
+
+def strip_tags(text):
+    """Your answer without its machine tags: "Hercules (1997) {imdb-tt0119282}" -> "Hercules (1997)"."""
+    return " ".join(re.sub(r"\{imdb-tt\d+\}|\{films:[^}]*\}", " ", text or "").split())
 
 
 def is_probable(c):
@@ -2206,6 +3030,8 @@ def status(rep, key):
     c = rep.get("candidates") or []
     if is_probable(c):
         return "probable: %s (%s) [%s]" % (c[0]["name"], c[0]["year"], c[0].get("source", ""))
+    if adopt_guess(c):
+        return "best guess: %s (%s) [%s]; check it" % (c[0]["name"], c[0]["year"], c[0].get("source", ""))
     if c:
         return "candidates found; confirm one"
     if rep.get("imdb_note") and rep.get("search_queries"):
@@ -2408,6 +3234,88 @@ def resolve_hash(con, prefix):
     return rows[0]["hash"]
 
 
+def truth_for(cand, season=None, disc=None):
+    """How a chosen match is written as your answer: "Title (Year)", "S1 D2" for TV, and the
+    exact IMDb entry when known ("{imdb-tt0119282}"), so the right one of several is used."""
+    t = "%s (%s)" % (cand["name"], cand["year"]) if cand.get("year") else cand["name"]
+    if cand.get("kind") == "tv" or season:
+        t += "".join(" %s%s" % (k, v) for k, v in (("S", season), ("D", disc)) if v)
+    if cand.get("imdb_id"):
+        t += " {imdb-%s}" % cand["imdb_id"]
+    return t
+
+
+def truth_for_collection(name, films):
+    """A short-film disc as your answer: its name plus which title is which film.
+    films: [(title_id, imdb_id)]."""
+    name = strip_tags(name).replace("{", "(").replace("}", ")")
+    return "%s {films:%s}" % (name, "|".join("%s=%s" % f for f in films))
+
+
+def collection_from_ids(con, films, titles, name):
+    """Rebuild a collection candidate from your answer's exact pairing (no search)."""
+    byid = {t["id"]: t for t in titles}
+    items = []
+    for tid, iid in films:
+        t, c = byid.get(tid), imdb_by_id(con, iid)
+        if t and c:
+            items.append({"title_id": tid, "imdb_id": c["imdb_id"], "name": c["name"], "year": c["year"],
+                          "runtime": c.get("runtime"), "disc_minutes": round(t["duration"] / 60, 1)})
+    if not items:
+        return None
+    matched = {it["title_id"]: byid[it["title_id"]] for it in items}
+    versions, unmatched = [], []
+    for t in sorted((t for t in titles if t.get("role") in ("episode", "version", "feature")), key=_title_num):
+        if t["id"] in matched:
+            continue
+        twin = next((m for m in matched.values() if abs(m["duration"] - t["duration"]) <= 1.5), None)
+        (versions.append({"title_id": t["id"], "same_as": twin["id"]}) if twin else unmatched.append(t["id"]))
+    return {"kind": "collection", "imdb_id": None, "name": strip_tags(name), "year": min(i["year"] or 9999 for i in items),
+            "type": "collection", "score": 100.0, "why": "your answer (exact IMDb entries)", "source": "IMDb",
+            "items": items, "versions": versions, "unmatched": unmatched}
+
+
+def imdb_by_id(con, imdb_id):
+    """The candidate for one exact IMDb entry (an answer you picked)."""
+    n = _int((imdb_id or "")[2:])
+    r = con.execute("SELECT t.id, t.type, t.title, t.year, t.runtime, COALESCE(r.votes, 0) FROM titles t "
+                    "LEFT JOIN ratings r ON r.id = t.id WHERE t.id = ?", (n,)).fetchone() if n else None
+    if not r:
+        return None
+    return {"kind": "tv" if r[1] in IMDB_TV_TYPES else "movie", "imdb_id": tt(r[0]), "_n": r[0], "name": r[2],
+            "year": r[3], "type": r[1], "runtime": r[4], "score": 100.0, "why": "your answer (exact IMDb entry)",
+            "source": "IMDb"}
+
+
+def imdb_lookup(con, text, limit=8):
+    """Type-ahead for "Enter it myself": films, TV and shorts whose title matches what was typed,
+    closest name first, then the best known."""
+    text = (text or "").strip()
+    if len(text) < 2:
+        return []
+    rows = imdb_search(con, text, True, IMDB_KEEP_TYPES + IMDB_SHORT_TYPES, limit=60)
+    out = []
+    for (n, ttype, title, year, end_year, runtime, votes) in rows:
+        out.append({"kind": "tv" if ttype in IMDB_TV_TYPES else "movie", "imdb_id": tt(n), "name": title,
+                    "year": year, "type": ttype, "runtime": runtime, "votes": votes,
+                    "_rank": (name_score(text, title, True) >= 0.85, votes)})
+    out.sort(key=lambda c: c["_rank"], reverse=True)
+    for c in out:
+        c.pop("_rank")
+    return out[:limit]
+
+
+def set_truth(db_path, h, truth):
+    """Save (or with truth=None, forget) your answer for a disc. The disc must have been scanned."""
+    con = library_open(db_path)
+    try:
+        with con:
+            con.execute("UPDATE discs SET truth=? WHERE hash=?", (truth or None, h))
+    finally:
+        con.close()
+    logger.info("answer for %s: %s", h[:8], truth or "(forgotten)")
+
+
 def set_field(con, prefix, field, value):
     h = resolve_hash(con, prefix)
     with con:
@@ -2473,18 +3381,30 @@ def corpus_summary(con, args):
             try:
                 rep = identify(d, a)
             except Exception as exc:
-                rows.append((h[:8], "?", "", "error", str(exc)[:34], "", None, "ERROR"))
+                rows.append((h[:8], "?", "", "error", str(exc)[:34], "", None, "ERROR", None))
                 continue
             truth = rep.get("truth")
             guess = rep.get("best_guess") or ""
             verdict = truth_verdict(guess, truth) if truth else "-"
+            if verdict == "WRONG" and "unconfirmed" in (rep.get("identified_by") or ""):
+                verdict = "missed"          # it only echoed the label back; it never claimed an answer
+            # notes "features: Title 1" (or "features: 00099.mpls, 00100.mpls"): what the rip plan
+            # should treat as the film(s); checks the structure reading, not just the name
+            notes = (con.execute("SELECT notes FROM discs WHERE hash=?", (h,)).fetchone() or [None])[0] or ""
+            want = re.search(r"features?:\s*([^;\n]+)", notes, re.I)
+            plan = None
+            if want:
+                expect = sorted(x.strip() for x in want.group(1).split(",") if x.strip())
+                got = sorted(t["id"] for t in rep.get("titles") or [] if t["role"] == "feature")
+                plan = "plan ok" if got == expect else "plan WRONG (%s)" % ", ".join(got)
             rows.append((h[:8], rep["format"], (rep.get("label") or "")[:22], rep["kind"],
-                         guess[:34], rep["identified_by"], truth, verdict))
+                         guess[:34], rep["identified_by"], truth, verdict, plan))
     p = print
     p("%-8s  %-7s  %-22s  %-6s  %-34s  %-28s  %s" % ("hash", "format", "label", "kind", "best guess", "identified by", "truth check"))
     p("-" * 128)
     for r in rows:
-        p("%-8s  %-7s  %-22s  %-6s  %-34s  %-28s  %s" % (r[0], r[1], r[2], r[3], r[4], r[5], r[7] if r[6] else "-"))
+        p("%-8s  %-7s  %-22s  %-6s  %-34s  %-28s  %s%s" % (r[0], r[1], r[2], r[3], r[4], r[5], r[7] if r[6] else "-",
+                                                         ", " + r[8] if r[8] else ""))
     by = {}
     for r in rows:
         by[r[5]] = by.get(r[5], 0) + 1
@@ -2495,6 +3415,10 @@ def corpus_summary(con, args):
         p("Truth check: %d ok, %d partial, %d wrong, %d missed (of %d with a recorded truth)" % (
             sum(r[7] == "ok" for r in scored), sum(r[7] == "partial" for r in scored),
             sum(r[7] == "WRONG" for r in scored), sum(r[7] == "missed" for r in scored), len(scored)))
+    planned = [r for r in rows if r[8]]
+    if planned:
+        p("Rip plan check: %d ok, %d wrong (of %d with expected features in their notes)" % (
+            sum(r[8] == "plan ok" for r in planned), sum(r[8] != "plan ok" for r in planned), len(planned)))
     if not rows:
         p("The library is empty. Scan discs (with --keep-evidence for full re-parsing) to build a corpus.")
 
@@ -2776,7 +3700,10 @@ def print_report(rep):
         p("  looks like  unknown")
     if f.get("commentary_flagged"):
         p("  commentary  flagged in audio track attributes")
-    if rep.get("playlist_obfuscation"):
+    po = rep.get("playlist_obfuscation")
+    if isinstance(po, dict):
+        p("  protection  %d decoy titles; %s %s" % (po["decoys"], "using" if po["sure"] else "guessing", po["picked"]))
+    elif po:
         p("  warning     many feature-length playlists: possible playlist obfuscation")
     if rep.get("cover"):
         c = rep["cover"]
@@ -2817,8 +3744,9 @@ def print_report(rep):
                 tracks = " audio " + ",".join((a["lang"] or "?") + ("*" if a["kind"] == "commentary" else "")
                                               for a in t["audio"])
             role = "episode %d" % t["episode_index"] if t.get("episode_index") else t["role"]
-            p("  %-10s %-14s %8s %3d ch %s%s" % (role, t["id"], hms(t["duration"]), t["chapters"],
-                                                 tracks, ("  - " + t["note"]) if t["note"] else ""))
+            p("  %-10s %-14s %8s %3d ch  %-18s%s%s" % (role, t["id"], hms(t["duration"]), t["chapters"],
+                                                       t.get("video") or "", tracks,
+                                                       ("  - " + t["note"]) if t["note"] else ""))
     if rep.get("candidates"):
         p("")
         p("Candidates")
