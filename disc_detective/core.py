@@ -1049,7 +1049,7 @@ def classify(titles, fmt):
     def same_length(a, b, tol):
         return abs(a["duration"] - b["duration"]) <= tol and a["chapters"] == b["chapters"]
 
-    if len(eps) >= 2 and (not long_ or len(eps) >= 3 * len(long_)):
+    if len(eps) >= 2 and (not long_ or len(season_like(eps)) >= 3 * len(long_)):
         kind = "tv"
         primaries = []
         for t in sorted(eps, key=lambda x: x["id"]):
@@ -1148,6 +1148,21 @@ LANG_NAMES = {"en": "English", "es": "Spanish", "fr": "French", "de": "German", 
               "ja": "Japanese", "pt": "Portuguese", "nl": "Dutch", "zh": "Chinese", "ko": "Korean",
               "ru": "Russian", "pl": "Polish", "sv": "Swedish", "da": "Danish", "no": "Norwegian",
               "fi": "Finnish", "cs": "Czech", "hu": "Hungarian", "tr": "Turkish", "th": "Thai"}
+
+
+def season_like(eps):
+    """The episode-length titles that look like one season: similar length (within 25% of the
+    typical one) and the same picture format. A film's extras (a 32-min 4:3 making-of, an hour-long
+    1080p documentary) are episode-length too, but they don't match each other."""
+    if len(eps) < 2:
+        return eps
+    durs = sorted(t["duration"] for t in eps)
+    mid = durs[len(durs) // 2]
+    fmt = lambda t: ((t.get("video_info") or {}).get("height"), (t.get("video_info") or {}).get("aspect"),
+                     (t.get("video_info") or {}).get("standard"))
+    from collections import Counter
+    common = Counter(fmt(t) for t in eps).most_common(1)[0][0]
+    return [t for t in eps if abs(t["duration"] - mid) <= 0.25 * mid and fmt(t) == common]
 
 
 def shared_video(a, b):
@@ -1727,6 +1742,20 @@ def imdb_candidates(con, queries, kind, facts):
                 "score": round(score, 1), "why": "; ".join(why), "source": "IMDb"}
         if fid not in best or best[fid]["score"] < cand["score"]:
             best[fid] = cand
+    # Several titles of exactly the same name (a film and an obscure namesake): the far
+    # better-known one is almost always meant.
+    votes = {n: (con.execute("SELECT votes FROM ratings WHERE id=?", (n,)).fetchone() or [0])[0] for n in best}
+    groups = {}
+    for n, c in best.items():
+        groups.setdefault(re.sub(r"[^a-z0-9]", "", c["name"].lower()), []).append(n)
+    for ns in groups.values():
+        if len(ns) < 2:
+            continue
+        ns.sort(key=lambda n: -votes[n])
+        if votes[ns[0]] >= 1000 and votes[ns[0]] >= 20 * max(votes[ns[1]], 1):
+            c = best[ns[0]]
+            c["score"] = round(c["score"] + 10, 1)
+            c["why"] += "; far better known than other titles of that name"
     out = sorted(best.values(), key=lambda c: -c["score"])[:5]
     return out
 

@@ -247,3 +247,20 @@ def test_picture_in_picture_copies_and_long_loops():
     classify([film, pip1, pip2, loop], "Blu-ray")
     assert film["role"] == "feature" and loop["role"] == "loop"
     assert pip1["role"] == pip2["role"] == "version" and pip1["edition"] == "Picture-in-Picture"
+
+
+def test_a_films_extras_are_not_a_tv_season():
+    """Robin Hood: Prince of Thieves: one 155-min film plus four episode-length extras (19, 32,
+    50 and 60 min, 480i and 1080p). Episode-length titles that don't match each other aren't a season."""
+    def t(i, mins, h, aspect):
+        return {"id": i, "duration": mins * 60.0, "chapters": 5, "role": None, "note": "", "group": "playlists",
+                "segments": ((i, 0, 45000 * mins * 60),), "audio": [], "subs": [], "video": "",
+                "video_info": {"height": h, "aspect": aspect}}
+    film = t("00033.mpls", 155, 1080, "16:9")
+    extras = [t("00047.mpls", 32, 480, "4:3"), t("00049.mpls", 19.5, 480, "4:3"),
+              t("00123.mpls", 60, 1080, "16:9"), t("00132.mpls", 50, 1080, "16:9")]
+    kind, _ = classify([film] + extras, "Blu-ray")
+    assert kind == "movie" and film["role"] == "feature" and all(x["role"] == "extra" for x in extras)
+    season = [t("%05d.mpls" % k, 44 + k % 3, 1080, "16:9") for k in range(5)]          # a real season
+    kind, _ = classify(season, "Blu-ray")
+    assert kind == "tv"

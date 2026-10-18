@@ -59,6 +59,8 @@ def build_imdb(d):
     add("movie", "Pocahontas", 1995, 81, 220681)
     add("movie", "Pocahontas: The Legend", 1995, 102, 900)
     add("video", "Pocahontas 2: Journey to a New World", 1998, 73, 19608)
+    add("movie", "Robin Hood: Prince of Thieves", 1991, 143, 224828)
+    add("movie", "Robin Hood: Prince of Thieves", 2009, 142, 621)        # an obscure namesake
     add("video", "An American Tail: The Treasure of Manhattan Island", 1998, 83, 4000)
     add("video", "An American Tail: The Mystery of the Night Monster", 2000, 75, 3000)
     add("tvSeries", "Fievel's American Tails", 1992, 22, 2000, end=1992)

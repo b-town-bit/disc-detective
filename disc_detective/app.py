@@ -1015,7 +1015,8 @@ class ScrollArea(ttk.Frame):
     def __init__(self, parent, max_frac=0.55):
         super().__init__(parent)
         bg = ttk.Style(self).lookup("TFrame", "background") or None
-        self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0, **({"background": bg} if bg else {}))
+        self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0, yscrollincrement=20,
+                                **({"background": bg} if bg else {}))
         self.bar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.bar.set)
         self.inner = ttk.Frame(self.canvas)
@@ -1023,9 +1024,11 @@ class ScrollArea(ttk.Frame):
         self.canvas.pack(side="left", fill="both", expand=True)
         self.max_h = int(self.winfo_screenheight() * max_frac)
         self.inner.bind("<Configure>", lambda e: self.fit())
-        for w in (self.canvas, self.inner):
-            w.bind("<Enter>", lambda e: self._wheel(True))
-            w.bind("<Leave>", lambda e: self._wheel(False))
+        # The wheel scrolls the list wherever the pointer is in this window: bound on the window
+        # (every widget's events pass through it), not on the list, whose rows would hide it.
+        top = self.winfo_toplevel()
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            top.bind(seq, self.roll, add="+")
 
     def fit(self):
         self.update_idletasks()
@@ -1040,17 +1043,19 @@ class ScrollArea(ttk.Frame):
     def scrolls(self):
         return self.inner.winfo_reqheight() > self.max_h
 
-    def _wheel(self, on):
-        if not on:
-            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-                self.canvas.unbind_all(seq)
+    def roll(self, e):
+        if not self.winfo_exists() or not self.scrolls():
             return
-        def roll(e):
-            if self.scrolls():
-                step = -1 if (getattr(e, "num", 0) == 4 or getattr(e, "delta", 0) > 0) else 1
-                self.canvas.yview_scroll(step * (1 if abs(getattr(e, "delta", 0) or 120) <= 120 else 3), "units")
-        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-            self.canvas.bind_all(seq, roll)
+        delta = getattr(e, "delta", 0) or 0
+        if getattr(e, "num", None) == 4 or delta > 0:
+            step = -1
+        elif getattr(e, "num", None) == 5 or delta < 0:
+            step = 1
+        else:
+            return
+        lines = max(1, abs(delta) // 120) if delta else 1      # Windows: 120 a notch; mac: small deltas
+        self.canvas.yview_scroll(step * 3 * lines, "units")
+        return "break"
 
 
 class TitlePicker:

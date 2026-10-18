@@ -302,6 +302,15 @@ def test_long_title_list_scrolls_and_keeps_the_buttons_on_screen(gui, tmp_path, 
          [w for f in top.winfo_children() for w in f.winfo_children()
           if w.winfo_class() == "TButton" and w.cget("text") == "OK"]
     assert ok and ok[0].winfo_ismapped() and ok[0].winfo_rooty() + ok[0].winfo_height() <= screen
+    # the wheel scrolls the list with the pointer over a row, not just over the scrollbar
+    row = [w for w in picker.area.inner.winfo_children() if w.winfo_class() == "TLabel"][10]
+    assert picker.area.canvas.yview()[0] == 0
+    row.event_generate("<MouseWheel>", delta=-120)
+    root.update()
+    assert picker.area.canvas.yview()[0] > 0
+    row.event_generate("<MouseWheel>", delta=120)
+    root.update()
+    assert picker.area.canvas.yview()[0] == 0
     picker.top.destroy()
     small = dd_app.ScrollArea(root)                                      # short lists don't scroll
     ttk_label = dd_app.ttk.Label(small.inner, text="one row")

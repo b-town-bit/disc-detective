@@ -136,3 +136,9 @@ def test_numbered_sequel_title_beats_counting_by_year(imdb):
     c = core.imdb_candidates(imdb, [("Pocahontas Ii", False)], "movie", {"feature_minutes": 73, "mastered": "2012-06"})
     assert c[0]["name"] == "Pocahontas 2: Journey to a New World" and core.is_probable(c)
     assert core.parse_label("Pocahontas_II_USA_DES").get("short_query") is None   # II isn't a code
+
+
+def test_the_far_better_known_namesake_wins(imdb):
+    c = core.imdb_candidates(imdb, [("Robin Hood Prince Of Thieves", False)], "movie",
+                             {"feature_minutes": 155, "mastered": "2009-03"})      # the extended cut
+    assert (c[0]["name"], c[0]["year"]) == ("Robin Hood: Prince of Thieves", 1991) and core.is_probable(c)
