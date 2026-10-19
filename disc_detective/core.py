@@ -259,11 +259,14 @@ def discdb_local_index(repo):
         try:
             with open(cache, encoding="utf-8") as fh:
                 idx = json.load(fh)
-            if idx.get("stamp") == stamp and idx.get("version") == VERSION:
+            if idx.get("stamp") == stamp and idx.get("version") == VERSION and idx.get("sep") == "/":
                 return idx
         except (OSError, ValueError):
             pass
     hashes, sizes, imdb = {}, {}, {}
+
+    def rel_of(p):                      # always "/" (Windows would give backslashes)
+        return os.path.relpath(p, data).replace(os.sep, "/")
     for dirpath, _, filenames in os.walk(data):
         for fn in filenames:
             path = os.path.join(dirpath, fn)
@@ -272,23 +275,23 @@ def discdb_local_index(repo):
                     with open(path, encoding="utf-8-sig") as fh:
                         ext = (json.load(fh).get("ExternalIds") or {})
                     if ext.get("Imdb"):
-                        imdb[ext["Imdb"]] = os.path.relpath(dirpath, data)
+                        imdb[ext["Imdb"]] = rel_of(dirpath)
                 except (OSError, ValueError, AttributeError):
                     pass
             elif re.match(r"disc\d+\.json$", fn):
                 with open(path, encoding="utf-8-sig", errors="replace") as fh:
                     m = HASH_RE.search(fh.read(4096))
                 if m:
-                    hashes[m.group(1).upper()] = os.path.relpath(path, data)
+                    hashes[m.group(1).upper()] = rel_of(path)
             elif re.match(r"disc\d+\.txt$", fn):
-                rel = os.path.relpath(path, data)[:-4] + ".json"
+                rel = rel_of(path)[:-4] + ".json"
                 with open(path, encoding="utf-8-sig", errors="replace") as fh:
                     for line in fh:
                         if line.startswith("HSH:"):
                             m = HSH_RE.match(line.strip())
                             if m and int(m.group(2)) >= 50_000_000:
                                 sizes.setdefault(m.group(2), []).append(rel)
-    idx = {"version": VERSION, "stamp": stamp, "hashes": hashes, "sizes": sizes, "imdb": imdb}
+    idx = {"version": VERSION, "sep": "/", "stamp": stamp, "hashes": hashes, "sizes": sizes, "imdb": imdb}
     try:
         with open(cache, "w", encoding="utf-8") as fh:
             json.dump(idx, fh)
