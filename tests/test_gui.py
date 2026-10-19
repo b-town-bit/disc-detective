@@ -25,6 +25,11 @@ def gui(monkeypatch, tmp_path):
         monkeypatch.setattr(dd_app.messagebox, name, lambda *a, **k: None)
     for name in ("askyesno", "askokcancel", "askyesnocancel", "askquestion", "askretrycancel"):
         monkeypatch.setattr(dd_app.messagebox, name, lambda *a, **k: True)
+    # likewise a native popup menu (Windows tracks it until clicked) and the file pickers;
+    # the menu's entries are still built, so tests can read them
+    monkeypatch.setattr(tk.Menu, "tk_popup", lambda self, *a, **k: None)
+    for name in ("askdirectory", "askopenfilename", "asksaveasfilename"):
+        monkeypatch.setattr(dd_app.filedialog, name, lambda *a, **k: "")
     made = {}
     for cls in (dd_app.FirstRunDialog, dd_app.SettingsDialog):
         orig = cls.__init__
