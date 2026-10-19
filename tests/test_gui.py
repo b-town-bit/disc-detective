@@ -314,6 +314,28 @@ def test_long_title_list_scrolls_and_keeps_the_buttons_on_screen(gui, tmp_path, 
     row.event_generate("<MouseWheel>", delta=120)
     root.update()
     assert picker.area.canvas.yview()[0] == 0
+    # a trackpad (Windows precision touchpad) sends many small deltas: they add up
+    for _ in range(8):
+        row.event_generate("<MouseWheel>", delta=-15)
+    root.update()
+    assert picker.area.canvas.yview()[0] > 0
+    picker.area.canvas.yview_moveto(0)
+    root.update()
+    # Tk 9 trackpads send <TouchpadScroll> (vertical step in the low 16 bits of %D), measured
+    # on Windows: 65347 is -189 (down the page), 268 is up; Tk 8.6 can't generate it, so fake one
+    assert dd_app.ScrollArea.touch_dy(65347) == -189 and dd_app.ScrollArea.touch_dy(268) == 268
+    assert dd_app.ScrollArea.touch_dy((5 << 16) | 0) == 0                 # sideways only
+    fake = type("E", (), {"widget": row, "delta": 65347, "x_root": 0, "y_root": 0})()
+    dd_app.ScrollArea._dispatch_touch(fake)
+    root.update()
+    assert picker.area.canvas.yview()[0] > 0
+    picker.area.canvas.yview_moveto(0)
+    root.update()
+    # Windows may deliver the wheel to the focused widget elsewhere: the pointer decides
+    ok[0].event_generate("<MouseWheel>", delta=-120, rootx=row.winfo_rootx() + 5, rooty=row.winfo_rooty() + 5,
+                         x=0, y=0)
+    root.update()
+    assert picker.area.canvas.yview()[0] > 0
     picker.top.destroy()
     small = dd_app.ScrollArea(root)                                      # short lists don't scroll
     ttk_label = dd_app.ttk.Label(small.inner, text="one row")

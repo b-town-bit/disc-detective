@@ -1058,11 +1058,62 @@ class ScrollArea(ttk.Frame):
         self.canvas.pack(side="left", fill="both", expand=True)
         self.max_h = int(self.winfo_screenheight() * max_frac)
         self.inner.bind("<Configure>", lambda e: self.fit())
-        # The wheel scrolls the list wherever the pointer is in this window: bound on the window
-        # (every widget's events pass through it), not on the list, whose rows would hide it.
-        top = self.winfo_toplevel()
-        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-            top.bind(seq, self.roll, add="+")
+        # The wheel scrolls the list under the pointer, over its rows as well as its scrollbar.
+        # One handler for the whole app (bind_all): on Windows wheel and trackpad events can go
+        # to the window with the keyboard focus rather than the one under the pointer, so a
+        # binding on the dialog alone misses them.
+        self._acc = 0.0
+        ScrollArea._areas.add(self)
+        self.bind("<Destroy>", lambda e: e.widget is self and ScrollArea._areas.discard(self), add="+")
+        root = self._root()
+        if not getattr(root, "_dd_wheel", False):          # once per Tk root
+            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                root.bind_all(seq, ScrollArea._dispatch, add="+")
+            try:
+                # Tk 9: a trackpad sends <TouchpadScroll> instead of wheel events (Windows,
+                # macOS); Tk's own scrollbars bind it, so without this only the bar scrolled
+                root.bind_all("<TouchpadScroll>", ScrollArea._dispatch_touch, add="+")
+            except tk.TclError:
+                pass                                       # Tk 8.6: trackpads send wheel events
+            root._dd_wheel = True
+
+    _areas = set()
+
+    @staticmethod
+    def touch_dy(delta):
+        """The vertical step of a <TouchpadScroll> event: %D packs horizontal into the high and
+        vertical into the low 16 bits, each signed (65347 -> -189, a step up the page...)."""
+        try:
+            d = int(delta)
+        except (TypeError, ValueError):
+            return 0
+        dy = d & 0xFFFF
+        return dy - 0x10000 if dy >= 0x8000 else dy
+
+    @staticmethod
+    def _dispatch_touch(e):
+        e.delta = ScrollArea.touch_dy(getattr(e, "delta", 0))
+        e.num = None
+        return ScrollArea._dispatch(e) if e.delta else None
+
+    @staticmethod
+    def _dispatch(e):
+        """Send a wheel event to the scroll list under the pointer (or holding the widget)."""
+        try:
+            under = e.widget.winfo_containing(e.x_root, e.y_root) if (e.x_root or e.y_root) else None
+        except (tk.TclError, AttributeError):
+            under = None
+        for w in (under, e.widget):
+            name = str(w) if w is not None else ""
+            for area in list(ScrollArea._areas):
+                try:
+                    if area.winfo_exists() and (name == str(area) or name.startswith(str(area) + ".")):
+                        if name == str(area.bar):
+                            return None              # the scrollbar scrolls itself
+                        return area.roll(e)
+                except tk.TclError:
+                    ScrollArea._areas.discard(area)
+        return None
 
     def fit(self):
         self.update_idletasks()
@@ -1079,16 +1130,28 @@ class ScrollArea(ttk.Frame):
 
     def roll(self, e):
         if not self.winfo_exists() or not self.scrolls():
-            return
-        delta = getattr(e, "delta", 0) or 0
-        if getattr(e, "num", None) == 4 or delta > 0:
-            step = -1
-        elif getattr(e, "num", None) == 5 or delta < 0:
-            step = 1
+            return None
+        num = getattr(e, "num", None)
+        if num in (4, 5):                                    # X11: one notch per button press
+            units = -3 if num == 4 else 3
         else:
-            return
-        lines = max(1, abs(delta) // 120) if delta else 1      # Windows: 120 a notch; mac: small deltas
-        self.canvas.yview_scroll(step * 3 * lines, "units")
+            try:
+                delta = float(getattr(e, "delta", 0) or 0)
+            except (TypeError, ValueError):
+                return None
+            if not delta:
+                return None
+            if self.tk.call("tk", "windowingsystem") == "aqua":
+                units = -int(delta) or (-1 if delta > 0 else 1)  # macOS: delta is already lines
+            else:
+                # Windows: 120 a mouse notch (3 rows of 20 px); a trackpad sends many small
+                # deltas, so add them up and scroll as they make whole rows
+                self._acc += -delta / 40.0
+                units = int(self._acc)
+                self._acc -= units
+                if not units:
+                    return "break"
+        self.canvas.yview_scroll(units, "units")
         return "break"
 
 
