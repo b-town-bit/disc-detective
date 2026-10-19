@@ -25,6 +25,10 @@ Cheapest clue first, stopping as soon as the answer is solid:
    `AN_AMERICAN_TAIL_2`), Blu-ray title metadata, mastering date, cover art.
 6. **IMDb.** Candidates ranked by name, runtime, release year and popularity,
    with the IMDb id Plex uses.
+7. **TVmaze.** For TV discs, the season's episode list, in DVD order when the
+   DVDs differ from broadcast (Firefly). Episode lengths place a disc in its season,
+   so a short last disc or a two-part finale stored as one title gets the right
+   episodes. Files are named in aired order (Plex's default) or DVD order (Settings).
 
 The app then shows the poster or box art so you can confirm at a glance.
 
@@ -92,6 +96,7 @@ workflow once from the Actions tab after the first push.
 ## Credits
 
 Disc data from [TheDiscDB](https://thediscdb.com), title data from IMDb's
-non-commercial datasets, optional posters from TMDB. See [THIRD_PARTY.md](THIRD_PARTY.md).
+non-commercial datasets, episode lists from [TVmaze](https://www.tvmaze.com)
+(CC BY-SA), optional posters from TMDB. See [THIRD_PARTY.md](THIRD_PARTY.md).
 
 MIT License.

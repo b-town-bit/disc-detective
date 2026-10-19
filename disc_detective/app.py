@@ -109,7 +109,8 @@ def clean(s):
 def plan_rip(rep, mk_titles, include_extras, selected=None):
     """Which MakeMKV titles to rip and what to call them (Plex layout)."""
     ours = [{"title_id": t["id"], "role": t["role"], "duration": t["duration"],
-             "clips": t.get("clip_list"), "episode_index": t.get("episode_index"), "edition": t.get("edition")}
+             "clips": t.get("clip_list"), "episode_index": t.get("episode_index"), "edition": t.get("edition"),
+             "interactive": t.get("interactive"), "special_name": t.get("special_name")}
             for t in rep.get("titles") or []]
     pairs = di.map_makemkv(mk_titles, ours, rep["format"])
     names = {}
@@ -137,11 +138,13 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
         item = known.get((m["source"] or "").lower()) or {}
         if not item and t and t.get("clips") and "," not in t["clips"]:
             item = known.get(t["clips"].lower() + ".m2ts") or {}      # playlist of one clip
+        if not item and m.get("dvd_title"):                         # TheDiscDB numbers DVD titles "01"
+            item = known.get("%02d" % m["dvd_title"]) or known.get(str(m["dvd_title"])) or {}
         role = t["role"] if t else {"MainMovie": "feature", "Episode": "episode"}.get(item.get("type"), "extra" if item else None)
         if selected is not None:
             if not t or t["title_id"] not in selected:
                 continue
-        elif role not in roles:
+        elif role not in roles or (t and t.get("interactive")):    # a menu game: only if ticked
             continue
         if role == "episode" and item.get("season") and item.get("episode"):
             dest = "%s/Season %02d/%s - s%02de%02d - %s.mkv" % (base, int(item["season"]), show, int(item["season"]),
@@ -150,7 +153,8 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
             dest = names[t["title_id"]]
         elif role == "extra":
             folder = EXTRA_FOLDERS.get(item.get("type"), "Other")
-            label = clean(item.get("title")) or "%s - %s" % (show, (t["title_id"] if t else m["source"]).replace(".", "_"))
+            label = clean(item.get("title")) or clean((t or {}).get("special_name")) or \
+                "%s - %s" % (show, (t["title_id"] if t else m["source"]).replace(".", "_"))
             dest = "%s/%s/%s.mkv" % (base, folder, label)
         elif role == "episode":
             dest = "%s/Episode %02d.mkv" % (base, (t or {}).get("episode_index") or m["index"])
@@ -163,8 +167,10 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
             dest = "%s/Other/%s - %s.mkv" % (base, show, (t["title_id"] if t else m["source"]).replace(".", "_"))
         plan.append({"mk": m["index"], "title_id": t["title_id"] if t else m["source"], "role": role,
                      "length": m["duration_text"], "dest": dest})
-    if not plan and mk_titles:   # nothing classified: fall back to the longest title
-        m = max(mk_titles, key=lambda x: x["duration"] or 0)
+    if not plan and mk_titles:   # nothing classified: fall back to the longest title (never a loop)
+        real = [x for x in mk_titles if (pairs.get(x["index"], (None, None))[0] or {}).get("role")
+                not in ("loop", "junk", "duplicate", "decoy", "play-all")] or mk_titles
+        m = max(real, key=lambda x: x["duration"] or 0)
         plan.append({"mk": m["index"], "title_id": m["source"] or "title %d" % m["index"], "role": "longest",
                      "length": m["duration_text"], "dest": "%s/%s.mkv" % (base, show)})
     return plan
@@ -420,7 +426,9 @@ class App:
             self.rip_btn.set_state(True, arrow_enabled=False)
         else:
             self.rip_btn.set_text(self.RIP_TEXT)
-            self.rip_btn.set_state(bool(self.rep) and not busy)
+            # no MakeMKV: Rip is greyed out, but ▾ still opens Choose titles and the rip options
+            self.rip_btn.set_state(bool(self.rep) and not busy and bool(self.makemkv_exe()),
+                                   arrow_enabled=bool(self.rep) and not busy)
 
     def remember(self):
         self.settings.update(drive=self.source.get(), outdir=self.outdir.get(), extras=self.extras.get())
@@ -467,7 +475,8 @@ class App:
         """Identifier settings from the Settings dialog (a plain dict: safe to read off the Tk thread)."""
         st = self.settings
         return di.default_args(tmdb_key=st.get("tmdb_key") or None, no_art=not st.get("pictures", True),
-                               no_discdb_online=not st.get("discdb_online", True))
+                               no_discdb_online=not st.get("discdb_online", True),
+                               episode_order=st.get("episode_order", "aired"))
 
     def makemkv_exe(self):
         exe = self.settings.get("makemkv")
@@ -550,6 +559,11 @@ class App:
             return
         have = rep.get("match") or rep.get("personal_hit") or (rep.get("discdb") or {}).get("hit")
         if rep.get("personal_hit"):
+            self.confirmed_lbl.config(text="✓ In your library")
+            self.confirmed_lbl.pack(side="left", padx=(0, 10))
+        elif (rep.get("discdb") or {}).get("hit"):
+            # TheDiscDB knows this exact disc: nothing to confirm (Not right? still fixes a bad entry)
+            self.confirmed_lbl.config(text="✓ TheDiscDB")
             self.confirmed_lbl.pack(side="left", padx=(0, 10))
         elif self.confirmable(rep):
             self.confirm_btn.pack(side="left", padx=(0, 6))
@@ -808,7 +822,11 @@ class App:
             self.dest_lbl.config(text="into %s" % os.path.join(self.outdir.get(), *common))
         else:
             self.dest_lbl.config(text="")
-        self.rip_btn.set_state(bool(plan) and not self.busy)
+        have_mkv = bool(self.makemkv_exe())
+        if plan and not have_mkv:
+            self.dest_lbl.config(text=self.dest_lbl.cget("text") + "  ·  install MakeMKV to rip (or set it in Settings)")
+        self.rip_btn.set_state(bool(plan) and not self.busy and have_mkv,
+                               arrow_enabled=bool(self.rep) and not self.busy)
 
     # ---- Rip ----
     def rip_or_cancel(self):
@@ -943,7 +961,9 @@ def display_title(rep):
     m = rep.get("match")
     if m:
         t = "%s (%s)" % (m["name"], m["year"]) if m.get("year") else m["name"]
-        if m["kind"] == "tv" and m.get("season"):
+        if m["kind"] == "tv" and m.get("season") == 0:
+            t += "  ·  Specials"                    # Plex's season 0 (a special on its own disc)
+        elif m["kind"] == "tv" and m.get("season"):
             t += "  ·  Season %s%s" % (m["season"], (", Disc %s" % m["disc"]) if m.get("disc") else "")
         return t
     guess = di.strip_tags(rep.get("best_guess") or "").split(" | ")[0]
@@ -958,7 +978,10 @@ def detail_rows(rep):
         rows.append(("IMDb", m["imdb_id"]))
     hit = (rep.get("discdb") or {}).get("hit")
     if hit:
-        rows.append(("TheDiscDB", " · ".join(x for x in (hit.get("release"), hit.get("disc")) if x)))
+        # this disc first, then the set TheDiscDB files it under: the same disc is often sold in
+        # several releases (a Blu-ray that also comes in a 4K box), and TheDiscDB may list only one
+        disc, rel = hit.get("disc"), hit.get("release")
+        rows.append(("TheDiscDB", "%s, in the %s release" % (disc, rel) if disc and rel else (disc or rel or "")))
     if rep.get("label"):
         rows.append(("Disc label", rep["label"]))
     names = (rep.get("bd_meta") or {}).get("names") or []
@@ -968,6 +991,11 @@ def detail_rows(rep):
     if isinstance(po, dict):
         rows.append(("Protection", "%d decoy titles · %s %s" % (
             po["decoys"], "the real film is" if po["sure"] else "best guess for the real film:", po["picked"])))
+    g = rep.get("episode_guess") or {}
+    if g.get("source"):        # where the episode names came from, and in which order
+        rows.append(("Episodes", g["note"].split(";")[0]))
+    elif g.get("note"):        # no season on the label: why the episodes aren't named
+        rows.append(("Episodes", g["note"]))
     if rep.get("mastered"):
         rows.append(("Mastered", rep["mastered"]))
     rows.append(("Fingerprint", rep.get("content_hash", "?")[:8]))
@@ -990,7 +1018,13 @@ def describe_plan(plan, custom):
     elif eps:
         codes = [re.search(r"s(\d+)e(\d+)", p["dest"], re.I) for p in eps]
         codes = ["S%sE%s" % (c.group(1), c.group(2)) for c in codes if c]
-        span = (" (%s–%s)" % (codes[0], codes[-1]) if len(codes) > 1 else " (%s)" % codes[0]) if codes else ""
+        nums = [int(c.split("E")[1]) for c in codes]
+        if len(codes) > 1 and nums == list(range(nums[0], nums[0] + len(nums))):
+            span = " (%s–%s)" % (codes[0], codes[-1])
+        elif codes:     # DVD order that isn't aired order (Firefly): list them as they are
+            span = " (%s)" % ", ".join(codes[:5] + (["…"] if len(codes) > 5 else []))
+        else:
+            span = ""
         head = "Will rip %d episode%s%s" % (len(eps), "" if len(eps) == 1 else "s", span)
     elif roles.count("feature") > 1:
         eds = [(re.search(r"\{edition-([^}]*)\}", p["dest"]), p["length"]) for p in plan if p["role"] == "feature"]
@@ -1593,6 +1627,18 @@ class SettingsDialog:
         self.key_note.bind("<Button-1>", lambda e: webbrowser.open("https://www.themoviedb.org/settings/api"))
         r += 1
 
+        head("TV episodes")
+        self.order = tk.StringVar(value=st.get("episode_order", "aired"))
+        for value, text in (("aired", "Name files in aired order (Plex's default)"),
+                            ("dvd", "Name files in DVD order (set the show to DVD order in Plex)")):
+            ttk.Radiobutton(f, text=text, value=value, variable=self.order).grid(
+                row=r, column=0, columnspan=3, sticky="w")
+            r += 1
+        ttk.Label(f, text="Episodes are matched to the disc in DVD order either way. Episode lists "
+                          "from TVmaze (tvmaze.com); applies to the next scan.",
+                  style="Sub.TLabel", wraplength=420, justify="left").grid(row=r, column=0, columnspan=3, sticky="w")
+        r += 1
+
         head("MakeMKV")
         self.mkv = tk.StringVar(value=st.get("makemkv", ""))
         ttk.Entry(f, textvariable=self.mkv, width=38).grid(row=r, column=0, columnspan=2, sticky="we")
@@ -1609,7 +1655,7 @@ class SettingsDialog:
         top.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh_status()
         self.refresh_mkv()
-        for var in (self.online, self.pictures, self.key, self.mkv):   # saved as you go, not only on Close
+        for var in (self.online, self.pictures, self.key, self.mkv, self.order):   # saved as you go
             var.trace_add("write", lambda *a: self.save())
 
     def refresh_status(self):
@@ -1682,6 +1728,7 @@ class SettingsDialog:
         st["pictures"] = bool(self.pictures.get())
         st["tmdb_key"] = self.key.get().strip()
         st["makemkv"] = self.mkv.get().strip()
+        st["episode_order"] = self.order.get()
         save_settings(st)
 
     def close(self):
@@ -1689,6 +1736,8 @@ class SettingsDialog:
         if self.app.data_ui is self:     # keep the download going; report to the status line
             self.app.data_ui = None
         self.top.destroy()
+        if self.app.rep and not self.app.busy:   # MakeMKV may have just been set: refresh Rip
+            self.app.show_plan_summary()
 
 
 def _n(v):

@@ -1,0 +1,775 @@
+{
+ "_source": "api.tvmaze.com, 2026-10-18 (trimmed); TVmaze data is CC BY-SA 4.0",
+ "/lookup/shows?imdb=tt0303461": {
+  "id": 180,
+  "name": "Firefly",
+  "externals": {
+   "imdb": "tt0303461"
+  }
+ },
+ "/shows/180/alternatelists": [
+  {
+   "id": 1,
+   "dvd_release": true,
+   "verbatim_order": false
+  }
+ ],
+ "/alternatelists/1/alternateepisodes?embed=episodes": [
+  {
+   "id": 1,
+   "name": "Serenity",
+   "season": 1,
+   "number": 1,
+   "type": "regular",
+   "runtime": 120,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 13005,
+      "name": "Serenity",
+      "season": 1,
+      "number": 11,
+      "type": "regular",
+      "runtime": 120
+     }
+    ]
+   }
+  },
+  {
+   "id": 2,
+   "name": "The Train Job",
+   "season": 1,
+   "number": 2,
+   "type": "regular",
+   "runtime": 60,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 12995,
+      "name": "The Train Job",
+      "season": 1,
+      "number": 1,
+      "type": "regular",
+      "runtime": 60
+     }
+    ]
+   }
+  },
+  {
+   "id": 3,
+   "name": "Bushwhacked",
+   "season": 1,
+   "number": 3,
+   "type": "regular",
+   "runtime": 60,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 12996,
+      "name": "Bushwhacked",
+      "season": 1,
+      "number": 2,
+      "type": "regular",
+      "runtime": 60
+     }
+    ]
+   }
+  },
+  {
+   "id": 4,
+   "name": "Shindig",
+   "season": 1,
+   "number": 4,
+   "type": "regular",
+   "runtime": 60,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 13000,
+      "name": "Shindig",
+      "season": 1,
+      "number": 6,
+      "type": "regular",
+      "runtime": 60
+     }
+    ]
+   }
+  },
+  {
+   "id": 5,
+   "name": "Safe",
+   "season": 1,
+   "number": 5,
+   "type": "regular",
+   "runtime": 60,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 13001,
+      "name": "Safe",
+      "season": 1,
+      "number": 7,
+      "type": "regular",
+      "runtime": 60
+     }
+    ]
+   }
+  },
+  {
+   "id": 6,
+   "name": "Our Mrs. Reynolds",
+   "season": 1,
+   "number": 6,
+   "type": "regular",
+   "runtime": 60,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 12997,
+      "name": "Our Mrs. Reynolds",
+      "season": 1,
+      "number": 3,
+      "type": "regular",
+      "runtime": 60
+     }
+    ]
+   }
+  },
+  {
+   "id": 7,
+   "name": "Jaynestown",
+   "season": 1,
+   "number": 7,
+   "type": "regular",
+   "runtime": 60,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 12998,
+      "name": "Jaynestown",
+      "season": 1,
+      "number": 4,
+      "type": "regular",
+      "runtime": 60
+     }
+    ]
+   }
+  },
+  {
+   "id": 8,
+   "name": "Out of Gas",
+   "season": 1,
+   "number": 8,
+   "type": "regular",
+   "runtime": 60,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 12999,
+      "name": "Out of Gas",
+      "season": 1,
+      "number": 5,
+      "type": "regular",
+      "runtime": 60
+     }
+    ]
+   }
+  },
+  {
+   "id": 9,
+   "name": "Ariel",
+   "season": 1,
+   "number": 9,
+   "type": "regular",
+   "runtime": 60,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 13002,
+      "name": "Ariel",
+      "season": 1,
+      "number": 8,
+      "type": "regular",
+      "runtime": 60
+     }
+    ]
+   }
+  },
+  {
+   "id": 10,
+   "name": "War Stories",
+   "season": 1,
+   "number": 10,
+   "type": "regular",
+   "runtime": 60,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 13003,
+      "name": "War Stories",
+      "season": 1,
+      "number": 9,
+      "type": "regular",
+      "runtime": 60
+     }
+    ]
+   }
+  },
+  {
+   "id": 11,
+   "name": "Trash",
+   "season": 1,
+   "number": 11,
+   "type": "regular",
+   "runtime": 60,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 13007,
+      "name": "Trash",
+      "season": 1,
+      "number": 12,
+      "type": "regular",
+      "runtime": 60
+     }
+    ]
+   }
+  },
+  {
+   "id": 12,
+   "name": "The Message",
+   "season": 1,
+   "number": 12,
+   "type": "regular",
+   "runtime": 60,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 13008,
+      "name": "The Message",
+      "season": 1,
+      "number": 13,
+      "type": "regular",
+      "runtime": 60
+     }
+    ]
+   }
+  },
+  {
+   "id": 13,
+   "name": "Heart of Gold",
+   "season": 1,
+   "number": 13,
+   "type": "regular",
+   "runtime": 60,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 13009,
+      "name": "Heart of Gold",
+      "season": 1,
+      "number": 14,
+      "type": "regular",
+      "runtime": 60
+     }
+    ]
+   }
+  },
+  {
+   "id": 14,
+   "name": "Objects in Space",
+   "season": 1,
+   "number": 14,
+   "type": "regular",
+   "runtime": 60,
+   "_embedded": {
+    "episodes": [
+     {
+      "id": 13004,
+      "name": "Objects in Space",
+      "season": 1,
+      "number": 10,
+      "type": "regular",
+      "runtime": 60
+     }
+    ]
+   }
+  }
+ ],
+ "/lookup/shows?imdb=tt0279600": {
+  "id": 435,
+  "name": "Smallville",
+  "externals": {
+   "imdb": "tt0279600"
+  }
+ },
+ "/shows/435/alternatelists": [],
+ "/shows/180/episodes?specials=1": [
+  {
+   "id": 12995,
+   "name": "The Train Job",
+   "season": 1,
+   "number": 1,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 12996,
+   "name": "Bushwhacked",
+   "season": 1,
+   "number": 2,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 12997,
+   "name": "Our Mrs. Reynolds",
+   "season": 1,
+   "number": 3,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 12998,
+   "name": "Jaynestown",
+   "season": 1,
+   "number": 4,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 12999,
+   "name": "Out of Gas",
+   "season": 1,
+   "number": 5,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 13000,
+   "name": "Shindig",
+   "season": 1,
+   "number": 6,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 13001,
+   "name": "Safe",
+   "season": 1,
+   "number": 7,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 13002,
+   "name": "Ariel",
+   "season": 1,
+   "number": 8,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 13003,
+   "name": "War Stories",
+   "season": 1,
+   "number": 9,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 13004,
+   "name": "Objects in Space",
+   "season": 1,
+   "number": 10,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 13005,
+   "name": "Serenity",
+   "season": 1,
+   "number": 11,
+   "type": "regular",
+   "runtime": 120
+  },
+  {
+   "id": 13007,
+   "name": "Trash",
+   "season": 1,
+   "number": 12,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 13008,
+   "name": "The Message",
+   "season": 1,
+   "number": 13,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 13009,
+   "name": "Heart of Gold",
+   "season": 1,
+   "number": 14,
+   "type": "regular",
+   "runtime": 60
+  }
+ ],
+ "/shows/435/episodes?specials=1": [
+  {
+   "id": 41129,
+   "name": "Pilot",
+   "season": 1,
+   "number": 1,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41130,
+   "name": "Metamorphosis",
+   "season": 1,
+   "number": 2,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41131,
+   "name": "Hothead",
+   "season": 1,
+   "number": 3,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41132,
+   "name": "X-Ray",
+   "season": 1,
+   "number": 4,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41133,
+   "name": "Cool",
+   "season": 1,
+   "number": 5,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41134,
+   "name": "Hourglass",
+   "season": 1,
+   "number": 6,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41135,
+   "name": "Craving",
+   "season": 1,
+   "number": 7,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41136,
+   "name": "Jitters",
+   "season": 1,
+   "number": 8,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41137,
+   "name": "Rogue",
+   "season": 1,
+   "number": 9,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41138,
+   "name": "Shimmer",
+   "season": 1,
+   "number": 10,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41139,
+   "name": "Hug",
+   "season": 1,
+   "number": 11,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41140,
+   "name": "Leech",
+   "season": 1,
+   "number": 12,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41141,
+   "name": "Kinetic",
+   "season": 1,
+   "number": 13,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41142,
+   "name": "Zero",
+   "season": 1,
+   "number": 14,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41143,
+   "name": "Nicodemus",
+   "season": 1,
+   "number": 15,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41144,
+   "name": "Stray",
+   "season": 1,
+   "number": 16,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41145,
+   "name": "Reaper",
+   "season": 1,
+   "number": 17,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41146,
+   "name": "Drone",
+   "season": 1,
+   "number": 18,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41147,
+   "name": "Crush",
+   "season": 1,
+   "number": 19,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41148,
+   "name": "Obscura",
+   "season": 1,
+   "number": 20,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41149,
+   "name": "Tempest",
+   "season": 1,
+   "number": 21,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41324,
+   "name": "Lazarus",
+   "season": 10,
+   "number": 1,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41325,
+   "name": "Shield",
+   "season": 10,
+   "number": 2,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41326,
+   "name": "Supergirl",
+   "season": 10,
+   "number": 3,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41327,
+   "name": "Homecoming",
+   "season": 10,
+   "number": 4,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41328,
+   "name": "Isis",
+   "season": 10,
+   "number": 5,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41329,
+   "name": "Harvest",
+   "season": 10,
+   "number": 6,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41330,
+   "name": "Ambush",
+   "season": 10,
+   "number": 7,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41331,
+   "name": "Abandoned",
+   "season": 10,
+   "number": 8,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41332,
+   "name": "Patriot",
+   "season": 10,
+   "number": 9,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41333,
+   "name": "Luthor",
+   "season": 10,
+   "number": 10,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41334,
+   "name": "Icarus",
+   "season": 10,
+   "number": 11,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41335,
+   "name": "Collateral",
+   "season": 10,
+   "number": 12,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41336,
+   "name": "Beacon",
+   "season": 10,
+   "number": 13,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41337,
+   "name": "Masquerade",
+   "season": 10,
+   "number": 14,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41338,
+   "name": "Fortune",
+   "season": 10,
+   "number": 15,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41339,
+   "name": "Scion",
+   "season": 10,
+   "number": 16,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41340,
+   "name": "Kent",
+   "season": 10,
+   "number": 17,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41341,
+   "name": "Booster",
+   "season": 10,
+   "number": 18,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41342,
+   "name": "Dominion",
+   "season": 10,
+   "number": 19,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41343,
+   "name": "Prophecy",
+   "season": 10,
+   "number": 20,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41344,
+   "name": "Finale (1)",
+   "season": 10,
+   "number": 21,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 41345,
+   "name": "Finale (2)",
+   "season": 10,
+   "number": 22,
+   "type": "regular",
+   "runtime": 60
+  },
+  {
+   "id": 3002610,
+   "name": "Unaired Pilot",
+   "season": 1,
+   "number": null,
+   "type": "insignificant_special",
+   "runtime": 60
+  }
+ ]
+}

@@ -33,3 +33,36 @@ def test_short_trailing_code_is_only_a_fallback():
 def test_number_stuck_to_the_last_word():
     assert parse_label("SISTER_ACT2")["query"] == "Sister Act 2"
     assert parse_label("PRINCE_OF_EGYPT_UPB2")["query"] == "Prince Of Egypt"     # still a production code
+
+
+def test_blu_ray_disc_number_and_trailing_codes():
+    """PUSHING_DAISIES_S1_BD01_DIM1: BD01 is disc 1; what follows the season / disc marks is a code."""
+    p = parse_label("PUSHING_DAISIES_S1_BD01_DIM1")
+    assert (p["query"], p["season"], p["disc"]) == ("Pushing Daisies", 1, 1)
+    p = parse_label("PUSHING_DAISIES_S1_BD01_DIM2")       # every disc of the set says BD01
+    assert (p["query"], p["season"], p["disc"]) == ("Pushing Daisies", 1, 2)
+    p = parse_label("STAR_TREK_TNG_S3_D2_WS")
+    assert (p["query"], p["season"], p["disc"]) == ("Star Trek Tng", 3, 2)
+    p = parse_label("PSYCH_S2_DVD3")
+    assert (p["query"], p["season"], p["disc"]) == ("Psych", 2, 3)
+
+
+def test_british_series_number_is_the_season():
+    """SHERLOCK_SERIES_3_DISC_1 was read as "Sherlock Series" and found Sherlock Jr. (1924)."""
+    p = parse_label("SHERLOCK_SERIES_3_DISC_1")
+    assert (p["query"], p["season"], p["disc"]) == ("Sherlock", 3, 1)
+    p = parse_label("DOCTOR_WHO_SERIES_1_D2")
+    assert (p["query"], p["season"], p["disc"]) == ("Doctor Who", 1, 2)
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("SHERLOCK_SERIES_THREE_DISC_1", ("Sherlock", 3, 1)),        # spelled-out number
+    ("SMALLVILLE_SEASON_TWO_D3", ("Smallville", 2, 3)),
+    ("SHERLOCK_SERIES_3", ("Sherlock", 3, None)),                 # the show's name comes first
+    ("SERIES_7_THE_CONTENDERS", ("Series 7 The Contenders", None, None)),   # a film's title
+    ("A_SERIES_OF_UNFORTUNATE_EVENTS", ("A Series Of Unfortunate Events", None, None)),
+    ("THE_OFFICE_COMPLETE_SERIES_D4", ("The Office", None, 4)),
+])
+def test_series_means_season_only_on_a_tv_disc(label, expected):
+    p = parse_label(label)
+    assert (p["query"], p["season"], p["disc"]) == expected

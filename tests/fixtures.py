@@ -38,6 +38,8 @@ def build_imdb(d):
         s = add("tvSeries", title, year, runtime, votes, end=year + 5)
         for sn, names in seasons.items():
             for i, nm in enumerate(names, 1):
+                if isinstance(nm, tuple):            # (episode number, name), e.g. (0, "Unaired Pilot")
+                    i, nm = nm
                 e = add("tvEpisode", nm, year + sn - 1, runtime, 0)
                 E.append("%s\t%s\t%d\t%d" % (e, s, sn, i))
         return s
@@ -87,6 +89,8 @@ def build_imdb(d):
                                                "The Lord of War and Thunder"]})
     series("Justified: City Primeval", 2023, 50, 20000, {1: ["City Primeval"]})
     add("movie", "Justified", 1999, 90, 40)
+    series("Smallville", 2001, 44, 140000, {1: [(0, "Unaired Pilot"), (1, "Pilot"), (2, "Metamorphosis"),
+                                                (3, "Hothead"), (4, "X-Ray"), (5, "Cool")]})
     add("movie", "Chicken Run", 2000, 84, 230000)
     add("movie", "Hercules", 1997, 93, 260000)
     add("movie", "The Black Cauldron", 1985, 80, 46161)
@@ -97,6 +101,11 @@ def build_imdb(d):
     add("movie", "No Greater Glory", 1934, 74, 604)
     add("movie", "Blood Car", 2007, 82, 2873)
     add("movie", "Big City", 2012, 80, 9000)                 # after the mastering date
+    add("movie", "Tarzan", 1999, 88, 272960)                 # TZN = TarZaN
+    add("movie", "Psycho Cop Returns", 1993, 80, 1851)       # PSYCH: only a partial name match
+    add("movie", "Torrid Zone", 1940, 88, 1609)              # T Z initials
+    add("movie", "Tarzan Escapes", 1936, 89, 3865)           # two words: not a consonant code
+    add("movie", "Nightmare", 1956, 80, 3113)                # N..G..E, but little known
     add("movie", "Hercules", 2014, 98, 160000)
     add("movie", "Hercules", 1958, 107, 9000)
     add("tvSeries", "Hercules", 1998, 22, 15000, end=1999)

@@ -65,11 +65,14 @@ def test_first_run_then_settings(gui, github, tmp_path, monkeypatch):
     sd.test_key()
     assert pump(lambda: "works" in sd.key_note.cget("text"), 5)
     sd.pictures.set(False)
+    assert sd.order.get() == "aired"                 # Plex's default
+    sd.order.set("dvd")
     sd.update("discdb")
     assert pump(lambda: "Up to date" in sd.prog.text.cget("text"))
     sd.close()
     args = app.scan_args()
     assert args.tmdb_key == "abc123" and args.no_art and not args.no_discdb_online
+    assert args.episode_order == "dvd"
     assert dd_app.load_settings()["tmdb_key"] == "abc123"
 
 
@@ -333,3 +336,62 @@ def test_ticked_version_is_an_edition():
     both = dd_app.plan_rip(rep, dd_app.preview_titles(rep), False, selected={"Title 1", "Title 2"})
     assert [p["dest"] for p in both] == ["Film (1999) {imdb-tt0000009}/Film (1999).mkv",
                                          "Film (1999) {imdb-tt0000009}/Film (1999) {edition-Fullscreen}.mkv"]
+
+
+def test_a_discdb_hit_needs_no_confirming(gui, monkeypatch):
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    cand = {"kind": "movie", "name": "WALL·E", "year": 2008, "imdb_id": "tt0910970", "score": 145}
+    rep = {"candidates": [cand], "match": {"name": "WALL·E"}, "personal_hit": None,
+           "discdb": {"hit": {"title": "WALL·E", "titles": []}}}
+    app.show_match_button(rep)
+    root.update()
+    assert app.confirmed_lbl.winfo_ismapped() and app.confirmed_lbl.cget("text") == "✓ TheDiscDB"
+    assert not app.confirm_btn.winfo_ismapped() and app.match_btn.cget("text") == "Not right? ▾"
+    rep["discdb"] = {"hit": None}                                     # an IMDb match still asks
+    app.show_match_button(rep)
+    root.update()
+    assert app.confirm_btn.winfo_ismapped() and not app.confirmed_lbl.winfo_ismapped()
+
+
+def test_without_makemkv_rip_is_greyed_but_the_menu_works(gui, tmp_path, imdb_dir, monkeypatch):
+    root, made, pump = gui
+    monkeypatch.setenv("DISC_DETECTIVE_IMDB", imdb_dir)
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    orig = core.default_args
+    monkeypatch.setattr(core, "default_args", lambda **kw: orig(**dict(kw, offline=True)))
+    monkeypatch.setattr(dd_app.App, "makemkv_exe", lambda self: None)
+    app = dd_app.App(root)
+    app.source.set(fixtures.make_tv_bluray(str(tmp_path / "JUSTIFIED")))
+    app.source_changed()
+    app.scan()
+    assert pump(lambda: app.rep is not None and not app.busy, 60)
+    assert str(app.rip_btn.button.cget("state")) == "disabled"
+    assert str(app.rip_btn.arrow.cget("state")) == "normal"          # Choose titles still opens
+    assert "install MakeMKV" in app.dest_lbl.cget("text")
+    monkeypatch.setattr(dd_app.App, "makemkv_exe", lambda self: "/usr/bin/makemkvcon")
+    app.show_plan_summary()
+    assert str(app.rip_btn.button.cget("state")) == "normal"
+
+
+def test_fallback_never_picks_a_menu_loop():
+    rep = {"format": "Blu-ray", "content_hash": "7" * 32, "plex_names": [], "discdb": {"hit": None}, "candidates": [],
+           "label": "X", "titles": [{"id": "00020.mpls", "role": "loop", "duration": 14356, "video": ""},
+                                    {"id": "00705.mpls", "role": "extra", "duration": 1132, "video": ""}]}
+    plan = dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)
+    assert [p["title_id"] for p in plan] == ["00705.mpls"]
+
+
+def test_discdb_row_names_the_disc_before_its_set():
+    rows = dict(dd_app.detail_rows({"discdb": {"hit": {"disc": "Main Movie Blu-ray",
+                                                       "release": "Ultimate Collector's Edition 4K"}}}))
+    assert rows["TheDiscDB"] == "Main Movie Blu-ray, in the Ultimate Collector's Edition 4K release"
+
+
+def test_plan_lists_dvd_ordered_episodes_as_they_are():
+    plan = [{"role": "episode", "dest": "Firefly (2002)/Season 01/Firefly (2002) - s01e%02d - x.mkv" % n}
+            for n in (11, 1, 2)]
+    assert "(S01E11, S01E01, S01E02)" in dd_app.describe_plan(plan, False)
+    plan = [{"role": "episode", "dest": "S/Season 01/S - s01e%02d - x.mkv" % n} for n in (5, 6, 7)]
+    assert "(S01E05–S01E07)" in dd_app.describe_plan(plan, False)

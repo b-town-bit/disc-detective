@@ -38,6 +38,15 @@ def test_tv_and_season_names(imdb):
     assert guess["guess"][0].startswith("S01E04")
 
 
+def test_episode_zero_is_not_the_first_episode_on_disc_one(imdb):
+    """Smallville S1 on IMDb starts with E00 Unaired Pilot; disc 1 starts with E01 Pilot."""
+    c = core.imdb_candidates(imdb, [("Smallville", False)], "tv", {"mastered": "2002-09", "episode_minutes": 43})
+    assert c[0]["name"] == "Smallville"
+    guess = core.imdb_season(imdb, c[0], 1, 1, 4)
+    assert guess["guess"] == ["S01E01 Pilot", "S01E02 Metamorphosis", "S01E03 Hothead", "S01E04 X-Ray"]
+    assert core.imdb_season(imdb, c[0], 1, 2, 4)["guess"] == ["S01E05 Cool"]   # 4 per disc
+
+
 def test_short_film_collection(imdb):
     disc = json.load(open(os.path.join(DATA, "wallace_gromit_titles.json")))
     titles, facts = disc["titles"], disc["facts"]
@@ -124,6 +133,18 @@ def test_initials_can_skip_the_first_word(imdb):
     assert c[0]["name"] == "The Black Cauldron"
 
 
+def test_one_word_titles_are_coded_by_their_consonants(imdb):
+    """TZN0NNW1: no film has the initials T Z N; it is TarZaN (first and last letters with some
+    in between). It beats Torrid Zone's T Z because it is far better known, while a little-known
+    one-word match (NiGhtmarE) doesn't beat the initials N G of The Emperor's New Groove."""
+    c = core.imdb_initials(imdb, "TZN0NNW1", {"mastered": "2005-09", "feature_minutes": 88})
+    assert c[0]["name"] == "Tarzan" and core.adopt_guess(c) is c[0]
+    assert "Torrid Zone" in [x["name"] for x in c]
+    assert "Tarzan Escapes" not in [x["name"] for x in c]
+    c = core.imdb_initials(imdb, "NGE0NNW1", {"mastered": "2005-09", "feature_minutes": 79})
+    assert c[0]["name"] == "The Emperor's New Groove"
+
+
 def test_initials_also_list_the_alternatives(imdb):
     c = core.imdb_initials(imdb, "BC2", {"mastered": "2010-05", "feature_minutes": 79})
     names = [x["name"] for x in c]
@@ -142,3 +163,11 @@ def test_the_far_better_known_namesake_wins(imdb):
     c = core.imdb_candidates(imdb, [("Robin Hood Prince Of Thieves", False)], "movie",
                              {"feature_minutes": 155, "mastered": "2009-03"})      # the extended cut
     assert (c[0]["name"], c[0]["year"]) == ("Robin Hood: Prince of Thieves", 1991) and core.is_probable(c)
+
+
+def test_season_from_the_shows_dates():
+    """SHERLOCK DISC 1 (mastered 2010-10): only Series 1 had aired, so it's season 1."""
+    sherlock = {1: 2010, 2: 2012, 3: 2014, 4: 2017}
+    assert core.season_from_dates(sherlock, "2010-10")[0] == 1
+    assert core.season_from_dates(sherlock, "2015-03") == (None, None)       # three were out by then
+    assert core.season_from_dates({1: 2002}, None)[0] == 1                    # Firefly: only one season

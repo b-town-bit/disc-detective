@@ -28,6 +28,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "DISCDB_RAW", DEAD + "raw/")
     monkeypatch.setattr(core, "IMDB_BASE", DEAD + "imdb/")
     monkeypatch.setattr(core, "TMDB_API", DEAD + "tmdb")
+    monkeypatch.setattr(core, "TVMAZE_API", DEAD + "tvmaze")
     monkeypatch.setattr(core, "log", lambda msg: None)
     monkeypatch.setattr(core, "status_hook", None)
     monkeypatch.setattr(core, "progress", None)

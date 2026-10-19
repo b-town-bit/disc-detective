@@ -203,3 +203,16 @@ def test_collection_answer_text():
     assert pt["films"] == [("Title 2", "tt0104361"), ("Title 3", "tt0108598")]
     assert pt["title"] == "Wallace & Gromit - 2 short films" and pt["season"] is None
     assert core.strip_tags("W {films:Title 2=tt1}") == "W"
+
+
+def test_exact_series_name_beats_a_partial_film_match(tmp_path, imdb_dir):
+    """PSYCH S1 D1: a 78-minute extended pilot and a 66-minute cut make the disc look like a
+    film, and Psycho Cop Returns (80 min) fits that length - but "Psych" is exactly a
+    well-known series, while every film is only a partial name match."""
+    disc = fixtures.make_movie_bluray(str(tmp_path / "PSYCH"), minutes=78)
+    rep, _ = run(disc, tmp_path, imdb_dir=imdb_dir, offline=True, label="PSYCH")
+    assert rep["kind"] == "tv" and rep["candidates"][0]["name"] == "Psych"
+    assert sum(1 for t in rep["titles"] if t["role"] == "episode") == 2      # pilot cut + documentary-length
+    # an exact film name stays a film: the same disc labelled CHICKEN_RUN
+    rep, _ = run(disc, tmp_path, imdb_dir=imdb_dir, offline=True, label="CHICKEN_RUN")
+    assert rep["kind"] == "movie"

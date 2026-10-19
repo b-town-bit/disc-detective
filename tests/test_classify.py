@@ -264,3 +264,154 @@ def test_a_films_extras_are_not_a_tv_season():
     season = [t("%05d.mpls" % k, 44 + k % 3, 1080, "16:9") for k in range(5)]          # a real season
     kind, _ = classify(season, "Blu-ray")
     assert kind == "tv"
+
+
+def test_a_long_title_of_still_frames_is_not_the_film():
+    """Sword in the Stone DVD: an interactive feature claims 103 minutes but has ~565 MB of video
+    (0.9 Mbit/s); the 80-minute film is the feature. TheDiscDB's "01" is our Title 1."""
+    def dvd(i, secs, sectors, cells):
+        step = sectors // cells
+        return {"id": i, "duration": secs, "chapters": 18, "role": None, "note": "", "group": "VTS 1",
+                "segments": tuple((1, k * step, k * step + step - 1) for k in range(cells)), "audio": [], "subs": [],
+                "video": "NTSC 16:9", "video_info": {"standard": "NTSC", "aspect": "16:9"}}
+    film = dvd("Title 1", 4773, 1967442, 25)
+    game = dvd("Title 34", 6204, 275948, 259)
+    classify([film, game], "DVD")
+    assert film["role"] == "feature" and game["role"] == "extra" and game.get("interactive")
+    assert core.dvd_mbps(film) > 5 and core.dvd_mbps(game) < 1.5
+    t = [dict(film, role="feature"), dict(game, role="feature")]
+    core.discdb_roles(t, {"titles": [{"source": "01", "item": {"type": "MainMovie", "title": "The Sword in the Stone"}}]})
+    assert t[0]["discdb_title"] == "The Sword in the Stone" and t[1]["role"] != "feature"
+
+
+def test_discdb_main_movie_that_we_called_a_duplicate():
+    """Aladdin 4K UCE: 00099 and 00800 play the same film; we kept 00099 and called 00800 its
+    duplicate, but TheDiscDB names 00800. It becomes the feature; 00099 the duplicate."""
+    def t(i, role, note=""):
+        return {"id": i, "duration": 5441, "role": role, "note": note, "clip_list": "00902,00903"}
+    titles = [t("00099.mpls", "feature"), t("00731.mpls", "duplicate", "same video as 00099.mpls"),
+              t("00800.mpls", "duplicate", "same video as 00099.mpls"),
+              t("00730.mpls", "version", "same length as 00099.mpls")]
+    core.discdb_roles(titles, {"titles": [{"source": "00800.mpls", "item": {"type": "MainMovie", "title": "Aladdin"}}]})
+    role = {x["id"]: (x["role"], x["note"]) for x in titles}
+    assert role["00800.mpls"][0] == "feature" and role["00099.mpls"] == ("duplicate", "same video as 00800.mpls")
+    assert role["00731.mpls"] == ("duplicate", "same video as 00800.mpls") and "00800" in role["00730.mpls"][1]
+
+
+def test_a_shorter_copy_made_of_the_films_pieces_is_not_another_film():
+    """Finding Nemo: the feature is logos + film body + credits; a PiP mode plays only the 88-min
+    body. Same film (a version), not a second 'edition'."""
+    def bd(i, items, **vi):
+        return {"id": i, "duration": sum(o - a for _, a, o in items) / 45000.0, "chapters": 30, "role": None,
+                "note": "", "group": "playlists", "segments": tuple(items), "audio": [], "subs": [],
+                "video_info": dict({"height": 1080, "aspect": "16:9"}, **vi), "video": "1080p 16:9"}
+    logo, body, credits = ("00872", 0, 45000 * 60), ("00873", 0, 45000 * 5266), ("00876", 0, 45000 * 720)
+    film = bd("00800.mpls", [logo, body, credits])
+    pip = bd("00822.mpls", [body], pip=True)
+    other = bd("00900.mpls", [("00990", 0, 45000 * 5400)])                 # a genuinely different film
+    classify([film, pip, other], "Blu-ray")
+    assert film["role"] == "feature" and pip["role"] == "version" and pip["edition"] == "Picture-in-Picture"
+    assert other["role"] == "feature"
+
+
+def test_a_season_disc_with_a_two_hour_finale_is_reread_as_episodes():
+    """SMALLVILLE_SEASON_10_DISC_6: the 84-minute finale made the disc look like a film."""
+    titles = [{"id": "Title 1", "duration": 7579, "role": "play-all", "note": ""},
+              {"id": "Title 2", "duration": 2539, "role": "extra", "note": ""},
+              {"id": "Title 3", "duration": 5040, "role": "feature", "note": ""},
+              {"id": "Title 5", "duration": 1183, "role": "extra", "note": ""},
+              {"id": "Title 6", "duration": 1011, "role": "extra", "note": ""}]
+    assert core.as_tv(titles)
+    roles = {t["id"]: t["role"] for t in titles}
+    assert roles == {"Title 1": "play-all", "Title 2": "episode", "Title 3": "episode",
+                     "Title 5": "extra", "Title 6": "extra"}
+    assert "two episodes" in titles[2]["note"]
+    core.number_episodes(titles)
+    assert [t.get("episode_index") for t in titles] == [None, 1, 2, None, None]
+
+
+def test_shorts_a_little_under_eighteen_minutes_are_still_episodes():
+    """THE_LITTLE_RASCALS_D1: ten 1930s shorts of 17-25 min and a play-all whose cells don't
+    line up with them. The 17:34 short is an episode too, so the play-all is found by length."""
+    lens = [(0, 25, 1), (0, 18, 51), (0, 20, 13), (0, 17, 34), (0, 20, 56), (0, 20, 48), (0, 20, 31),
+            (0, 20, 7), (0, 19, 43), (0, 20, 25)]
+    ts = [T(i + 2, 1, d, 4, [(1000 + i, 1000 + i)]) for i, d in enumerate(lens)]
+    total = sum(h * 3600 + m * 60 + s for h, m, s in lens)
+    ts.insert(0, T(1, 1, (0, 0, total), 34, [(5000, 5001)]))
+    ts.append(T(12, 1, (0, 12, 0), 2, [(6000, 6001)]))          # a 12-minute featurette stays an extra
+    kind, _ = classify(ts, "DVD")
+    assert kind == "tv" and len(episodes(ts)) == 10
+    assert ts[0]["role"] == "play-all" and ts[-1]["role"] == "extra"
+
+
+def test_a_double_episode_inside_the_play_all_is_not_another_play_all():
+    """LAST_MAN_STANDING_S1_D1: the play-all plays a 43-minute title and six 21-minute ones.
+    The 43-minute title is two episodes, though its length equals two of the others."""
+    eps = [T(i + 5, 3, (0, 21, 30 + i), 5, [(100 * (i + 2), 100 * (i + 2) + 99)]) for i in range(6)]
+    dbl = T(4, 3, (0, 42, 57), 9, [(100, 199)])
+    whole = T(3, 3, (2, 52, 21), 39, [(100, 199)] + [(100 * (i + 2), 100 * (i + 2) + 99) for i in range(6)])
+    ts = [whole, dbl] + eps
+    kind, _ = classify(ts, "DVD")
+    assert kind == "tv" and dbl["role"] == "episode" and whole["role"] == "play-all"
+    assert len(episodes(ts)) == 7
+
+
+def test_a_chain_pointing_past_the_end_of_the_ifo_is_skipped():
+    """A broken program chain used to throw away the whole title set (all lengths 0)."""
+    import struct
+    d = bytearray(4 * 2048)
+    d[:12] = b"DVDVIDEO-VTS"
+    struct.pack_into(">I", d, 0xC8, 1)          # title table at sector 1
+    struct.pack_into(">I", d, 0xCC, 2)          # chain table at sector 2
+    struct.pack_into(">HHI", d, 2048, 1, 0, 11)
+    struct.pack_into(">I", d, 2048 + 8, 12)
+    struct.pack_into(">HH", d, 2048 + 12, 1, 1)
+    pg = 2 * 2048
+    struct.pack_into(">HHI", d, pg, 2, 0, 0)
+    struct.pack_into(">I", d, pg + 8 + 4, 24)                 # chain 1: inside the file
+    struct.pack_into(">I", d, pg + 16 + 4, 10 ** 6)           # chain 2: far past the end
+    d[pg + 24 + 4:pg + 24 + 8] = bytes([0x00, 0x21, 0x30, 0xC0])   # 0:21:30 NTSC
+    v = core.parse_vts(bytes(d))
+    assert round(v["pgcs"][0]["duration"]) == 21 * 60 + 30 and v["pgcs"][1]["duration"] == 0
+
+
+def test_firefly_bluray_two_hour_pilot_and_a_lower_resolution_featurette():
+    """FIREFLYUS_D1: Serenity (86:42) has a clip of its own, so it isn't a play-all of the next
+    two episodes just because the lengths add up; it's a double-length episode. The 28-minute
+    480i making-of is a featurette, not an episode."""
+    hd, sd = {"height": 1080}, {"height": 480}
+
+    def P(n, secs, clips, ch, vi):
+        return {"id": "%05d.mpls" % n, "group": "playlists", "duration": secs, "chapters": ch,
+                "segments": tuple((c, 0, int(secs * 45000)) for c in clips), "audio": [], "subs": [],
+                "video": "", "video_info": vi}
+    ts = [P(1, 5202, ["00001"], 21, hd), P(2, 2564, ["00002"], 13, hd), P(3, 2635, ["00003"], 13, hd),
+          P(4, 2639, ["00004"], 13, hd), P(6, 1720, ["00007"], 2, sd)]
+    kind, _ = classify(ts, "Blu-ray")
+    assert kind == "tv"
+    assert [t["role"] for t in ts] == ["episode", "episode", "episode", "episode", "extra"]
+    for t, nm in zip(ts, ["FEATURE_EP_Pilot", "FEATURE_EP_01", "FEATURE_EP_02", "FEATURE_EP_03", "TRL_BUFFY"]):
+        t["authoring_name"] = nm
+    core.apply_authoring_names(ts)
+    assert ts[-1]["role"] == "extra" and "trailer" in ts[-1]["note"]
+
+
+def test_authoring_names_are_read_in_playlist_order(tmp_path):
+    jar = tmp_path / "BDMV" / "JAR" / "10000"
+    jar.mkdir(parents=True)
+    (jar / "PLsInfo.txt").write_text("# Playlist name:FEATURE_EP_Pilot\np1=1\n# Playlist name:EP9 WarStories\r\n"
+                                     "# Playlist name:Menu\n")
+    assert core.authoring_names(str(tmp_path / "BDMV")) == ["FEATURE_EP_Pilot", "EP9 WarStories", "Menu"]
+
+
+def test_discdb_series_episodes_are_episodes_whatever_their_length():
+    """SHERLOCK_THE_ABOMINABLE_BRIDE: one 93-minute special, which TheDiscDB lists as an
+    Episode (season 0, episode 9). It looked like a film to the structure."""
+    ts = [{"id": "00800.mpls", "role": "feature", "duration": 5588, "note": ""},
+          {"id": "00250.mpls", "role": "extra", "duration": 1794, "note": ""}]
+    hit = {"type": "series", "titles": [
+        {"source": "00800.mpls", "item": {"title": "The Abominable Bride", "type": "Episode", "season": "0", "episode": "9"}},
+        {"source": "00250.mpls", "item": {"title": "Mark Gatiss - A Study in Sherlock", "type": "Featurette"}}]}
+    changed = core.discdb_roles(ts, hit)
+    assert ts[0]["role"] == "episode" and ts[0]["episode_index"] == 1 and ts[1]["role"] == "extra"
+    assert changed == [("00800.mpls", "feature", "episode")]

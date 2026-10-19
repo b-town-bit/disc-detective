@@ -22,6 +22,12 @@ used under IMDb's terms for personal and non-commercial use. Each user's copy is
 downloaded directly from IMDb to their own computer. This project never
 redistributes IMDb data, and IMDb images are not used.
 
+## TVmaze
+Episode lists and DVD episode orders from [TVmaze](https://www.tvmaze.com), used under
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Answers are fetched
+from TVmaze's public API on each user's computer and cached there; the trimmed sample
+in `tests/data/tvmaze.json` is TVmaze data under the same license.
+
 ## Pillow
 Images are converted with [Pillow](https://python-pillow.org) (MIT-CMU license), installed
 as a dependency. ffmpeg is used instead if Pillow is missing.
