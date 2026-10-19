@@ -1677,9 +1677,9 @@ def update_data(args, which=("discdb", "imdb"), force=False, log=print):
 def _tsv(path):
     import gzip
     with gzip.open(path, "rt", encoding="utf-8", newline="") as fh:
-        header = fh.readline().rstrip("\n").split("\t")
+        header = fh.readline().rstrip("\r\n").split("\t")      # tolerate \r\n (a copy saved on Windows)
         for line in fh:
-            yield dict(zip(header, line.rstrip("\n").split("\t")))
+            yield dict(zip(header, line.rstrip("\r\n").split("\t")))
 
 
 def _int(v):

@@ -111,7 +111,8 @@ def build_imdb(d):
     add("tvSeries", "Hercules", 1998, 22, 15000, end=1999)
     add("movie", "Chicken Run: Dawn of the Nugget", 2023, 101, 30000)
     for name, rows in (("title.basics.tsv.gz", B), ("title.episode.tsv.gz", E), ("title.ratings.tsv.gz", R)):
-        with gzip.open(os.path.join(d, name), "wt", encoding="utf-8") as fh:
+        # newline="\n": IMDb's files use \n; text mode on Windows would write \r\n
+        with gzip.open(os.path.join(d, name), "wt", encoding="utf-8", newline="\n") as fh:
             fh.write("\n".join(rows) + "\n")
     return d
 

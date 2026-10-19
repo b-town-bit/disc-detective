@@ -20,8 +20,11 @@ def gui(monkeypatch, tmp_path):
     root.geometry("+0+0")
     monkeypatch.setattr(dd_app, "SETTINGS", str(tmp_path / "settings.json"))
     monkeypatch.setattr(dd_app, "optical_drives", lambda: [])
+    # a real message box waits for a click forever (on Windows the tests open real windows)
     for name in ("showerror", "showwarning", "showinfo"):
         monkeypatch.setattr(dd_app.messagebox, name, lambda *a, **k: None)
+    for name in ("askyesno", "askokcancel", "askyesnocancel", "askquestion", "askretrycancel"):
+        monkeypatch.setattr(dd_app.messagebox, name, lambda *a, **k: True)
     made = {}
     for cls in (dd_app.FirstRunDialog, dd_app.SettingsDialog):
         orig = cls.__init__

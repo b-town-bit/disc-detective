@@ -13,7 +13,7 @@ requires-python = ">=3.9"
 dependencies = ["Pillow"]  # posters and box art (Tk can't show JPEGs by itself)
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "pytest-timeout"]
 
 [project.scripts]
 disc-detective = "disc_detective.core:main"
@@ -32,6 +32,7 @@ version = { attr = "disc_detective.core.VERSION" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+timeout = 120          # pytest-timeout: a hung test fails with its stack instead of hanging CI
 markers = [
     "gui: needs Tkinter and a display",
     "dev: needs your own disc corpus or a TheDiscDB checkout (see tests/README.md)",
