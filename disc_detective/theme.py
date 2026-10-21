@@ -1,0 +1,646 @@
+"""The look: a Baker Street study. Parchment and brass, ink-dark text, Prussian blue for the
+main action, sealing-wax red for case numbers (tools/ui has the design it follows).
+
+Tk can't do gradients, soft shadows or rounded corners, so those become flat colours and
+crisp 1px borders. Fonts ship with the app (OFL; see fonts/OFL-*.txt) and are loaded for
+this process only: nothing is installed on the computer. "Detective Serif" is Playfair
+Display, cut down to Latin and renamed as its licence asks of modified versions."""
+import os
+import sys
+import tkinter as tk
+from tkinter import font as tkfont
+from tkinter import ttk
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+FONT_DIR = os.path.join(HERE, "fonts")
+
+# palette (names from the prototype's Tailwind config)
+VELLUM_50 = "#fdfbf7"
+VELLUM_100 = "#faf7f0"
+VELLUM_200 = "#f4efe4"
+VELLUM_300 = "#eae2d0"
+PARCHMENT = "#f7f4ea"
+CARD = "#fffdf9"
+BRASS_200 = "#ece1c4"
+BRASS_300 = "#decb9c"
+BRASS_400 = "#c8ad69"
+BRASS_600 = "#996515"
+BRASS_700 = "#754b0e"
+BRASS_800 = "#533409"
+PRUSSIAN_600 = "#234a7d"
+PRUSSIAN_700 = "#1b365d"
+PRUSSIAN_800 = "#152a48"
+WAX = "#8b0000"
+INK = "#2c241b"
+INK_LIGHT = "#594d3f"
+INK_MUTED = "#7d6e5d"
+INK_SUBTLE = "#a59784"
+GREEN = "#065f46"
+GREEN_DOT = "#059669"
+AMBER_DOT = "#b8860b"
+MAHOGANY = "#3a271d"
+TITLE_TEXT = "#f5ebd7"
+
+SERIF, MONO, SANS = "Georgia", "Courier New", "Segoe UI"     # replaced by the bundled fonts once loaded
+
+
+def load_fonts(root):
+    """Make the bundled fonts usable in this process, then pick each family (falling back to
+    common system fonts where loading isn't possible)."""
+    global SERIF, MONO, SANS
+    files = [os.path.join(FONT_DIR, f) for f in sorted(os.listdir(FONT_DIR)) if f.lower().endswith(".ttf")] \
+        if os.path.isdir(FONT_DIR) else []
+    try:
+        if os.name == "nt":
+            import ctypes
+            for f in files:
+                ctypes.windll.gdi32.AddFontResourceExW(f, 0x10, 0)    # FR_PRIVATE: this process only
+        elif sys.platform != "darwin":
+            import ctypes
+            import ctypes.util
+            lib = ctypes.util.find_library("fontconfig")
+            if lib:
+                fc = ctypes.CDLL(lib)
+                for f in files:
+                    fc.FcConfigAppFontAddFile(None, f.encode())       # this process's font list only
+    except Exception:
+        pass
+    have = {f.lower() for f in tkfont.families(root)}
+
+    def pick(*names):
+        return next((n for n in names if n.lower() in have), names[-1])
+    SERIF = pick("Detective Serif", "Playfair Display", "Georgia", "Times New Roman", "serif")
+    MONO = pick("Courier Prime", "Courier New", "Courier")
+    SANS = pick("Inter", "Segoe UI", "Helvetica")
+
+
+def ctypes_fontconfig_available():
+    try:
+        import ctypes.util
+        return sys.platform != "darwin" and os.name != "nt" and bool(ctypes.util.find_library("fontconfig"))
+    except Exception:
+        return False
+
+
+def color_title_bar(root):
+    """Windows 11: tint the native title bar mahogany (older Windows just keeps its own)."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        root.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(root.winfo_id()) or root.winfo_id()
+
+        def rgb(h):
+            r, g, b = int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
+            return ctypes.c_int(r | (g << 8) | (b << 16))
+        for attr, colour in ((35, MAHOGANY), (36, TITLE_TEXT), (34, BRASS_600)):   # caption, text, border
+            c = rgb(colour)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(c), ctypes.sizeof(c))
+    except Exception:
+        pass
+
+
+_IMAGES = []          # Tk drops images that nothing references
+_ROUND_STYLES = {}
+ROUND = True          # rounded corners drawn with Pillow; off (square borders) without it
+
+
+def _rounded(w, h, r, fill, border=None, bw=1, shadow=0, outer=None, corners="all"):
+    """A PhotoImage of a rounded rectangle, anti-aliased (drawn at 4x and shrunk): fill and a
+    1px border, an optional soft shadow under it, corners square on one side for split buttons
+    (corners "left" / "right" = which side is rounded). Outside it: `outer`, or transparent."""
+    key = (w, h, r, fill, border, bw, shadow, outer, corners)
+    if key not in _PNG_CACHE:            # drawn once per run; each Tk gets its own PhotoImage of it
+        _PNG_CACHE[key] = _draw_rounded(w, h, r, fill, border, bw, shadow, outer, corners)
+    ph = tk.PhotoImage(data=_PNG_CACHE[key], format="png")
+    _IMAGES.append(ph)
+    return ph
+
+
+_PNG_CACHE = {}
+
+
+def _draw_rounded(w, h, r, fill, border, bw, shadow, outer, corners):
+    import base64
+    import io
+    from PIL import Image, ImageDraw, ImageFilter
+    k = 4
+    W, H = (w + 2 * shadow) * k, (h + 2 * shadow) * k
+    img = Image.new("RGBA", (W, H), outer + "ff" if outer else (0, 0, 0, 0))
+
+    def rect(d, box, rad, colour):
+        d.rounded_rectangle(box, rad, fill=colour)
+        x0, y0, x1, y1 = box
+        if corners == "left":                    # square right-hand corners
+            d.rectangle((x1 - rad, y0, x1, y1), fill=colour)
+        elif corners == "right":
+            d.rectangle((x0, y0, x0 + rad, y1), fill=colour)
+    if shadow:
+        sh = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        rect(ImageDraw.Draw(sh), (shadow * k, shadow * k + k, W - shadow * k - 1, H - shadow * k + k - 1),
+             r * k, (44, 36, 27, 46))
+        sh = sh.filter(ImageFilter.GaussianBlur(shadow * k / 2.2))
+        img = Image.alpha_composite(img, sh)
+    d = ImageDraw.Draw(img)
+    box = (shadow * k, shadow * k, W - shadow * k - 1, H - shadow * k - 1)
+    if border:
+        rect(d, box, r * k, border)
+        box = (box[0] + bw * k, box[1] + bw * k, box[2] - bw * k, box[3] - bw * k)
+    rect(d, box, max(0, (r - bw)) * k, fill)
+    img = img.resize((w + 2 * shadow, h + 2 * shadow), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _check_img(checked, disabled=False, size=14):
+    """A rounded check box: empty, or brass with a light tick in it."""
+    import base64
+    import io
+    from PIL import Image, ImageDraw
+    k = 4
+    S = size * k
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    edge = INK_SUBTLE if disabled else (BRASS_700 if checked else BRASS_400)
+    fill = (VELLUM_200 if disabled else BRASS_600) if checked else CARD
+    d.rounded_rectangle((0, 0, S - 1, S - 1), 3 * k, fill=edge)
+    d.rounded_rectangle((k, k, S - 1 - k, S - 1 - k), 2 * k, fill=fill)
+    if checked:
+        d.line([(S * 0.27, S * 0.52), (S * 0.43, S * 0.68), (S * 0.74, S * 0.34)], fill=VELLUM_50 if not disabled else INK_SUBTLE,
+               width=int(1.8 * k), joint="curve")
+    img = img.resize((size, size), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    ph = tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
+    _IMAGES.append(ph)
+    return ph
+
+
+def checkbox_style(st):
+    """Check boxes with a tick, not clam's cross (a cross reads as "off")."""
+    off, on = _check_img(False), _check_img(True)
+    off_d, on_d = _check_img(False, True), _check_img(True, True)
+    st.element_create("Tick.indicator", "image", off, ("disabled", "selected", on_d), ("disabled", off_d),
+                      ("selected", on), sticky="")
+    st.layout("TCheckbutton", [("Checkbutton.padding", {"sticky": "nswe", "children": [
+        ("Tick.indicator", {"side": "left", "sticky": ""}),
+        ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [
+            ("Checkbutton.label", {"sticky": "nswe"})]})]})])
+    st.configure("TCheckbutton", padding=(0, 2), indicatormargin=0)
+    st.map("TCheckbutton", background=[("active", VELLUM_100)])
+
+
+def round_frame_style(bg, border=None, radius=6, shadow=0, outer=PARCHMENT):
+    """A ttk frame style whose background is a stretched rounded-rectangle image (9-slice:
+    the corners keep their size, the edges and middle stretch)."""
+    key = (bg, border, radius, shadow, outer)
+    if key in _ROUND_STYLES:
+        return _ROUND_STYLES[key]
+    st = ttk.Style()
+    n = "R%d" % len(_ROUND_STYLES)
+    size = 2 * (radius + shadow) + 240     # a big middle: the stretch tiles it, and each tile is a draw
+    img = _rounded(size, size, radius, bg, border, shadow=shadow)
+    edge = radius + shadow + 2
+    st.element_create(n + ".bg", "image", img, border=edge, sticky="nsew", width=2 * edge, height=2 * edge)
+    st.layout(n + ".TFrame", [(n + ".bg", {"sticky": "nsew"})])
+    st.configure(n + ".TFrame", background=outer)
+    _ROUND_STYLES[key] = (n + ".TFrame", shadow + (1 if border else 0) + max(2, radius // 3))
+    return _ROUND_STYLES[key]
+
+
+def round_button(name, bg, fg, border, active, pressed, disabled_bg, disabled_fg, font, padding, radius=5,
+                 corners="all", disabled_border=None, outer=VELLUM_100):
+    """A ttk button style drawn from rounded images, one per state. `outer`: the colour it sits
+    on, which shows past the rounded corners."""
+    st = ttk.Style()
+    size = 2 * radius + 120          # (as for the frames: fewer tiles to draw)
+    imgs = [_rounded(size, size, radius, c, b, corners=corners) for c, b in
+            ((bg, border), (active, border), (pressed, border), (disabled_bg, disabled_border or disabled_bg))]
+    el = name.replace(".", "_") + ".border"
+    st.element_create(el, "image", imgs[0], ("disabled", imgs[3]), ("pressed", imgs[2]), ("active", imgs[1]),
+                      border=radius + 1, sticky="nsew", width=2 * radius + 2, height=2 * radius + 2)
+    st.layout(name, [(el, {"sticky": "nsew", "children": [
+        ("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]})])
+    st.configure(name, foreground=fg, font=font, padding=padding, focuscolor=bg, background=outer)
+    st.map(name, foreground=[("disabled", disabled_fg)], background=[("disabled", outer), ("active", outer),
+                                                                     ("pressed", outer)])
+
+
+def setup(root):
+    """Fonts, then every ttk style the app and its dialogs use."""
+    _IMAGES.clear()                  # images and styles belong to one Tk: a new one starts afresh
+    _ROUND_STYLES.clear()
+    _ICONS.clear()
+    load_fonts(root)
+    st = ttk.Style(root)
+    st.theme_use("clam")
+    root.configure(background=PARCHMENT)
+    for opt, val in (("*Menu.background", CARD), ("*Menu.foreground", INK), ("*Menu.activeBackground", BRASS_200),
+                     ("*Menu.activeForeground", INK), ("*Menu.font", (SANS, 9)), ("*Toplevel.background", VELLUM_100),
+                     ("*Text.background", CARD), ("*Text.foreground", INK), ("*Text.selectBackground", BRASS_300),
+                     ("*TCombobox*Listbox.background", CARD)):
+        root.option_add(opt, val)
+    base = (SANS, 9)
+    st.configure(".", background=VELLUM_100, foreground=INK, font=base, bordercolor=BRASS_400,
+                 lightcolor=VELLUM_100, darkcolor=VELLUM_100, troughcolor=VELLUM_300, focuscolor=BRASS_600,
+                 selectbackground=BRASS_300, selectforeground=INK, fieldbackground=CARD, insertcolor=INK)
+    st.configure("TFrame", background=VELLUM_100)
+    st.configure("TLabel", background=VELLUM_100, foreground=INK)
+    st.configure("TCheckbutton", background=VELLUM_100, foreground=INK)
+    st.map("TCheckbutton", background=[("active", VELLUM_100)], indicatorcolor=[("selected", BRASS_600), ("!selected", CARD)])
+    st.configure("TRadiobutton", background=VELLUM_100, foreground=INK)
+    st.map("TRadiobutton", background=[("active", VELLUM_100)], indicatorcolor=[("selected", BRASS_600), ("!selected", CARD)])
+    st.configure("TEntry", fieldbackground=CARD, bordercolor=BRASS_400, lightcolor=CARD, darkcolor=CARD, padding=3)
+    st.map("TEntry", bordercolor=[("focus", BRASS_600)], lightcolor=[("focus", BRASS_200)])
+    st.configure("TScrollbar", background=BRASS_300, troughcolor=VELLUM_200, bordercolor=VELLUM_200,
+                 arrowcolor=BRASS_700, lightcolor=BRASS_300, darkcolor=BRASS_300)
+    st.configure("Horizontal.TProgressbar", background=BRASS_600, troughcolor=VELLUM_300, bordercolor=BRASS_400,
+                 lightcolor=BRASS_600, darkcolor=BRASS_600, thickness=6)
+    st.configure("TNotebook", background=VELLUM_100, bordercolor=BRASS_300, lightcolor=VELLUM_100,
+                 darkcolor=VELLUM_100, tabmargins=(0, 4, 0, 0))   # room above for the selected tab to grow
+    st.configure("TNotebook.Tab", background=VELLUM_200, foreground=INK_MUTED, bordercolor=BRASS_300,
+                 lightcolor=VELLUM_200, darkcolor=VELLUM_200, padding=(14, 5), font=(MONO, 9, "bold"))
+    st.map("TNotebook.Tab", background=[("selected", VELLUM_100), ("active", VELLUM_50)],
+           foreground=[("selected", BRASS_800), ("active", INK)],
+           lightcolor=[("selected", VELLUM_100)],
+           padding=[("selected", (14, 5))],          # clam shrinks the selected tab; keep it the same size
+           expand=[("selected", (0, 4, 0, 0))])     # then grow it upwards only, so no tab edge moves sideways
+    st.configure("Treeview", background=CARD, fieldbackground=CARD, foreground=INK, bordercolor=BRASS_400,
+                 lightcolor=CARD, darkcolor=CARD)
+    st.map("Treeview", background=[("selected", BRASS_200)], foreground=[("selected", INK)])
+    st.configure("Picks.Treeview", rowheight=66)
+
+    def button(name, bg, fg, border, active, font, padding, pressed=None):
+        st.configure(name, background=bg, foreground=fg, bordercolor=border, lightcolor=bg, darkcolor=bg,
+                     font=font, padding=padding, focusthickness=0, focuscolor=bg, relief="solid", borderwidth=1)
+        st.map(name, background=[("disabled", VELLUM_200), ("pressed", pressed or active), ("active", active)],
+               foreground=[("disabled", INK_SUBTLE)], lightcolor=[("active", active)], darkcolor=[("active", active)],
+               bordercolor=[("disabled", BRASS_300)])
+    button("TButton", VELLUM_50, INK, BRASS_400, VELLUM_200, (SANS, 9), (10, 3))
+    button("Small.TButton", VELLUM_50, INK, BRASS_400, "#ffffff", (MONO, 9), (8, 2))
+    button("Scan.TButton", "#fcfaf5", INK, BRASS_400, VELLUM_200, (SERIF, 11, "bold"), (16, 7))
+    button("ScanArrow.TButton", "#fcfaf5", BRASS_700, BRASS_400, VELLUM_200, (SANS, 10), (6, 7))
+    button("Rip.TButton", PRUSSIAN_700, VELLUM_50, PRUSSIAN_800, PRUSSIAN_600, (SERIF, 10, "bold"), (14, 5))
+    button("RipArrow.TButton", PRUSSIAN_700, BRASS_200, PRUSSIAN_800, PRUSSIAN_600, (SANS, 9), (5, 5))
+    for name in ("Rip.TButton", "RipArrow.TButton"):
+        st.map(name, background=[("disabled", "#8193ad"), ("active", PRUSSIAN_600)], foreground=[("disabled", "#dde3ec")],
+               bordercolor=[("disabled", "#8193ad")], lightcolor=[("disabled", "#8193ad"), ("active", PRUSSIAN_600)],
+               darkcolor=[("disabled", "#8193ad"), ("active", PRUSSIAN_600)])
+
+    global ROUND
+    try:
+        import PIL  # noqa: F401
+        ROUND = True
+    except ImportError:
+        ROUND = False
+    if ROUND:
+        round_button("TButton", VELLUM_50, INK, BRASS_400, VELLUM_200, BRASS_200, VELLUM_200, INK_SUBTLE,
+                     (SANS, 9), (8, 1))
+        round_button("Small.TButton", VELLUM_50, INK, BRASS_400, "#ffffff", BRASS_200, VELLUM_200, INK_SUBTLE,
+                     (MONO, 9), (6, 0), radius=4, outer=CARD)
+        round_button("Scan.TButton", "#fdfbf6", INK, BRASS_400, VELLUM_200, BRASS_200, VELLUM_200, INK_SUBTLE,
+                     (SERIF, 11, "bold"), (10, 1), radius=6, outer=VELLUM_200)
+        round_button("Pill.TButton", "#fffdf8", PRUSSIAN_700, BRASS_400, "#ffffff", BRASS_200, VELLUM_200, INK_SUBTLE,
+                     (MONO, 9, "bold"), (6, 1), radius=6, outer=VELLUM_200)
+        round_button("Rip.TButton", PRUSSIAN_700, VELLUM_50, PRUSSIAN_800, PRUSSIAN_600, PRUSSIAN_800, "#8193ad",
+                     "#dde3ec", (SERIF, 10, "bold"), (10, 2), radius=5, corners="left", outer=CARD)
+        round_button("RipArrow.TButton", PRUSSIAN_700, BRASS_200, PRUSSIAN_800, PRUSSIAN_600, PRUSSIAN_800, "#8193ad",
+                     "#dde3ec", (SANS, 9), (2, 2), radius=5, corners="right", outer=CARD)
+        checkbox_style(st)
+    else:
+        button("Pill.TButton", "#fffdf8", PRUSSIAN_700, BRASS_400, "#ffffff", (MONO, 9, "bold"), (10, 4))
+
+    def label(name, bg=VELLUM_100, fg=INK, font=base, **kw):
+        st.configure(name, background=bg, foreground=fg, font=font, **kw)
+    # dialogs (shared names the dialogs already use)
+    label("Plan.TLabel", font=(SERIF, 11, "bold"))
+    label("Sub.TLabel", fg=INK_MUTED)
+    label("Cap.TLabel", fg=INK_MUTED, font=(MONO, 8))
+    label("Detail.TLabel", font=(MONO, 8))
+    label("Title.TLabel", font=(SERIF, 15, "bold"))
+    label("Info.TLabel", font=(SANS, 10))
+    label("Link.TLabel", fg=PRUSSIAN_700, font=(MONO, 9, "bold", "underline"))
+    # the main window's parchment desk
+    for prefix, bg in (("Desk", PARCHMENT), ("Card", CARD), ("Bar", VELLUM_200), ("Foot", VELLUM_300), ("Inset", VELLUM_100)):
+        st.configure("%s.TFrame" % prefix, background=bg)
+        label("%s.TLabel" % prefix, bg=bg)
+        label("%sSub.TLabel" % prefix, bg=bg, fg=INK_MUTED)
+        label("%sCap.TLabel" % prefix, bg=bg, fg=INK_MUTED, font=(MONO, 8, "bold"))
+        label("%sLink.TLabel" % prefix, bg=bg, fg=PRUSSIAN_700, font=(MONO, 8, "bold", "underline"))
+        label("%sMono.TLabel" % prefix, bg=bg, fg=INK, font=(MONO, 9))
+        label("%sMonoBold.TLabel" % prefix, bg=bg, fg=INK, font=(MONO, 9, "bold"))
+        label("%sKey.TLabel" % prefix, bg=bg, fg=INK_MUTED, font=(SERIF, 10, "italic"))
+        label("%sDot.TLabel" % prefix, bg=bg, fg=BRASS_400, font=(MONO, 9))
+    label("Banner.TLabel", bg=PARCHMENT, fg=BRASS_700, font=(MONO, 8, "bold"))
+    label("BannerNote.TLabel", bg=PARCHMENT, fg=INK_MUTED, font=(SERIF, 8, "italic"))
+    label("Case.TLabel", bg=PARCHMENT, fg=WAX, font=(MONO, 10))
+    label("Name.TLabel", bg=PARCHMENT, fg=INK, font=(SERIF, 21, "bold"))
+    label("Year.TLabel", bg=PARCHMENT, fg=INK_MUTED, font=(SANS, 16))
+    label("Kind.TLabel", bg=PARCHMENT, fg=BRASS_700, font=(MONO, 9, "bold"))
+    label("Fact.TLabel", bg=PARCHMENT, fg=INK_LIGHT, font=(MONO, 9))
+    label("Source.TLabel", bg=PARCHMENT, fg=PRUSSIAN_700, font=(MONO, 9, "italic"))
+    label("Guess.TLabel", bg=PARCHMENT, fg=WAX, font=(MONO, 9, "italic"))
+    label("DeskSub.TLabel", bg=PARCHMENT, fg=INK_MUTED, font=(SANS, 9))
+    label("Poster.TLabel", bg=CARD)
+    label("PosterCap.TLabel", bg=BRASS_200, fg=INK_MUTED, font=(MONO, 8))
+    label("StripCap.TLabel", bg=PARCHMENT, fg=INK_MUTED, font=(MONO, 8))
+    label("CardStrip.TLabel", bg=CARD, fg=INK_MUTED, font=(MONO, 8))
+    label("PosterBadge.TLabel", bg=VELLUM_50, fg=BRASS_800, font=(MONO, 7, "bold"), padding=(4, 2, 6, 2))
+    label("Ok.TLabel", bg=CARD, fg=GREEN, font=(SANS, 9, "bold"))
+    label("Warn.TLabel", bg=CARD, fg=WAX, font=(SANS, 9, "bold"))
+    label("Head.TLabel", bg=CARD, fg=INK, font=(SERIF, 11, "bold"))
+    label("HeadTime.TLabel", bg=CARD, fg=BRASS_700, font=(MONO, 10))
+    label("Badge.TLabel", bg=VELLUM_200, fg=BRASS_800, font=(MONO, 9), padding=(5, 0))
+    label("Path.TLabel", bg=VELLUM_50, fg=INK, font=(MONO, 9))
+    label("InsetVal.TLabel", bg=VELLUM_100, fg=INK, font=(SERIF, 10, "bold"))
+    label("InsetOk.TLabel", bg=VELLUM_100, fg=GREEN, font=(SANS, 9, "bold"))
+    label("InsetWarn.TLabel", bg=VELLUM_100, fg=WAX, font=(SANS, 9, "bold"))
+    st.configure("Pill.TFrame", background="#fffdf8")
+    label("PillKey.TLabel", bg="#fffdf8", fg=INK_MUTED, font=(MONO, 8))
+    label("PillVal.TLabel", bg="#fffdf8", fg=PRUSSIAN_700, font=(MONO, 9, "bold"))
+    label("PillSize.TLabel", bg="#fffdf8", fg=BRASS_700, font=(MONO, 9, "bold"))
+    label("PillSep.TLabel", bg="#fffdf8", fg=BRASS_400, font=(MONO, 9))
+    label("FootStatus.TLabel", bg=VELLUM_300, fg=INK, font=(MONO, 9, "bold"))
+    label("BarStatus.TLabel", bg=VELLUM_200, fg=INK, font=(MONO, 9))
+    label("FootLink.TLabel", bg=VELLUM_300, fg=INK, font=(MONO, 8))
+    label("FootSep.TLabel", bg=VELLUM_300, fg=BRASS_400, font=(MONO, 8))
+    return st
+
+
+def frame(parent, bg, border=None, pad=0, thick=1, radius=6, shadow=0, outer=PARCHMENT):
+    """A panel: a rounded rectangle (a ttk frame with an image background) where Pillow can
+    draw one, else a plain Tk frame with a 1px coloured border. `outer` is the colour around it
+    (it shows past the rounded corners); pad is the room inside, past the border."""
+    if ROUND and radius:
+        style, edge = round_frame_style(bg, border, radius, shadow, outer)
+        return ttk.Frame(parent, style=style, padding=edge + pad)
+    return tk.Frame(parent, background=bg, highlightthickness=thick if border else 0,
+                    highlightbackground=border or bg, highlightcolor=border or bg, padx=pad, pady=pad)
+
+
+def rule(parent, colour=BRASS_300):
+    return tk.Frame(parent, background=colour, height=1)
+
+
+def dot(parent, bg, colour, size=8):
+    """A small round status light."""
+    c = tk.Canvas(parent, width=size, height=size, background=bg, highlightthickness=0, bd=0)
+    c.create_oval(0, 0, size - 1, size - 1, fill=colour, outline=colour)
+    return c
+
+
+def dot_image(colour, bg, size=8):
+    """A small round light as an image (for a button), anti-aliased where Pillow is there."""
+    if ROUND:
+        return _rounded(size, size, size / 2, colour, outer=bg)
+    img = tk.PhotoImage(width=size, height=size)
+    img.put(colour, to=(1, 1, size - 1, size - 1))
+    _IMAGES.append(img)
+    return img
+
+
+def set_dot(c, colour):
+    c.itemconfigure(1, fill=colour, outline=colour)
+
+
+def shield(parent, bg, size=16):
+    """A small shield with a check in it (the "verified" stamp); set_shield turns it plain."""
+    w, h = size - 2, size
+    c = tk.Canvas(parent, width=w, height=h, background=bg, highlightthickness=0, bd=0)
+    c.create_polygon(w / 2, 1, w - 1.5, 3, w - 1.5, h * 0.52, w / 2, h - 1, 1.5, h * 0.52, 1.5, 3,
+                     fill=bg, outline=BRASS_700, width=1.4, tags="body")
+    c.create_line(w * 0.3, h * 0.5, w * 0.46, h * 0.66, w * 0.72, h * 0.34, fill=BRASS_700, width=1.8,
+                  capstyle="round", joinstyle="round", tags="check")
+    return c
+
+
+def set_shield(c, verified):
+    c.itemconfigure("check", state="normal" if verified else "hidden")
+    c.itemconfigure("body", outline=BRASS_700 if verified else INK_SUBTLE)
+
+
+ICON_DIR = os.path.join(HERE, "icons")
+_ICONS = {}
+
+
+def icon(name):
+    """A small icon (PNG; Tk 8.6 reads PNG and GIF itself): the @2x one on a high-DPI screen."""
+    if name in _ICONS:
+        return _ICONS[name]
+    img = None
+    try:
+        hidpi = float(tk._default_root.tk.call("tk", "scaling")) > 1.7 if tk._default_root else False
+        for f in ((name + "@2x.png") if hidpi else None, name + ".png"):
+            if f and os.path.exists(os.path.join(ICON_DIR, f)):
+                img = tk.PhotoImage(file=os.path.join(ICON_DIR, f))
+                break
+    except (tk.TclError, ValueError):
+        img = None
+    _ICONS[name] = img
+    return img
+
+
+def _mark(kind):
+    """A 12px tick, dot or blank for the themed menus (radio and check entries)."""
+    key = "_mark_" + kind
+    if key in _ICONS:
+        return _ICONS[key]
+    import base64
+    import io
+    try:
+        from PIL import Image, ImageDraw
+        k, S = 4, 12 * 4
+        img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        if kind == "tick":
+            d.line([(S * 0.18, S * 0.52), (S * 0.4, S * 0.74), (S * 0.82, S * 0.28)], fill=BRASS_700, width=int(1.8 * k),
+                   joint="curve")
+        elif kind == "dot":
+            d.ellipse((S * 0.3, S * 0.3, S * 0.7, S * 0.7), fill=BRASS_700)
+        img = img.resize((12, 12), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        ph = tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
+    except Exception:
+        ph = tk.PhotoImage(width=12, height=12)
+        if kind != "blank":
+            ph.put(BRASS_700, to=(4, 4, 8, 8))
+    _ICONS[key] = ph
+    return ph
+
+
+def icon_tick():
+    return _mark("tick")
+
+
+def icon_dot():
+    return _mark("dot")
+
+
+def icon_blank():
+    return _mark("blank")
+
+
+def button_image(name):
+    """An icon for a ttk button, kept as it is when the button is disabled (Tk would grey it
+    with a dither pattern)."""
+    img = icon(name)
+    return (img, "disabled", img) if img else None
+
+
+def link(parent, text, command, style="DeskLink.TLabel", icon=None, right=False):
+    """Clickable text (underlined, or the style's look), optionally with an icon before it
+    (right=True: after it)."""
+    img = globals()["icon"](icon) if icon else None
+    lbl = ttk.Label(parent, text=text, style=style, cursor="hand2",
+                    **({"image": img, "compound": ("right" if right else "left") if text else "image"} if img else {}))
+    lbl.bind("<Button-1>", lambda e: command())
+    return lbl
+
+
+class Tooltip:
+    """A small note that appears under a widget while the pointer rests on it.
+    `text` is a function, so the note can change (or be empty, meaning no note)."""
+
+    def __init__(self, widget, text, delay=450):
+        self.widget, self.text, self.delay = widget, text, delay
+        self.tip = self.job = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+        widget.bind("<ButtonPress>", self.hide, add="+")
+
+    def _schedule(self, event=None):
+        self.hide()
+        self.job = self.widget.after(self.delay, self.show)
+
+    def show(self):
+        self.job = None
+        text = self.text()
+        if not text or self.tip:
+            return
+        w = self.widget
+        tip = self.tip = tk.Toplevel(w)
+        tip.wm_overrideredirect(True)
+        try:
+            tip.wm_attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        box = tk.Frame(tip, bg=BRASS_600, padx=1, pady=1)
+        box.pack()
+        tk.Label(box, text=text, bg=VELLUM_50, fg=INK, font=(MONO, 9), padx=6, pady=3,
+                 justify="left", wraplength=max(300, w.winfo_screenwidth() // 2)).pack()
+        tip.update_idletasks()
+        x = w.winfo_rootx()
+        y = w.winfo_rooty() + w.winfo_height() + 4
+        x = max(0, min(x, w.winfo_screenwidth() - tip.winfo_reqwidth() - 8))
+        tip.wm_geometry("+%d+%d" % (x, y))
+
+    def hide(self, event=None):
+        if self.job:
+            self.widget.after_cancel(self.job)
+            self.job = None
+        if self.tip:
+            self.tip.destroy()
+            self.tip = None
+
+
+_BUNDLED = {"detective serif": "DetectiveSerif", "inter": "Inter", "courier prime": "CourierPrime"}
+
+
+def cap_height(font):
+    """How tall capital letters and figures are in a Tk font, in pixels: read from the bundled
+    font file where Pillow is there, else a usual share of the font's ascent."""
+    from tkinter import font as tkfont
+    f = font if isinstance(font, tkfont.Font) else tkfont.Font(font=font)
+    a = f.actual()
+    size = a["size"]
+    px = -size if size < 0 else size * float(f._tk.call("tk", "scaling"))
+    base = _BUNDLED.get(str(a["family"]).lower())
+    if base:
+        style = "Bold" if a["weight"] == "bold" else ("Italic" if a["slant"] == "italic" else "Regular")
+        path = os.path.join(FONT_DIR, "%s-%s.ttf" % (base, style))
+        try:
+            from PIL import ImageFont
+            box = ImageFont.truetype(path, max(1, round(px))).getbbox("H", anchor="ls")
+            return -box[1]
+        except Exception:
+            pass
+    return round(f.metrics("ascent") * 0.7)
+
+
+def caret(colour=BRASS_700, width=0, dot=None, height=0, gap=0):
+    """A small drop-down chevron (the same everywhere, unlike the ▾ character, which the bundled
+    fonts don't have). With `width`: an image that wide, chevron at the right and an optional
+    `dot` light at the left, for a button whose text sits centred over it (compound="center")."""
+    key = ("_caret", colour, width, dot, height, gap)
+    if key in _ICONS:
+        return _ICONS[key]
+    import base64
+    import io
+    scale = max(1.0, float(tk._default_root.tk.call("tk", "scaling")) / 1.3333) if tk._default_root else 1.0
+    cw, ch = round(9 * scale), round(5 * scale)           # the chevron itself
+    W, H = max(width, cw + 2 + round(gap * scale)), max(height, ch + 4)
+    try:
+        from PIL import Image, ImageDraw
+        k = 4
+        img = Image.new("RGBA", (W * k, H * k), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        x0, y0 = (W - cw - 1) * k, (H - ch) / 2 * k
+        d.line([(x0, y0), (x0 + cw * k / 2, y0 + ch * k), (x0 + cw * k, y0)], fill=colour,
+               width=max(4, round(1.5 * scale * k)), joint="curve")
+        if dot:
+            s = round(8 * scale)
+            d.ellipse((0, (H - s) / 2 * k, s * k, (H + s) / 2 * k), fill=dot)
+        img = img.resize((W, H), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        ph = tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
+    except Exception:
+        ph = tk.PhotoImage(width=W, height=H)
+        for i in range(ch):
+            ph.put(colour, to=(W - cw - 1 + i, (H - ch) // 2 + i, W - 1 - i, (H - ch) // 2 + i + 1))
+    _ICONS[key] = ph
+    return ph
+
+
+def caret_image(colour=BRASS_700, **kw):
+    """caret() for a ttk button, kept as it is when the button is disabled."""
+    img = caret(colour, **kw)
+    return (img, "disabled", img)
+
+
+def check(colour=GREEN, size=12, gap=3):
+    """A crisp drawn tick (Heroicons' check) to sit before a label's text (compound="left"); the
+    ✓ character isn't in the bundled fonts, so Windows borrows a rough one from another font."""
+    key = ("_check", colour, size, gap)
+    if key in _ICONS:
+        return _ICONS[key]
+    import base64
+    import io
+    scale = max(1.0, float(tk._default_root.tk.call("tk", "scaling")) / 1.3333) if tk._default_root else 1.0
+    s, g = round(size * scale), round(gap * scale)
+    try:
+        from PIL import Image, ImageDraw
+        k = 4
+        img = Image.new("RGBA", ((s + g) * k, s * k), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        u = s * k / 24.0                         # the 24-unit Heroicons grid
+        pts = [(4 * u, 14 * u), (9 * u, 19 * u), (20 * u, 8 * u)]     # a touch low, to sit on the text's middle
+        d.line(pts, fill=colour, width=max(4, round(3.6 * u)), joint="curve")
+        r = 1.8 * u                              # round the ends, as stroke-linecap="round"
+        for x, y in (pts[0], pts[2]):
+            d.ellipse((x - r, y - r, x + r, y + r), fill=colour)
+        img = img.resize((s + g, s), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        ph = tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
+    except Exception:
+        ph = tk.PhotoImage(width=s + g, height=s)
+        for i in range(3):
+            ph.put(colour, to=(2 + i, s // 2 + i, 4 + i, s // 2 + i + 2))
+        for i in range(6):
+            ph.put(colour, to=(5 + i, s // 2 + 2 - i, 7 + i, s // 2 + 4 - i))
+    _ICONS[key] = ph
+    return ph

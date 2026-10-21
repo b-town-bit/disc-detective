@@ -51,12 +51,15 @@ def build_imdb(d):
     add("movie", "Anastasia", 1956, 105, 15000)
     add("movie", "Gone in 60 Seconds", 2000, 118, 300000)
     add("movie", "Gone in 60 Seconds", 1974, 97, 9000)
+    add("video", "'Gone in 60 Seconds' Unmasked", 2001, 30, 400)     # a making-of, the year after
     add("movie", "The Prince of Egypt", 1998, 99, 140000)
     add("movie", "Shrek", 2001, 90, 750000)
     add("movie", "Shrek 2", 2004, 93, 500000)
     add("movie", "An American Tailor", 1984, 75, 900)
     add("movie", "An American Tail", 1986, 80, 90000)
     add("movie", "An American Tail: Fievel Goes West", 1991, 75, 40000)
+    # a look-alike that would count as "film #2" by year (Harry Potter: Witchcraft Repackaged)
+    add("video", "An American Tail: A Look Back", 1988, 25, 150)
     add("video", "Pocahontas", 1994, 45, 257)                   # unrelated look-alikes, released first
     add("movie", "Pocahontas", 1995, 81, 220681)
     add("movie", "Pocahontas: The Legend", 1995, 102, 900)
@@ -72,10 +75,18 @@ def build_imdb(d):
     add("movie", "Rocky", 1976, 120, 650000)
     add("movie", "Rocky II", 1979, 119, 230000)
     add("movie", "Rocky III", 1982, 99, 220000)
+    # a series named by one word, none titled just that word (MUPPET_US)
+    add("movie", "The Gizmo Movie", 1979, 95, 43000)
+    add("movie", "The Great Gizmo Caper", 1981, 97, 18000)
+    add("movie", "The Gizmo Christmas Carol", 1992, 85, 82000)
+    add("movie", "Gizmos from Space", 1999, 87, 22000)
     add("movie", "Apollo 13", 1995, 140, 320000)
+    add("tvMovie", "The Snowman Who Sang", 1964, 47, 40000)        # a TV special, too short for a film
+    add("tvMovie", "The Tin Soldier Waltz", 1968, 25, 7000)        # two specials on one disc,
+    add("tvMovie", "Lantern by the Harbor", 1967, 60, 1000)        # named together in its label
     add("short", "A Grand Day Out", 1989, 23, 30000, orig="A Grand Day Out with Wallace and Gromit")
     add("short", "Wallace & Gromit: The Wrong Trousers", 1993, 30, 60000, orig="The Wrong Trousers")
-    add("short", "Wallace & Gromit: A Close Shave", 1995, 30, 45000, orig="A Close Shave")
+    add("short", "Wallace & Gromit: A Close Shave", 1995, 31, 45000, orig="A Close Shave")   # 31: as on IMDb
     add("short", "Wallace & Gromit: A Matter of Loaf and Death", 2008, 30, 25000)
     add("short", "Wallace & Gromit: Shopper 13", 2003, 1, 300)
     add("movie", "Wallace & Gromit: The Curse of the Were-Rabbit", 2005, 85, 130000)
@@ -106,6 +117,10 @@ def build_imdb(d):
     add("movie", "Torrid Zone", 1940, 88, 1609)              # T Z initials
     add("movie", "Tarzan Escapes", 1936, 89, 3865)           # two words: not a consonant code
     add("movie", "Nightmare", 1956, 80, 3113)                # N..G..E, but little known
+    add("movie", "It's a Wonderful Life", 1946, 130, 561600)  # ITSWONDERFULLIFE: lost "a" and apostrophe
+    add("movie", "RocketMan", 1997, 95, 11315)               # RKM = RocKetMan, ending elsewhere
+    add("movie", "Repli-Kate", 2002, 96, 5559)               # R K initials
+    add("movie", "Rurouni Kenshin: The Movie", 1997, 90, 3100)
     add("movie", "Hercules", 2014, 98, 160000)
     add("movie", "Hercules", 1958, 107, 9000)
     add("tvSeries", "Hercules", 1998, 22, 15000, end=1999)
@@ -199,9 +214,11 @@ def make_reel_movie_bluray(root, name="Chicken Run"):
     return _bluray(root, pls, clips, xml, seed=11)
 
 
-def make_shorts_bluray(root):
+def make_shorts_bluray(root, compilation=False):
     """Shaped like the Wallace & Gromit DVD: three short films (one of them twice), a play-all
-    of the first two, an extra and a logo. Mastered 2005."""
+    of the first two, an extra and a logo. Mastered 2005. compilation=True adds what the real
+    disc also has: a 24-minute title of 22 chapters (Cracking Contraptions' ten little films)
+    that pairs with no short."""
     ln = lambda m, s: (m * 60 + s) * T45
     a, b, c, c2 = ("00011", 0, ln(24, 29)), ("00012", 0, ln(32, 3)), ("00013", 0, ln(31, 2)), ("00014", 0, ln(31, 2) + 22500)
     pls = {"00000.mpls": ([("00001", 0, 8 * T45)], 1),
@@ -209,6 +226,9 @@ def make_shorts_bluray(root):
            "00005.mpls": ([a, b], 8), "00020.mpls": ([("00030", 0, ln(7, 54))], 2)}
     clips = {x[0]: x[2] / T45 for x in (a, b, c, c2)}
     clips.update({"00001": 8, "00030": 474})
+    if compilation:
+        pls["00006.mpls"] = ([("00015", 0, ln(23, 48))], 22)
+        clips["00015"] = 23 * 60 + 48
     _bluray(root, pls, clips, seed=5)
     stamp = 1123200000                                   # 2005-08-05: what "mastered" reads
     for dp, _, fns in os.walk(root):
@@ -256,6 +276,14 @@ def build_discdb_repo(root, movie_disc_hash, movie_disc_sizes):
     write(s + "/s1-dvd/disc01.json", {"Name": "Disc 1", "Format": "DVD", "ContentHash": "A" * 32, "Titles": [
         {"SourceFile": "01", "Duration": "0:44:00", "Item": {"Title": "Pilot", "Type": "Episode",
                                                              "Season": "1", "Episode": "1"}}]})
+    # a box set whose release is the movie's 2012 Blu-ray, plus a bonus disc (filed under the film)
+    write("sets/Test Mystery Collection (2012)/boxset.json", {
+        "Slug": "2012-blu-ray", "Title": "Test Mystery Collection", "Year": 2012, "Discs": [
+            {"Index": 1, "Name": "Test Movie Mystery", "Format": "Blu-ray", "Slug": "test-movie-mystery",
+             "TitleSlug": "test-movie-mystery-2011"},
+            {"Index": 2, "Name": "Bonus Disc", "Format": "Blu-ray", "Slug": "bonus-disc",
+             "TitleSlug": "test-movie-mystery-2011"}]})
+    write("sets/Test Mystery Collection (2012)/front.jpg", BOX_JPG)
     write("../LICENSE", "MIT License\n\nCopyright (c) 2021 Luke Foust\n")
     return root
 

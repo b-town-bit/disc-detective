@@ -415,3 +415,116 @@ def test_discdb_series_episodes_are_episodes_whatever_their_length():
     changed = core.discdb_roles(ts, hit)
     assert ts[0]["role"] == "episode" and ts[0]["episode_index"] == 1 and ts[1]["role"] == "extra"
     assert changed == [("00800.mpls", "feature", "episode")]
+
+
+def test_picture_in_picture_mode_is_never_the_feature():
+    """Warner's Maximum Movie Mode (Deathly Hallows Part 1): the film with a picture-in-picture
+    track, 22 minutes longer because it pauses for featurettes, with its own copies of every other
+    scene. The plain film is the feature; the PiP mode is an optional version, even though longer."""
+    def bd(i, clips, pip=False):
+        segs = tuple((c, s, e) for c, s, e in clips)
+        v = {"codec": "H.264", "height": 1080, "scan": "p", "fps": "23.976", "aspect": "16:9"}
+        if pip:
+            v["pip"] = True
+        return {"id": "%05d.mpls" % i, "group": "playlists", "duration": sum(e - s for _, s, e in clips) / 45000,
+                "chapters": 30, "segments": segs, "video_info": v, "audio": [{"lang": "en", "kind": ""}],
+                "subs": [], "video": core.video_text(v)}
+    n = 45000 * 60                                    # a minute in 45 kHz ticks
+    film = [("%05d" % (10 + k), k * 10 * n, (k + 1) * 10 * n - 1) for k in range(15)]          # 150 min
+    mmm = [seg if k % 2 else ("%05d" % (60 + k), seg[1], seg[2] + 3 * n) for k, seg in enumerate(film)]
+    ts = [bd(100, film), bd(200, mmm, pip=True)]
+    kind, _ = classify(ts, "Blu-ray")
+    roles = {t["id"]: (t["role"], t.get("edition")) for t in ts}
+    assert kind == "movie" and roles["00100.mpls"] == ("feature", None)
+    assert roles["00200.mpls"] == ("version", "Picture-in-Picture")
+
+
+def test_a_box_set_disc_from_thediscdb_is_a_collection(imdb):
+    """TheDiscDB files a double feature under one film but names both as main movies: two Plex
+    movies, each found on IMDb by its name and length. Its own versions stay versions, and a
+    mislabelled extra ("Play All Deleted Scenes") is an extra. One film's cuts are not a collection."""
+    hit = {"title": "The Prince of Egypt", "year": 1998, "type": "movie", "titles": [
+        {"source": "00001.mpls", "item": {"title": "The Prince of Egypt", "type": "MainMovie"}},
+        {"source": "00002.mpls", "item": {"title": "Shrek 2", "type": "MainMovie"}},
+        {"source": "00003.mpls", "item": {"title": "The Prince of Egypt (Sing-Along Version)", "type": "MainMovie"}},
+        {"source": "00004.mpls", "item": {"title": "Play All Deleted Scenes", "type": "MainMovie"}}]}
+    mk = lambda i, minutes: {"id": "%05d.mpls" % i, "role": "extra", "duration": minutes * 60, "chapters": 9}
+    titles = [mk(1, 99), mk(2, 93), mk(3, 101), mk(4, 12)]
+    core.discdb_roles(titles, hit)
+    c = core.discdb_collection(imdb, titles, hit, {"mastered": "2010-01"}, name="Double Feature Collection")
+    assert c and c["kind"] == "collection" and c["source"] == "TheDiscDB"
+    assert [(i["title_id"], i["name"], i["year"]) for i in c["items"]] == [
+        ("00001.mpls", "The Prince of Egypt", 1998), ("00002.mpls", "Shrek 2", 2004)]
+    assert all(i["imdb_id"] for i in c["items"])
+    assert c["versions"] == [{"title_id": "00003.mpls", "same_as": "00001.mpls"}]
+    assert next(t for t in titles if t["id"] == "00004.mpls")["role"] == "extra"
+    names = core.apply_collection(c, titles)
+    assert any("Shrek 2 (2004) {imdb-tt" in n for n in names) and len(names) == 2
+    # one film's two cuts: editions, not a collection
+    cuts = {"title": "Apollo 13", "year": 1995, "type": "movie", "titles": [
+        {"source": "00001.mpls", "item": {"title": "Apollo 13 (Theatrical Cut)", "type": "MainMovie"}},
+        {"source": "00002.mpls", "item": {"title": "Apollo 13 (IMAX Version)", "type": "MainMovie"}}]}
+    t2 = [mk(1, 140), mk(2, 116)]
+    core.discdb_roles(t2, cuts)
+    assert core.discdb_collection(imdb, t2, cuts, {"mastered": "2010-01"}) is None
+
+
+def test_a_tv_special_disc(imdb):
+    """RUDOLPH_THE_RED_NOSED_REINDEER: a 47-minute TV movie and its extras looks like a TV disc of
+    two episodes, but no series has that name: the title whose length fits the special is it."""
+    mk = lambda i, minutes: {"id": "Title %d" % i, "role": "episode", "duration": minutes * 60,
+                             "episode_index": i, "chapters": 8}
+    titles = [mk(10, 52.1), mk(11, 47.0), {"id": "Title 14", "role": "extra", "duration": 828}]
+    c = core.special_on_disc(imdb, [("The Snowman Who Sang", False)], titles, {"mastered": "2018-09"})
+    assert c and (c[0]["name"], c[0]["year"]) == ("The Snowman Who Sang", 1964)
+    roles = {t["id"]: t["role"] for t in titles}
+    assert roles == {"Title 10": "extra", "Title 11": "feature", "Title 14": "extra"}
+    # the real disc: the special (52 min, English 5.1 + 2.0, Spanish, French) beside a 47-minute
+    # commentary featurette (English stereo): the one with the full soundtracks is the special
+    rich = [dict(mk(10, 52.1), audio=[{"lang": l, "channels": ch} for l, ch in (("en", 6), ("en", 2), ("es", 2), ("fr", 2))]),
+            dict(mk(11, 47.0), audio=[{"lang": "en", "channels": 2}])]
+    assert core.special_on_disc(imdb, [("The Snowman Who Sang", False)], rich, {"mastered": "2018-09"})
+    assert [t["role"] for t in rich] == ["feature", "extra"]
+    # the real disc: the special (52 min, English 5.1 + 2.0, Spanish, French) beside a 47-minute
+    # commentary featurette (English stereo): the one with the full soundtracks is the special
+    rich = [dict(mk(10, 52.1), audio=[{"lang": l, "channels": ch} for l, ch in (("en", 6), ("en", 2), ("es", 2), ("fr", 2))]),
+            dict(mk(11, 47.0), audio=[{"lang": "en", "channels": 2}])]
+    assert core.special_on_disc(imdb, [("The Snowman Who Sang", False)], rich, {"mastered": "2018-09"})
+    assert [t["role"] for t in rich] == ["feature", "extra"]
+    # nothing that fits: left alone
+    other = [mk(10, 52.1), mk(11, 30.0)]
+    assert core.special_on_disc(imdb, [("The Snowman Who Sang", False)], other, {"mastered": "2018-09"}) is None
+    assert {t["role"] for t in other} == {"episode"}
+
+
+def test_two_films_named_in_one_label(imdb):
+    """LITTLE_DRUMMER_CRICKET_HEARTH: The Little Drummer Boy and Cricket on the Hearth. Each film
+    explains part of the label and pairs with its own title by length (TV listings include ad
+    breaks: Cricket is 60 minutes on IMDb, 49.5 on the disc)."""
+    mk = lambda i, minutes: {"id": "Title %d" % i, "role": "episode", "duration": minutes * 60, "chapters": 6}
+    titles = [mk(8, 49.5), mk(17, 25.7)]
+    c = core.label_double_feature(imdb, "Tin Soldier Lantern Harbor", titles, {"mastered": "2018-08"})
+    assert c and c["kind"] == "collection"
+    assert [(i["title_id"], i["name"]) for i in c["items"]] == [("Title 8", "Lantern by the Harbor"),
+                                                                 ("Title 17", "The Tin Soldier Waltz")]
+    assert c["name"] == "The Tin Soldier Waltz & Lantern by the Harbor"          # in the label's order
+    # a label that is one film's name isn't split up, and lengths have to fit
+    assert core.label_double_feature(imdb, "Tin Soldier Lantern Harbor", [mk(8, 90), mk(17, 25.7)],
+                                     {"mastered": "2018-08"}) is None
+
+
+def test_a_pip_track_built_into_the_film_is_optional():
+    """V for Vendetta (Warner's In-Movie Experience): the PiP video is multiplexed into the film's
+    own clip, so every playlist of the film carries it. That's an optional track, not a PiP mode:
+    the film is still the feature, and the optional track isn't mentioned."""
+    v = {"codec": "VC-1", "height": 1080, "scan": "p", "fps": "23.976", "aspect": "16:9", "pip": True}
+    n = 45000 * 60
+    mk = lambda i: {"id": "%05d.mpls" % i, "group": "playlists", "duration": 132.5 * 60, "chapters": 32,
+                    "segments": (("00003", 0, int(132.5 * n)),), "video_info": dict(v),
+                    "audio": [{"lang": "en", "kind": ""}], "subs": [], "video": core.video_text(v)}
+    ts = [mk(3), mk(39), mk(47)]
+    kind, _ = classify(ts, "Blu-ray")
+    feat = [t for t in ts if t["role"] == "feature"]
+    assert kind == "movie" and len(feat) == 1
+    assert "picture-in-picture" not in feat[0]["video"]           # optional: like a spare soundtrack
+    assert not any(t.get("edition") == "Picture-in-Picture" for t in ts)

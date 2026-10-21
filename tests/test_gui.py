@@ -11,6 +11,11 @@ import fixtures  # noqa: E402
 pytestmark = pytest.mark.gui
 
 
+def shown_title(app):
+    """The title as shown: the name, and the year beside it in its own label."""
+    return (app.title_lbl.cget("text") + " " + app.year_lbl.cget("text")).strip()
+
+
 @pytest.fixture
 def gui(monkeypatch, tmp_path):
     try:
@@ -20,6 +25,7 @@ def gui(monkeypatch, tmp_path):
     root.geometry("+0+0")
     monkeypatch.setattr(dd_app, "SETTINGS", str(tmp_path / "settings.json"))
     monkeypatch.setattr(dd_app, "optical_drives", lambda: [])
+    monkeypatch.setattr(dd_app.App, "MIN_STATUS_MS", 0)      # the story plays instantly in tests
     # a real message box waits for a click forever (on Windows the tests open real windows)
     for name in ("showerror", "showwarning", "showinfo"):
         monkeypatch.setattr(dd_app.messagebox, name, lambda *a, **k: None)
@@ -28,6 +34,7 @@ def gui(monkeypatch, tmp_path):
     # likewise a native popup menu (Windows tracks it until clicked) and the file pickers;
     # the menu's entries are still built, so tests can read them
     monkeypatch.setattr(tk.Menu, "tk_popup", lambda self, *a, **k: None)
+    monkeypatch.setattr(dd_app.ThemedMenu, "headless", True)
     for name in ("askdirectory", "askopenfilename", "asksaveasfilename"):
         monkeypatch.setattr(dd_app.filedialog, name, lambda *a, **k: "")
     made = {}
@@ -97,9 +104,9 @@ def test_scan_shows_the_answer_and_plan(gui, tmp_path, imdb_dir, monkeypatch):
     app.outdir.set(str(tmp_path / "Rips"))
     app.scan()
     assert pump(lambda: app.rep is not None and not app.busy, 60), app.status.cget("text")
-    assert app.title_lbl.cget("text").startswith("Justified")
+    assert shown_title(app).startswith("Justified")
     assert app.plan_lbl.cget("text") == "Will rip 4 episodes (S01E01–S01E04)"
-    assert app.status.cget("text").startswith("Case closed")
+    assert app.standing_lbl.cget("text") == "Case closed" and app.status.cget("text") == ""
     plan = dd_app.plan_rip(app.rep, dd_app.preview_titles(app.rep), False)
     assert [p["dest"].split("/")[-1] for p in plan][0].startswith("Justified (2010) - s01e01 - Fire in the Hole")
     if app.rep.get("art"):
@@ -122,9 +129,9 @@ def test_choose_another_match_and_forget_it(gui, tmp_path, imdb_dir, monkeypatch
         app.scan()
         assert pump(lambda: app.rep is not None and not app.busy, 60), app.status.cget("text")
     scan()
-    assert app.title_lbl.cget("text").startswith("Chicken Run (2000)")
+    assert shown_title(app).startswith("Chicken Run (2000)")
     assert app.plan_lbl.cget("text").startswith("Will rip the feature")
-    assert app.match_btn.winfo_ismapped() and app.match_btn.cget("text") == "Not right? ▾"
+    assert app.match_btn.winfo_ismapped() and app.match_btn.cget("text") == "Not right?"
     assert app.confirm_btn.winfo_ismapped() and not app.confirmed_lbl.winfo_ismapped()
     app.match_menu()
     labels = [app.match_popup.entrycget(i, "label") for i in range(app.match_popup.index("end") + 1)
@@ -133,15 +140,15 @@ def test_choose_another_match_and_forget_it(gui, tmp_path, imdb_dir, monkeypatch
     assert labels == ["Enter it myself…"]          # one confident match: nothing else to offer; no "yes" in here
     app.choose({"kind": "movie", "name": "Chicken Run: Dawn of the Nugget", "year": 2023})   # saves + rescans
     assert pump(lambda: app.rep is not None and not app.busy and app.rep.get("personal_hit"), 60)
-    assert app.title_lbl.cget("text").startswith("Chicken Run: Dawn of the Nugget (2023)")
+    assert shown_title(app).startswith("Chicken Run: Dawn of the Nugget (2023)")
     assert app.confirmed_lbl.winfo_ismapped() and not app.confirm_btn.winfo_ismapped()
     app.use_answer(None)                                  # "Forget my answer"
     assert pump(lambda: app.rep is not None and not app.busy and not app.rep.get("personal_hit"), 60)
-    assert app.title_lbl.cget("text").startswith("Chicken Run (2000)")
+    assert shown_title(app).startswith("Chicken Run (2000)")
     app.confirm()                                         # ✓ That's right
     assert pump(lambda: app.rep is not None and not app.busy and app.rep.get("personal_hit"), 60)
     assert app.rep["personal_hit"]["truth"].startswith("Chicken Run (2000) {imdb-tt")
-    assert app.confirmed_lbl.winfo_ismapped() and app.title_lbl.cget("text") == "Chicken Run (2000)"
+    assert app.confirmed_lbl.winfo_ismapped() and shown_title(app) == "Chicken Run (2000)"
 
 
 def test_type_the_answer_in(gui, tmp_path, monkeypatch):
@@ -241,7 +248,7 @@ def test_short_film_disc_confirm_and_fix_titles(gui, tmp_path, imdb_dir, monkeyp
         assert pump(lambda: app.rep is not None and not app.busy and cond(), 60), app.status.cget("text")
     app.scan()
     wait(lambda: True)
-    assert app.title_lbl.cget("text") == "Wallace & Gromit Collection"
+    assert shown_title(app) == "Wallace & Gromit Collection"
     assert app.plan_lbl.cget("text") == "Will rip 3 films"
     assert app.confirm_btn.winfo_ismapped()                         # collections can be confirmed now
     app.match_menu()
@@ -249,9 +256,13 @@ def test_short_film_disc_confirm_and_fix_titles(gui, tmp_path, imdb_dir, monkeyp
               if app.match_popup.type(i) == "command"]
     app.match_popup.unpost()
     assert "Change the films…" in labels and "It's one film or TV show instead…" in labels
-    app.confirm()                                                   # ✓ That's right
-    app.rep = None
-    wait(lambda: app.rep.get("personal_hit"))
+    scans = []
+    app.scan = lambda: scans.append(1)                              # (an instance attribute: del restores)
+    app.confirm()                                                   # ✓ That's right: saved, no rescan
+    del app.scan
+    root.update()
+    assert not scans and app.rep.get("personal_hit")
+    assert app.status.cget("text").startswith("Confirmed")
     assert app.rep["kind"] == "collection" and app.confirmed_lbl.winfo_ismapped()
     # Change the films: swap two, drop one
     d = dd_app.CollectionDialog(root, app)
@@ -268,7 +279,7 @@ def test_short_film_disc_confirm_and_fix_titles(gui, tmp_path, imdb_dir, monkeyp
     wait(lambda: app.rep.get("personal_hit"))
     items = {i["title_id"]: i["name"] for i in app.rep["candidates"][0]["items"]}
     assert items == {"00001.mpls": "A Grand Day Out", "00002.mpls": "Wallace & Gromit: A Close Shave"}
-    assert app.title_lbl.cget("text") == "Wallace & Gromit: Three Amazing Adventures"
+    assert shown_title(app) == "Wallace & Gromit: Three Amazing Adventures"
     assert app.plan_lbl.cget("text") == "Will rip 2 films"
 
 
@@ -377,8 +388,8 @@ def test_a_discdb_hit_needs_no_confirming(gui, monkeypatch):
            "discdb": {"hit": {"title": "WALL·E", "titles": []}}}
     app.show_match_button(rep)
     root.update()
-    assert app.confirmed_lbl.winfo_ismapped() and app.confirmed_lbl.cget("text") == "✓ TheDiscDB"
-    assert not app.confirm_btn.winfo_ismapped() and app.match_btn.cget("text") == "Not right? ▾"
+    assert app.confirmed_lbl.winfo_ismapped() and app.confirmed_lbl.cget("text") == "TheDiscDB"
+    assert not app.confirm_btn.winfo_ismapped() and app.match_btn.cget("text") == "Not right?"
     rep["discdb"] = {"hit": None}                                     # an IMDb match still asks
     app.show_match_button(rep)
     root.update()
@@ -399,7 +410,7 @@ def test_without_makemkv_rip_is_greyed_but_the_menu_works(gui, tmp_path, imdb_di
     assert pump(lambda: app.rep is not None and not app.busy, 60)
     assert str(app.rip_btn.button.cget("state")) == "disabled"
     assert str(app.rip_btn.arrow.cget("state")) == "normal"          # Choose titles still opens
-    assert "install MakeMKV" in app.dest_lbl.cget("text")
+    assert "install MakeMKV" in app.rip_note.cget("text")
     monkeypatch.setattr(dd_app.App, "makemkv_exe", lambda self: "/usr/bin/makemkvcon")
     app.show_plan_summary()
     assert str(app.rip_btn.button.cget("state")) == "normal"
@@ -425,3 +436,299 @@ def test_plan_lists_dvd_ordered_episodes_as_they_are():
     assert "(S01E11, S01E01, S01E02)" in dd_app.describe_plan(plan, False)
     plan = [{"role": "episode", "dest": "S/Season 01/S - s01e%02d - x.mkv" % n} for n in (5, 6, 7)]
     assert "(S01E05–S01E07)" in dd_app.describe_plan(plan, False)
+
+
+def test_enter_it_myself_with_nothing_identified(gui, monkeypatch):
+    """A disc with a placeholder label (LOGICAL_VOLUME_ID): no guess at all, best_guess None."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    app.rep = {"content_hash": "0" * 32, "candidates": [], "best_guess": None, "kind": "movie",
+               "label_parsed": {"raw": "LOGICAL_VOLUME_ID", "query": "", "placeholder": True}}
+    app.match_menu()
+    m = app.match_popup
+    i = next(i for i in range(m.index("end") + 1) if m.type(i) == "command"
+             and m.entrycget(i, "label") == "Enter it myself…")
+    before = set(root.winfo_children())
+    m.invoke(i)                                         # opened the dialog, no AttributeError
+    new = [w for w in root.winfo_children() if w not in before]
+    assert new
+    for w in new:
+        w.destroy()
+
+
+def test_status_story_and_case_notes(gui, tmp_path, imdb_dir, monkeypatch):
+    """Each step stays on the status line for a while, the verdict comes last, and the case notes
+    window shows the technical side (DEBUG detail included) of the same scan."""
+    root, made, pump = gui
+    monkeypatch.setenv("DISC_DETECTIVE_IMDB", imdb_dir)
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    orig = core.default_args
+    monkeypatch.setattr(core, "default_args", lambda **kw: orig(**dict(kw, offline=True)))
+    monkeypatch.setattr(dd_app.App, "MIN_STATUS_MS", 30)
+    old_level = core.logger.level
+    core.logger.setLevel(10)                          # as setup_logging leaves it: DEBUG reaches the app
+    try:
+        disc = fixtures.make_reel_movie_bluray(str(tmp_path / "CHICKEN_RUN"))
+        app = dd_app.App(root)
+        shown = []
+        real = app.set_status
+        monkeypatch.setattr(app, "set_status", lambda text: (shown.append(text), real(text)))
+        app.source.set(disc)
+        app.source_changed()
+        app.scan()
+        assert pump(lambda: app.rep is not None and not app.busy, 60), app.status.cget("text")
+        steps = [x for x in shown if x.endswith("\u2026")]
+        assert steps[0] == "Arriving at the scene\u2026" and "Dusting for fingerprints\u2026" in steps
+        assert app.standing_lbl.cget("text") == "Case closed" and shown[-1] == ""    # the verdict after the story
+        app.open_notes()
+        text = app.notes_win.text.get("1.0", "end")
+        assert "step: fingerprint" in text and "candidate" in text and "---- scan of" in text
+        assert not text.startswith("\n")
+        app.scan()                                    # a second scan: a blank line before its divider
+        assert pump(lambda: not app.busy and app.rep is not None, 60)
+        text = app.notes_win.text.get("1.0", "end")
+        lines = text.split("\n")
+        i = [k for k, x in enumerate(lines) if "---- scan of" in x]
+        assert len(i) >= 2 and lines[i[-1] - 1] == ""
+        app.notes_win.top.destroy()
+        app.scan()                                    # scanned with the notes closed: only that scan
+        assert pump(lambda: not app.busy and app.rep is not None, 60)
+        app.open_notes()
+        text = app.notes_win.text.get("1.0", "end")
+        assert text.count("---- scan of") == 1 and text.startswith(text.split("\n")[0]) and "---- scan of" in text.split("\n")[0]
+        app.notes_win.top.destroy()
+    finally:
+        core.logger.setLevel(old_level)
+
+
+def test_a_films_special_features_disc_rips_its_extras():
+    """MY FAIR LADY DISC 2: the film's extras disc. Nothing on it is the film (TheDiscDB names
+    the 58-minute making-of an extra), and its extras are what to rip, under TheDiscDB's names."""
+    hit = {"title": "My Fair Lady", "year": 1964, "type": "movie", "titles": [
+        {"source": "00000.mpls", "item": {"title": "More Loverly Than Ever: The Making of My Fair Lady",
+                                          "type": "Extra"}},
+        {"source": "00030.mpls", "item": {"title": "Alternate Audrey Hepburn Vocals: Show Me",
+                                          "type": "DeletedScene"}},
+        {"source": "00028.mpls", "item": {}}]}
+    titles = [{"id": "00000.mpls", "role": "feature", "duration": 3478, "video": ""},
+              {"id": "00030.mpls", "role": "episode", "duration": 168, "video": "", "episode_index": 1},
+              {"id": "00016.mpls", "role": "loop", "duration": 1218, "video": ""}]
+    assert core.discdb_extras_disc(titles, hit)
+    assert [t["role"] for t in titles] == ["extra", "extra", "loop"]
+    assert titles[0]["note"].startswith("TheDiscDB: More Loverly")
+    rep = {"content_hash": "B9C6C324" + "0" * 24, "format": "Blu-ray", "kind": "movie", "extras_disc": True,
+           "discdb": {"hit": hit}, "candidates": [], "best_guess": "My Fair Lady | Blu-ray", "titles": titles}
+    plan = dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)            # extras on by default here
+    assert sorted(p["title_id"] for p in plan) == ["00000.mpls", "00030.mpls"]
+    assert dd_app.describe_plan(plan, False) == "Will rip 2 special features"
+    assert any("Deleted Scenes/Alternate Audrey Hepburn Vocals - Show Me" in p["dest"] for p in plan)
+    # a disc with the film on it is left alone
+    assert not core.discdb_extras_disc([{"id": "00800.mpls", "role": "feature", "duration": 9000}],
+                                       dict(hit, titles=hit["titles"] + [{"source": "00800.mpls",
+                                                                           "item": {"type": "MainMovie"}}]))
+
+
+def test_a_second_copy_of_a_film_gets_an_edition(tmp_path):
+    """Disc 2 of a set is the same film in full screen: its file is already there from disc 1, so
+    it's named as Plex's other edition of the film, not 'Film (2).mkv'. Extras just get a (2)."""
+    folder = tmp_path / "Swiss Family Robinson (1960) {imdb-tt0054357}"
+    folder.mkdir()
+    film = folder / "Swiss Family Robinson (1960).mkv"
+    film.write_bytes(b"")
+    rep = {"format": "DVD", "titles": [{"id": "Title 1", "duration": 7572, "role": "feature",
+                                        "video_info": {"aspect": "4:3"}}]}
+    item = {"title_id": "Title 1", "role": "feature"}
+    assert dd_app.rip_path(str(film), item, rep) == str(folder / "Swiss Family Robinson (1960) {edition-Fullscreen}.mkv")
+    rep["titles"][0]["video_info"] = {"aspect": "16:9"}
+    assert dd_app.rip_path(str(film), item, rep).endswith("{edition-Widescreen}.mkv")
+    rep["format"], rep["titles"][0]["video_info"] = "Blu-ray", {"height": 2160, "aspect": "16:9"}
+    assert dd_app.rip_path(str(film), item, rep).endswith("{edition-4K}.mkv")
+    extra = folder / "Other" / "Making Of.mkv"
+    extra.parent.mkdir()
+    extra.write_bytes(b"")
+    assert dd_app.rip_path(str(extra), {"title_id": "Title 4", "role": "extra"}, rep).endswith("Making Of (2).mkv")
+    new = folder / "Nothing There Yet.mkv"
+    assert dd_app.rip_path(str(new), item, rep) == str(new)          # free names are left alone
+
+
+def test_collection_strip_columns_line_up(gui, monkeypatch):
+    """Each film in a collection's strip is as wide as the others, whatever its name's length and
+    whether it has a poster, so a long first name doesn't push the rest along."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    items = [{"title_id": "Title %d" % k, "name": n, "year": y, "imdb_id": None}
+             for k, (n, y) in enumerate([("Kung Fu Panda: Secrets of the Scroll", 2016),
+                                         ("Kung Fu Panda: Secrets of the Masters", 2011),
+                                         ("Kung Fu Panda: Secrets of the Furious Five", 2008)], 53)]
+    app.rep = {"content_hash": "0" * 32, "kind": "collection",
+               "candidates": [{"kind": "collection", "score": 90, "items": items}]}
+    plan = [{"title_id": it["title_id"], "role": "feature", "length": "0:25:00", "dest": "x/y.mkv"} for it in items]
+    app.show_rip_films(plan)
+    root.update()
+    cells = app.strip.winfo_children()
+    assert len(cells) == 3 and app.films_box.winfo_manager()
+    widths = {c.winfo_width() for c in cells}
+    xs = [c.winfo_x() for c in cells]
+    assert xs == sorted(xs) and len({xs[1] - xs[0], xs[2] - xs[1]}) == 1     # evenly spaced columns
+    assert max(widths) <= dd_app.di.ART_THUMB[0] + 26 + 2                       # about a poster wide
+    app.show_rip_films(plan[1:])                         # only the titles being ripped
+    root.update()
+    assert len(app.strip.winfo_children()) == 2
+    app.show_rip_films([])
+    assert not app.films_box.winfo_manager()
+
+
+def test_rip_films_lists_what_is_ripped():
+    """A short-film disc: the ticked films, a second copy marked; extras aren't listed (the summary
+    counts them). Any other disc: nothing (the picture already says it)."""
+    items = [{"title_id": "Title 2", "name": "Wallace & Gromit: A Grand Day Out", "year": 1989, "art": {"image": "a.png"}},
+             {"title_id": "Title 6", "name": "Wallace & Gromit: A Close Shave", "year": 1995}]
+    rep = {"candidates": [{"kind": "collection", "score": 90, "items": items,
+                           "versions": [{"title_id": "Title 7", "same_as": "Title 6"}]}]}
+    plan = [{"title_id": "Title 2", "dest": "a/A.mkv", "length": "0:24:29"},
+            {"title_id": "Title 7", "dest": "b/B.mkv", "length": "0:31:02"},
+            {"title_id": "Title 16", "dest": "a/Other/Cracking Contraptions.mkv", "length": "0:23:48"}]
+    got = dd_app.rip_films(rep, plan)
+    assert [(e["name"], e["image"]) for e in got] == [
+        ("A Grand Day Out (1989)", "a.png"), ("A Close Shave (1995) \u00b7 copy", None)]
+    assert dd_app.rip_films({"extras_disc": True, "candidates": []}, plan) == []
+    assert dd_app.rip_films({"kind": "movie", "candidates": [{"kind": "movie", "score": 90}]}, plan) == []
+
+
+def test_a_bonus_disc_has_no_include_extras_option(gui, monkeypatch):
+    """A bonus disc's extras are what it rips, so the Rip menu doesn't offer to include them."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    labels = lambda: [e["label"] for e in app.rip_btn.menu.entries]
+    app._build_rip_menu()
+    assert "Include extras" in labels()
+    app.rep = {"content_hash": "0" * 32, "extras_disc": True}
+    app._build_rip_menu()
+    assert "Include extras" not in labels() and "Choose titles…" in labels()
+
+
+def test_a_box_sets_bonus_disc_is_titled_by_its_set():
+    """A box set's bonus disc: the set is the title and the disc's name sits under it; a film's
+    disc keeps the film as its title. Either way the ID card says which set and which disc."""
+    bs = {"title": "Indiana Jones 4-Movie Collection", "year": 2021, "disc": "Indiana Jones Bonus Disc",
+          "number": 5, "count": 5}
+    rep = {"content_hash": "D466AB14" + "0" * 24, "kind": "movie", "extras_disc": True, "boxset": bs,
+           "match": {"name": "Indiana Jones and the Raiders of the Lost Ark", "year": 1981, "kind": "movie",
+                     "imdb_id": "tt0082971"},
+           "discdb": {"hit": {"disc": "Indiana Jones Bonus Disc", "release": "2021 UHD"}}}
+    assert dd_app.display_title(rep) == "Indiana Jones 4-Movie Collection (2021)"
+    assert ("Box set", "Indiana Jones 4-Movie Collection (2021) \u00b7 disc 5 of 5") in dd_app.detail_rows(rep)
+    film = dict(rep, extras_disc=False, boxset=dict(bs, disc="Indiana Jones and the Raiders of the Lost Ark", number=1))
+    assert dd_app.display_title(film) == "Indiana Jones and the Raiders of the Lost Ark (1981)"
+    assert ("Box set", "Indiana Jones 4-Movie Collection (2021) \u00b7 disc 1 of 5") in dd_app.detail_rows(film)
+    art = {"source": "TheDiscDB", "what": "box set cover", "ref": "TheDiscDB \u00b7 Indiana Jones 4-Movie Collection"}
+    assert dd_app.picture_source(rep, art) == "SOURCE: TheDiscDB \u00b7 Indiana Jones 4-Movie Collection"
+
+
+def test_choosing_no_titles_rips_nothing():
+    """Every title unticked in Choose titles: the plan is empty (not the longest title as a
+    fallback), and the summary says so."""
+    rep = {"content_hash": "0" * 32, "format": "DVD", "kind": "movie", "candidates": [], "best_guess": "Film",
+           "titles": [{"id": "Title 1", "role": "feature", "duration": 5400, "video": ""},
+                      {"id": "Title 2", "role": "extra", "duration": 600, "video": ""}]}
+    mk = dd_app.preview_titles(rep)
+    assert dd_app.plan_rip(rep, mk, False, set()) == []
+    assert dd_app.describe_plan([], True) == "No titles chosen to rip"
+    assert len(dd_app.plan_rip(rep, mk, False)) == 1                 # the default still picks the film
+
+
+def _png(path, w=40, h=60):
+    import struct
+    import zlib
+    raw = b"".join(b"\x00" + b"".join(bytes((x * 6 % 256, y * 4 % 256, 90)) for x in range(w)) for y in range(h))
+
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    with open(path, "wb") as fh:
+        fh.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                 + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+    return path
+
+
+def test_ask_an_ai_about_the_discs_picture(gui, tmp_path, monkeypatch):
+    """No key needed: the disc's pictures, a question to copy, and the AI's answer looked up."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    pics = [{"image": _png(str(tmp_path / "a.png")), "full": _png(str(tmp_path / "a_full.png"), 80, 120)},
+            {"image": _png(str(tmp_path / "b.png")), "full": _png(str(tmp_path / "b_full.png"), 80, 120)}]
+    app.rep = {"content_hash": "0" * 32, "candidates": [], "best_guess": None, "kind": "movie", "format": "DVD",
+               "label": "DVD_VIDEO", "mastered": "2001-05", "facts": {"feature_minutes": 93},
+               "label_parsed": {"raw": "DVD_VIDEO", "query": "", "placeholder": True}, "disc_images": pics}
+    app.match_menu()
+    m = app.match_popup
+    labels = [m.entrycget(i, "label") for i in range(m.index("end") + 1) if m.type(i) == "command"]
+    assert "Ask an AI about the disc's picture…" in labels
+    d = dd_app.AskAIDialog(root, app)
+    assert "93 minutes" in d.question and "DVD_VIDEO" not in d.question     # a placeholder label is no clue
+    assert d.count.cget("text") == "1 of 2"
+    d.show(1)
+    assert d.count.cget("text") == "2 of 2" and d.current() is pics[1]
+    d.copy_question()
+    assert root.clipboard_get() == d.question
+    opened = []
+    monkeypatch.setattr(dd_app.webbrowser, "open", lambda u: opened.append(u))
+    d.open_site("ChatGPT", dd_app.AI_SITES[0][1])
+    assert opened[-1].startswith("https://chatgpt.com/?q=This%20picture")       # the question, filled in
+    # with a Gemini key in Settings, it can be asked from here
+    app.settings["gemini_key"] = "k"
+    monkeypatch.setattr(core, "gemini_ask", lambda key, q, image=None, **kw:
+                        ('{"title": "The Swan Princess", "year": 1994, "kind": "film"}', "m"))
+    d2 = dd_app.AskAIDialog(root, app)
+    d2.ask_gemini()
+    assert pump(lambda: d2.answer.get() == "The Swan Princess (1994)", 5)
+    d2.top.destroy()
+    seen = {}
+    monkeypatch.setattr(dd_app.MatchDialog, "__init__", lambda self, *a, **k: seen.update(k))
+    d.answer.set("**The Swan Princess (1994)**")
+    d.look_up()
+    assert seen["title"] == "The Swan Princess" and seen["year"] == 1994
+
+
+def test_the_bundled_fonts_and_disc_facts(gui):
+    """The app's own typefaces load for the app (where the system lets a program add fonts),
+    and the toolbar says what the disc is from its size."""
+    from disc_detective import theme
+    if os.name == "nt" or theme.ctypes_fontconfig_available():
+        assert theme.SERIF == "Detective Serif" and theme.MONO == "Courier Prime" and theme.SANS == "Inter"
+    assert core.medium_text({"format": "DVD", "content_bytes": 7_300_000_000}) == ("DVD", "Dual Layer", "7.30 GB")
+    assert core.medium_text({"format": "Blu-ray", "content_bytes": 46_200_000_000,
+                             "titles": [{"video_info": {"height": 2160}}]})[:2] == ("4K UHD Blu-ray", "Dual Layer")
+    assert dd_app.split_title("Psych (2006)  ·  Season 1") == ("Psych", "(2006)  ·  Season 1")
+    assert dd_app.audio_summary({"titles": [{"id": "Title 1", "audio": [
+        {"lang": "en", "codec": "AC3", "channels": 6}, {"lang": "en", "codec": "AC3", "channels": 2, "kind": "commentary"}]}]},
+        [{"title_id": "Title 1"}]) == "English (AC3 5.1)  •  English commentary (AC3 2.0)"
+
+
+def test_themed_menu_shows_and_picks(gui, monkeypatch):
+    """The app's own drop-down: shown in its colours, a click on an entry runs it and closes it."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.ThemedMenu, "headless", False)
+    picked, var = [], tk.StringVar(value="b")
+    m = dd_app.ThemedMenu(root)
+    m.add_command(label="Header:", state="disabled")
+    m.add_radiobutton(label="A", value="a", variable=var)
+    m.add_radiobutton(label="B", value="b", variable=var)
+    m.add_separator()
+    m.add_command(label="Do it", command=lambda: picked.append(1))
+    assert m.index("end") == 4 and m.type(3) == "separator" and m.entrycget(4, "label") == "Do it"
+    m.tk_popup(10, 10)
+    root.update()
+    assert m.top is not None and m.top.winfo_ismapped()
+    m.invoke(0)                                       # a header does nothing
+    assert m.top is not None and not picked
+    m.invoke(1)
+    assert var.get() == "a" and m.top is None         # chosen, and closed
+    m.tk_popup(10, 10)
+    m.invoke(4)
+    assert picked == [1] and m.top is None
+    m.delete(0, "end")
+    assert m.index("end") is None

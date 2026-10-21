@@ -42,6 +42,9 @@ jobs:
             '/data/*/*/*/release.json' \
             '/data/*/*/*/disc*.json' \
             '/data/*/*/*/disc[0-9]*.txt' \
+            '/data/*/*/*/front.jpg' \
+            '/data/sets/*/boxset.json' \
+            '/data/sets/*/front.jpg' \
             '/LICENSE'
           git checkout
           echo "COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
@@ -55,6 +58,9 @@ jobs:
           if [ "$prev" = "$COMMIT" ] && [ "${{ github.event_name }}" = "schedule" ]; then
             echo "TheDiscDB unchanged since $COMMIT"; echo "skip=1" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Install Pillow (box-art fingerprints)
+        run: pip install pillow
 
       - name: Build index
         if: steps.check.outputs.skip != '1'

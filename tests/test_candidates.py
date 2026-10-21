@@ -1,6 +1,7 @@
 """Ranking IMDb candidates from the label and the disc's facts."""
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,6 +25,44 @@ def test_movies(imdb, query, facts, expected):
     c = core.imdb_candidates(imdb, [(query, False)], "movie", facts)
     assert core.is_probable(c), c[:2]
     assert (c[0]["name"], c[0]["year"]) == expected
+
+
+def test_run_together_label_words(imdb):
+    """HARRYPOTTER3: no title has the word "harrypotter", so split it into title words."""
+    assert core.split_runon(imdb, "Princeofegypt") == "Prince Of Egypt"
+    assert core.split_runon(imdb, "Shrek 2") is None                  # real words stay as they are
+    c = core.imdb_candidates(imdb, [("Theprinceofegypt", False)], "movie", {"mastered": "2018-01", "feature_minutes": 99})
+    assert core.is_probable(c) and c[0]["name"] == "The Prince of Egypt"
+    # the label also lost a small word and an apostrophe: spelled as the title writes it
+    assert core.split_runon(imdb, "Itswonderfullife Dom") == "It's a Wonderful Life Dom"
+    c = core.imdb_candidates(imdb, [("Itswonderfullife", False)], "movie", {"mastered": "2007-09", "feature_minutes": 131})
+    assert core.is_probable(c) and c[0]["name"] == "It's a Wonderful Life"
+
+
+def test_a_film_number_alone_is_a_guess(imdb):
+    """Counting films by number needs the disc to agree: the runtime close, or the series' closest,
+    or the label's own words in the title. Otherwise it's only a guess to check."""
+    loose = {"mastered": "2003-12", "feature_minutes": 88}       # nearer the 3rd film's 83 min
+    c = core.imdb_candidates(imdb, [("An American Tail 2", False)], "movie", loose)
+    assert not core.is_probable(c) and core.adopt_guess(c)["year"] == 1991
+    # no runtime to check: a little-known look-alike (1988) still isn't counted as one of its films
+    c = core.imdb_candidates(imdb, [("An American Tail 2", False)], "movie", {"mastered": "2003-12"})
+    assert not core.is_probable(c) and core.adopt_guess(c)["name"] == "An American Tail: Fievel Goes West"
+    c = core.imdb_initials(imdb, "AT2_FIEVEL", {"mastered": "2003-12"})       # HP5_PHOENIX: the word confirms
+    assert core.is_probable(c) and c[0]["year"] == 1991
+    assert not core.is_probable(core.imdb_initials(imdb, "AT2", loose))
+
+
+def test_one_word_series_label_goes_by_runtime(imdb):
+    """MUPPET_US: the label names only the series. No film named by it runs as long as the disc,
+    so the series' closest runtime (either cut: theatrical 86, extended 89) is the guess."""
+    facts = {"mastered": "2005-09", "feature_minutes": 89,
+             "feature_cuts": core.feature_cuts([85.8 * 60, 88.9 * 60])}
+    c = core.imdb_candidates(imdb, [("Gizmo", False)], "movie", facts)
+    assert c[0]["name"] == "The Gizmo Christmas Carol" and not core.is_probable(c)
+    # a film that does run as long keeps its place
+    c = core.imdb_candidates(imdb, [("Gizmo", False)], "movie", {"mastered": "2005-09", "feature_minutes": 95})
+    assert c[0]["name"] == "The Gizmo Movie"
 
 
 def test_franchise_needs_whole_words(imdb):
@@ -109,6 +148,17 @@ def test_tmdb_matches_carry_their_imdb_id(monkeypatch):
     assert any(p.get("append_to_response") == "external_ids" for p in seen)
 
 
+def test_tmdb_guesses_take_the_imdb_title(imdb, imdb_dir):
+    """TMDB's English title can be the British one (Philosopher's Stone); IMDb's is the
+    American (Sorcerer's Stone), and the IMDb id is what names the file: use IMDb's."""
+    n = imdb.execute("SELECT id FROM titles WHERE title='Hercules' AND year=1997").fetchone()[0]
+    cands = [{"source": "TMDB", "kind": "movie", "imdb_id": core.tt(n), "name": "Hercules (UK title)", "year": 1997},
+             {"source": "TMDB", "kind": "movie", "imdb_id": None, "name": "No IMDb id", "year": 2000}]
+    core.imdb_names(SimpleNamespace(imdb_dir=imdb_dir), cands)
+    assert (cands[0]["name"], cands[0]["tmdb_name"]) == ("Hercules", "Hercules (UK title)")
+    assert cands[1]["name"] == "No IMDb id"
+
+
 def test_code_labels_try_the_title_initials(imdb):
     """BCS0NNW1: no words to search, but B C = The Black Cauldron (80 min, by far the best known)."""
     facts = {"mastered": "2010-05", "feature_minutes": 80}
@@ -120,6 +170,15 @@ def test_code_labels_try_the_title_initials(imdb):
     assert core.imdb_initials(imdb, "SISTER_ACT2", facts) == []    # words with a number, not initials
     assert core.imdb_initials(imdb, "BLACKCAUL2", facts) == []     # too long a letter run for initials
     assert core.imdb_initials(imdb, "BCS0NNW1", {"mastered": "2010-05"}) == []   # no feature length
+
+
+def test_initials_with_a_film_number(imdb):
+    """HP4 = the 4th Harry Potter film: the franchise whose titles start with those initials,
+    its films by release year (not look-alikes with a sliver of its votes); runtime has to fit."""
+    c = core.imdb_initials(imdb, "AT2", {"mastered": "2003-12", "feature_minutes": 75})
+    assert core.is_probable(c) and (c[0]["name"], c[0]["year"]) == ("An American Tail: Fievel Goes West", 1991)
+    assert core.imdb_initials(imdb, "AT_2", {"mastered": "2003-12"})[0]["year"] == 1991    # no runtime: still
+    assert core.imdb_initials(imdb, "AT2", {"mastered": "2003-12", "feature_minutes": 140}) == []   # not this film
 
 
 def test_initials_can_skip_the_first_word(imdb):
@@ -143,6 +202,9 @@ def test_one_word_titles_are_coded_by_their_consonants(imdb):
     assert "Tarzan Escapes" not in [x["name"] for x in c]
     c = core.imdb_initials(imdb, "NGE0NNW1", {"mastered": "2005-09", "feature_minutes": 79})
     assert c[0]["name"] == "The Emperor's New Groove"
+    # the letters needn't end the word: RKM0NNF1 is RocKetMan, not the R K of Repli-Kate
+    c = core.imdb_initials(imdb, "RKM0NNF1", {"mastered": "2005-02", "feature_minutes": 94})
+    assert c[0]["name"] == "RocketMan" and "Repli-Kate" in [x["name"] for x in c]
 
 
 def test_initials_also_list_the_alternatives(imdb):
@@ -171,3 +233,50 @@ def test_season_from_the_shows_dates():
     assert core.season_from_dates(sherlock, "2010-10")[0] == 1
     assert core.season_from_dates(sherlock, "2015-03") == (None, None)       # three were out by then
     assert core.season_from_dates({1: 2002}, None)[0] == 1                    # Firefly: only one season
+
+
+def test_a_year_off_by_one_still_counts(imdb):
+    """V for Vendetta is 2006 in TheDiscDB (its release) and 2005 on IMDb (its premiere): a strict
+    year match made the same-titled 30-minute making-of from 2006 win over the film itself."""
+    c = core.imdb_candidates(imdb, [("Gone in 60 Seconds", False)], "movie",
+                             {"mastered": "2008-04", "feature_minutes": 118, "truth_year": 2001})
+    assert (c[0]["name"], c[0]["year"]) == ("Gone in 60 Seconds", 2000)
+
+
+def test_gemini_reads_the_cover_and_imdb_checks_it(imdb_dir, tmp_path, monkeypatch):
+    """With a Gemini key: nothing confident, the disc has a picture, so Gemini is asked. Its
+    answer only counts once IMDb has the film and the runtime fits the disc."""
+    pic = tmp_path / "cover.png"
+    pic.write_bytes(b"\x89PNG not really")
+    asked = []
+
+    def fake(key, question, image=None, timeout=40):
+        asked.append((key, question, image))
+        return '```json\n{"title": "Tarzan", "year": 1999, "kind": "film"}\n```', "gemini-test"
+    monkeypatch.setattr(core, "gemini_ask", fake)
+    args = core.default_args(imdb_dir=imdb_dir, gemini_key="k")
+    rep = {"candidates": [], "facts": {"feature_minutes": 88}, "format": "DVD", "label": "DVD_VIDEO",
+           "label_parsed": {"placeholder": True}, "mastered": "2000-02"}
+    c = core.ask_gemini(rep, [str(pic)], args, "movie")
+    assert c["name"] == "Tarzan" and core.is_probable(rep["candidates"])
+    assert asked[0][0] == "k" and "JSON" in asked[0][1] and "88 minutes" in asked[0][1]
+    assert rep["ai_answers"][0]["model"] == "gemini-test"
+    # the same answer for a disc whose feature is far longer: only a guess to check
+    rep = dict(rep, candidates=[], facts={"feature_minutes": 140})
+    c = core.ask_gemini(rep, [str(pic)], args, "movie")
+    assert c["score"] < 60 and not core.is_probable(rep["candidates"])
+    # a made-up film IMDb doesn't have: nothing added
+    monkeypatch.setattr(core, "gemini_ask", lambda *a, **k: ('{"title": "Zzyzx Moonfall Quest", "year": 2003}', "m"))
+    rep = dict(rep, candidates=[])
+    assert core.ask_gemini(rep, [str(pic)], args, "movie") is None and rep["candidates"] == []
+
+
+@pytest.mark.parametrize("text, want", [
+    ('{"title": "The Swan Princess", "year": 1994, "kind": "film"}', ("The Swan Princess", 1994)),
+    ("**The Swan Princess (1994)**", ("The Swan Princess", 1994)),
+    ('{"title": null}', None),
+    ("I can't tell from this picture.", None),
+])
+def test_ai_answers_are_read(text, want):
+    a = core.parse_ai_answer(text)
+    assert (a and (a["title"], a["year"])) == want or (a is None and want is None)

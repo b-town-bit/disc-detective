@@ -66,3 +66,51 @@ def test_british_series_number_is_the_season():
 def test_series_means_season_only_on_a_tv_disc(label, expected):
     p = parse_label(label)
     assert (p["query"], p["season"], p["disc"]) == expected
+
+
+def test_placeholder_labels_are_no_label():
+    """LOGICAL_VOLUME_ID, BDROM, DVD_VIDEO: the authoring tool's default, not a title."""
+    for raw in ("LOGICAL_VOLUME_ID", "BDROM", "DVD_VIDEO", "Untitled", "NEW VOLUME", "DISC1"):
+        p = parse_label(raw)
+        assert p["placeholder"] and p["query"] == "", raw
+    assert not parse_label("SHREK_2").get("placeholder")
+    assert parse_label("DISC_OF_THE_DEAD")["query"]          # a placeholder word inside a title is fine
+
+
+def test_disc_metadata_names_lose_the_format():
+    """The Blu-ray's own title says "Miracle Blu-ray™": the film is "Miracle"."""
+    from disc_detective.core import meta_title
+    assert meta_title("Miracle Blu-ray™") == "Miracle"
+    assert meta_title("Cars Blu-ray Disc") == "Cars"
+    assert meta_title("Avatar 4K Ultra HD") == "Avatar"
+    assert meta_title("Shrek®") == "Shrek"
+    assert meta_title("Blu-ray™") == ""                 # only the format: no name at all
+    assert meta_title("The Dark Knight") == "The Dark Knight"
+
+
+def test_cover_art_needs_ffmpeg_to_read():
+    from disc_detective.core import status
+    rep = {"label_parsed": parse_label("DVD_VIDEO"), "candidates": [], "search_queries": [], "discdb": {"hit": None},
+           "cover": {"found": "JACKET_P/J00___5L.MP2", "image": None, "note": "install ffmpeg to decode"}}
+    assert "needs ffmpeg" in status(rep, None)
+
+
+def test_cover_text_is_read_as_phrases(tmp_path):
+    """A menu-sized cover still: the title phrase comes back on its own, apart from the blurb."""
+    import shutil
+    from disc_detective.core import ocr
+    PIL = pytest.importorskip("PIL")
+    if not shutil.which("tesseract"):
+        pytest.skip("no tesseract")
+    from PIL import Image, ImageDraw, ImageFont
+    im = Image.new("RGB", (720, 480), "white")
+    d = ImageDraw.Draw(im)
+    try:
+        font = ImageFont.load_default(size=40)
+    except TypeError:
+        pytest.skip("Pillow too old for a sized default font")
+    d.text((60, 80), "KICK BACK", fill="black", font=font)
+    d.text((60, 300), "bigger kicks", fill="black", font=ImageFont.load_default(size=22))
+    path = str(tmp_path / "cover.png")
+    im.save(path)
+    assert "KICK BACK" in (ocr(path) or [])

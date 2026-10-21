@@ -57,6 +57,50 @@ def test_tmdb_poster_with_credit(tmp_path, monkeypatch):
     assert calls == ["/find/tt0000002", core.TMDB_IMG + "/p.jpg"]
 
 
+def foreign_index(releases):
+    import sqlite3
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE posters (imdb, folder, title, year)")
+    con.execute("CREATE TABLE discs (path, release, front)")
+    f = "movie/Harry Potter and the Philosopher's Stone (2001)"
+    con.execute("INSERT INTO posters VALUES ('tt0241527', ?, 'x', 2001)", (f,))
+    for r in releases:
+        con.execute("INSERT INTO discs VALUES (?, ?, 1)", (f + "/" + r.lower().replace(" ", "-") + "/disc01.json", r))
+    return con, f
+
+
+def test_another_markets_poster_gives_way_to_tmdb(tmp_path, monkeypatch):
+    """TheDiscDB has the film only as a German release, under the British title: its poster is
+    probably that market's art, so TMDB's goes first (TheDiscDB's stays the fallback)."""
+    con, f = foreign_index(["2017 4K UHD - German"])
+    us = "Harry Potter and the Sorcerer's Stone"
+    assert core.foreign_shelf(f, us, index=con)
+    assert not core.foreign_shelf(f, "Harry Potter and the Philosopher's Stone", index=con)   # same title
+    us_con, _ = foreign_index(["2017 4K UHD - German", "2001 DVD"])
+    assert not core.foreign_shelf(f, us, index=us_con)        # a US release too: its poster is fine
+    calls = []
+    monkeypatch.setattr(core, "tmdb_get", lambda key, path, **p: calls.append(path) or
+                        {"movie_results": [{"poster_path": "/p.jpg"}]})
+
+    class R(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: calls.append(req.full_url) or R(fixtures.POSTER_JPG))
+    for d in ("art", "art2", "art3"):
+        (tmp_path / d).mkdir()
+    a = core.poster_for_imdb("tt0241527", str(tmp_path / "art"), key="k" * 32, index=con, title=us)
+    assert a["source"] == "TMDB" and calls[0] == "/find/tt0241527"
+    calls.clear()
+    b = core.poster_for_imdb("tt0241527", str(tmp_path / "art2"), key="k" * 32, index=us_con, title=us)
+    assert b["source"] == "TheDiscDB" and "cover.jpg" in calls[0]
+    calls.clear()
+    c = core.poster_for_imdb("tt0241527", str(tmp_path / "art3"), index=con, title=us)   # no key: TheDiscDB's
+    assert c["source"] == "TheDiscDB"
+
+
 def test_nothing_available_is_fine(tmp_path):
     rep = {"content_hash": "3" * 32, "discdb": {"hit": None},
            "candidates": [{"kind": "movie", "imdb_id": "tt0000003", "name": "X", "year": 1900, "score": 99}]}
@@ -187,3 +231,48 @@ def test_every_picture_for_a_disc(github, tmp_path, movie_disc, discdb_repo, mon
           if o["source"] == "TMDB"]
     assert [o["src"] for o in tm] == [core.TMDB_IMG + "/b.jpg", core.TMDB_IMG + "/a.jpg"]   # best voted first
     con.close()
+
+
+def _artwork(path, seed, size=(300, 450)):
+    """A made-up cover: coloured blocks, different for every seed."""
+    import random
+    from PIL import Image, ImageDraw
+    rnd = random.Random(seed)
+    im = Image.new("RGB", size, tuple(rnd.randrange(256) for _ in range(3)))
+    d = ImageDraw.Draw(im)
+    for _ in range(14):
+        x, y = rnd.randrange(size[0]), rnd.randrange(size[1])
+        d.ellipse((x - 60, y - 60, x + rnd.randrange(30, 140), y + rnd.randrange(30, 140)),
+                  fill=tuple(rnd.randrange(256) for _ in range(3)))
+    im.save(path)
+    return im
+
+
+def test_cover_line_up_finds_the_same_artwork(tmp_path):
+    """A DVD's cover still (black bars, squeezed, lossy) is the box art TheDiscDB has for another
+    release of the film: that candidate moves up; a different film's art doesn't."""
+    import sqlite3
+    import pytest
+    Image = pytest.importorskip("PIL.Image")
+    art = tmp_path / "art"
+    art.mkdir()
+    front = _artwork(str(art / "tt0000002_2005_widescreen_dvd_front.jpg"), 1)
+    _artwork(str(art / "tt0000001_2010_bluray_front.jpg"), 2)
+    still = Image.new("RGB", (720, 480))
+    still.paste(front.resize((350, 430)), (185, 25))
+    still.save(str(tmp_path / "still.jpg"), quality=35)
+    index = sqlite3.connect(":memory:")
+    index.execute("CREATE TABLE posters (imdb TEXT, folder TEXT, title TEXT, year INT)")
+    index.execute("CREATE TABLE discs (path TEXT, front INT)")
+    for imdb, folder, rel in (("tt0000001", "movie/Gizmo (1982)", "2010-bluray"),
+                              ("tt0000002", "movie/Gizmo (2004)", "2005-widescreen-dvd")):
+        index.execute("INSERT INTO posters VALUES (?, ?, 'Gizmo', 0)", (imdb, folder))
+        index.execute("INSERT INTO discs VALUES (?, 1)", ("%s/%s/disc01.json" % (folder, rel),))
+    rep = {"candidates": [
+        {"name": "Gizmo", "year": 1982, "imdb_id": "tt0000001", "kind": "movie", "score": 70.0, "why": "name"},
+        {"name": "Gizmo", "year": 2004, "imdb_id": "tt0000002", "kind": "movie", "score": 60.0, "why": "name"}]}
+    seen = core.cover_lineup(rep, [str(tmp_path / "still.jpg")], art_args(tmp_path, offline=True), index)
+    assert rep["candidates"][0]["year"] == 2004 and core.is_probable(rep["candidates"])
+    assert "2005-widescreen-dvd" in rep["candidates"][0]["why"]
+    far = next(x for x in seen if x["year"] == 1982)
+    assert far["distance"] > 0.3 and "cover_match" not in rep["candidates"][1]

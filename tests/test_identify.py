@@ -161,6 +161,18 @@ def test_short_films_collection(tmp_path, imdb_dir):
     assert len(rep["plex_names"]) == 3
 
 
+def test_collection_beats_one_of_its_own_shorts(tmp_path, imdb_dir):
+    """The real disc also has a title no short explains, which lowers the collection's score
+    below A Close Shave's on its own (its runtime matches a title exactly). The short is one of
+    the collection's films, so the collection stands instead of the disc becoming that one film."""
+    disc = fixtures.make_shorts_bluray(str(tmp_path / "WALLACE_AND_GROMIT"), compilation=True)
+    rep, _ = run(disc, tmp_path, imdb_dir=imdb_dir, offline=True, label="WALLACE_AND_GROMIT")
+    assert rep["kind"] == "collection" and rep["match"]["kind"] == "collection"
+    assert [i["name"] for i in rep["candidates"][0]["items"]] == [
+        "A Grand Day Out", "Wallace & Gromit: The Wrong Trousers", "Wallace & Gromit: A Close Shave"]
+    assert len(rep["plex_names"]) == 3
+
+
 def test_confirmed_collection_rebuilds_from_its_ids(tmp_path, imdb_dir):
     disc, rep, args = _shorts(tmp_path, imdb_dir)
     films = [(i["title_id"], i["imdb_id"]) for i in rep["candidates"][0]["items"]]
@@ -216,3 +228,44 @@ def test_exact_series_name_beats_a_partial_film_match(tmp_path, imdb_dir):
     # an exact film name stays a film: the same disc labelled CHICKEN_RUN
     rep, _ = run(disc, tmp_path, imdb_dir=imdb_dir, offline=True, label="CHICKEN_RUN")
     assert rep["kind"] == "movie"
+
+
+def test_a_bonus_disc_is_extras_named_after_its_film_disc(tmp_path, imdb_dir):
+    """SWISS_FAMILY_ROBINSON_BONUS: shaped like a TV disc (a documentary, some 20-minute pieces),
+    but the label says it's the set's bonus disc: all extras, under the film disc's answer."""
+    film = fixtures.make_movie_bluray(str(tmp_path / "GONE_IN_60_SECONDS"), minutes=118, seed=3)
+    rep, args = run(film, tmp_path, imdb_dir=imdb_dir, offline=True, label="GONE_IN_60_SECONDS")
+    assert core.is_probable(rep["candidates"]) and rep["candidates"][0]["year"] == 2000
+    bonus = fixtures.make_shorts_bluray(str(tmp_path / "GONE_IN_60_SECONDS_BONUS"))
+    rep2, _ = run(bonus, tmp_path, imdb_dir=imdb_dir, offline=True, label="GONE_IN_60_SECONDS_BONUS")
+    assert rep2["label_parsed"]["bonus"] and rep2["extras_disc"] and rep2["kind"] == "movie"
+    assert not [t for t in rep2["titles"] if t["role"] in ("feature", "episode", "version")]
+    assert rep2["bonus_of"].startswith("Gone in 60 Seconds (2000) {imdb-tt")
+    assert rep2["best_guess"] == "Gone in 60 Seconds (2000)"
+    assert rep2["identified_by"] == "your library (the set's film disc)"
+    # with no film disc in the library: still extras, searched under the title without "Bonus"
+    rep3, _ = run(bonus, tmp_path, imdb_dir=imdb_dir, offline=True, label="GONE_IN_60_SECONDS_BONUS",
+                  db=str(tmp_path / "empty.sqlite"))
+    assert rep3["extras_disc"] and rep3["search_queries"][0] == "Gone In 60 Seconds" and not rep3.get("bonus_of")
+
+
+def test_a_short_can_premiere_on_its_own_disc(tmp_path, imdb):
+    """Kung Fu Panda: Secrets of the Scroll (2016) premiered on a disc mastered in October 2015:
+    a short made for the set comes out after its disc is mastered, so a year's grace."""
+    disc = fixtures.make_shorts_bluray(str(tmp_path / "WALLACE_AND_GROMIT"))
+    fmt, base = core.detect_format(disc)
+    titles = core.parse_bluray(base)["titles"]
+    core.classify(titles, fmt)
+    for mastered, years in (("1994-06", [1989, 1993, 1995]), ("1993-06", [1989, 1993])):
+        c = core.imdb_collection(imdb, [("Wallace And Gromit", False)], titles, {"mastered": mastered})
+        assert [i["year"] for i in c["items"]] == years, mastered      # two years after: still too late
+
+
+def test_shorts_can_run_newest_first(imdb):
+    """The Kung Fu Panda Secrets disc runs its shorts newest first. Here: Loaf and Death (2008),
+    A Close Shave, The Wrong Trousers, then A Grand Day Out (1989), the only 23-minute one."""
+    mk = lambda i, secs: {"id": "%05d.mpls" % i, "role": "episode", "duration": secs, "segments": ((str(i), 0, 1),)}
+    titles = [mk(1, 1800), mk(2, 1830), mk(3, 1860), mk(4, 23 * 60)]
+    c = core.imdb_collection(imdb, [("Wallace And Gromit", False)], titles, {"mastered": "2010-01"})
+    assert [i["year"] for i in c["items"]] == [2008, 1995, 1993, 1989]
+    assert "newest first" in c["why"]
