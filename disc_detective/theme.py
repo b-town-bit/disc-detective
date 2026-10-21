@@ -267,6 +267,11 @@ def setup(root):
            lightcolor=[("selected", VELLUM_100)],
            padding=[("selected", (14, 5))],          # clam shrinks the selected tab; keep it the same size
            expand=[("selected", (0, 4, 0, 0))])     # then grow it upwards only, so no tab edge moves sideways
+    st.configure("TCombobox", fieldbackground=CARD, background=VELLUM_100, bordercolor=BRASS_400,
+                 lightcolor=CARD, darkcolor=CARD, arrowcolor=BRASS_700, padding=2)
+    st.map("TCombobox", fieldbackground=[("readonly", CARD)], background=[("active", VELLUM_200)],
+           selectbackground=[("readonly", CARD)], selectforeground=[("readonly", INK)],
+           bordercolor=[("focus", BRASS_600)])
     st.configure("Treeview", background=CARD, fieldbackground=CARD, foreground=INK, bordercolor=BRASS_400,
                  lightcolor=CARD, darkcolor=CARD)
     st.map("Treeview", background=[("selected", BRASS_200)], foreground=[("selected", INK)])

@@ -66,6 +66,8 @@ disc-detective D:\                     investigate a disc (or a folder backup)
 disc-detective D:\ --json              the full report as JSON
 disc-detective --list                  every disc you've scanned
 disc-detective --set-truth 3EBA9FFF "Psych S1 D2"     confirm a disc; instant next time
+disc-detective --to-submit            list your discs TheDiscDB doesn't have yet
+disc-detective --to-improve           list discs TheDiscDB has, with titles worth labelling
 disc-detective --packet 3EBA9FFF --makemkv-log disc02.txt   help submit a disc to TheDiscDB
 disc-detective --update-data           refresh IMDb and TheDiscDB data now
 ```

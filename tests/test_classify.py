@@ -528,3 +528,22 @@ def test_a_pip_track_built_into_the_film_is_optional():
     assert kind == "movie" and len(feat) == 1
     assert "picture-in-picture" not in feat[0]["video"]           # optional: like a spare soundtrack
     assert not any(t.get("edition") == "Picture-in-Picture" for t in ts)
+
+
+def test_pieces_of_a_seamless_film_are_not_extras():
+    """Gladiator 4K: the film is 22 clips, and many have a playlist of their own. Those are pieces
+    of the film, not extras: marked "segment", so Include extras doesn't rip them. A real extra,
+    and a short film whose two clips aren't the film's, stay extras."""
+    film = ",".join("%05d" % n for n in range(498, 520))
+    titles = [{"id": "00389.mpls", "role": "feature", "duration": 9300, "clip_list": film},
+              {"id": "00356.mpls", "role": "extra", "duration": 1030, "clip_list": "00498"},
+              {"id": "00362.mpls", "role": "extra", "duration": 660, "clip_list": "00504,00505"},
+              {"id": "00700.mpls", "role": "extra", "duration": 900, "clip_list": "00700"},
+              {"id": "00701.mpls", "role": "extra", "duration": 300, "clip_list": "00498,00701"}]
+    assert core.mark_film_pieces(titles) == 2
+    assert [t["role"] for t in titles] == ["feature", "segment", "segment", "extra", "extra"]
+    assert "00389.mpls" in titles[1]["note"]
+    # a two-clip feature (logo + film) isn't seamless branching: nothing is marked
+    two = [{"id": "1", "role": "feature", "duration": 6000, "clip_list": "00001,00002"},
+           {"id": "2", "role": "extra", "duration": 600, "clip_list": "00002"}]
+    assert core.mark_film_pieces(two) == 0 and two[1]["role"] == "extra"

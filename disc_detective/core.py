@@ -31,6 +31,8 @@ Usage:
   disc-detective --list                           (your library of scanned discs)
   disc-detective --set-truth 3EBA9FFF "Psych S1 D2" (confirm a disc; instant next time)
   disc-detective --update-data                    (refresh IMDb + TheDiscDB data now)
+  disc-detective --to-submit                      (your discs TheDiscDB doesn't have yet)
+  disc-detective --to-improve                     (discs TheDiscDB has, with titles to label)
   disc-detective --packet 3EBA9FFF --makemkv-log disc02.txt   (TheDiscDB submission)
   disc-detective D:\ --keep-evidence              (dev: keep IFOs/playlists for --corpus)
   disc-detective --corpus                         (dev: re-parse and score kept discs)
@@ -1483,13 +1485,33 @@ def as_movie(titles):
     return True
 
 
+def mark_film_pieces(titles):
+    """A 4K disc built for seamless branching keeps its film as many clips, and some of those
+    clips get a playlist of their own (Gladiator's 00356.mpls is the film's first 17 minutes):
+    such a title is a piece of the film, not an extra, so it isn't ripped with the extras.
+    Marks them role "segment"; returns how many."""
+    films = [t for t in titles if t.get("role") in ("feature", "version")
+             and len((t.get("clip_list") or "").split(",")) >= 3]
+    n = 0
+    for t in titles:
+        clips = [c for c in (t.get("clip_list") or "").split(",") if c]
+        if t.get("role") != "extra" or not clips:
+            continue
+        whole = next((f for f in films if set(clips) <= set(f["clip_list"].split(","))
+                      and len(clips) < len(f["clip_list"].split(","))), None)
+        if whole:
+            t["role"], t["note"] = "segment", "part of the film (one piece of %s)" % whole["id"]
+            n += 1
+    return n
+
+
 def as_tv(titles):
     """The label says this is a season's disc (SMALLVILLE_SEASON_10_DISC_6) but the structure
     read it as a film, usually because one title is a double-length episode (a two-hour
     finale). Reread it as episodes: every title of at least 40% of the longest (and at least
     18 minutes) is an episode, shorter ones stay extras; play-alls and copies keep their role.
     Returns False if nothing on the disc looks like an episode."""
-    keep = ("junk", "loop", "duplicate", "play-all", "decoy")
+    keep = ("junk", "loop", "duplicate", "play-all", "decoy", "segment")
     cands = [t for t in titles if t.get("role") not in keep and not t.get("interactive")]
     if not cands:
         return False
@@ -2399,7 +2421,7 @@ def label_double_feature(con, query, titles, facts):
                 if n not in found or found[n][0] < len(span):
                     found[n] = (len(span), span, (n, ttype, title, year, runtime, votes))
     films = sorted(found.values(), key=lambda x: (-x[0], -x[2][5]))
-    playable = [t for t in titles if t.get("role") not in ("junk", "loop", "duplicate", "play-all", "decoy")
+    playable = [t for t in titles if t.get("role") not in ("junk", "loop", "duplicate", "play-all", "decoy", "segment")
                 and t.get("duration", 0) >= 10 * 60]
     fits = lambda t, rt: rt * 0.8 - 3 <= t["duration"] / 60 <= rt * 1.25 + 3 or abs(t["duration"] / 60 - rt) <= 3
     best = None
@@ -2438,7 +2460,7 @@ def special_on_disc(con, queries, titles, facts):
     (Rudolph the Red-Nosed Reindeer, 1964: 47 minutes). Searches those kinds of title; the match
     has to be confident, and its runtime has to fit one title on the disc (+-3 min or 10%),
     which becomes the feature and the rest extras. Returns the candidates, or None."""
-    playable = [t for t in titles if t.get("role") not in ("junk", "loop", "duplicate", "play-all", "decoy")
+    playable = [t for t in titles if t.get("role") not in ("junk", "loop", "duplicate", "play-all", "decoy", "segment")
                 and t.get("duration", 0) >= 10 * 60]
     if not playable:
         return None
@@ -3846,6 +3868,53 @@ def tvmaze_orders(imdb_id, cache_dir=None, online=True):
     return {"show": sid, "name": show.get("name"), "aired": aired, "dvd": dvd or None}
 
 
+def episode_name(series_imdb, season, episode, order="aired", tvmaze_dir=None, online=True, imdb_dir=None):
+    """An episode's title from its season and number: TVmaze's list in the order asked for (DVD
+    order where TVmaze has one, as on the disc's case), else IMDb's. None when neither knows it."""
+    season, episode = _int(season), _int(episode)
+    if not series_imdb or season is None or not episode:
+        return None
+    try:
+        orders = tvmaze_orders(series_imdb, tvmaze_dir, online)
+    except Exception:
+        orders = None
+    if orders:
+        if order == "dvd" and orders.get("dvd"):
+            for e in orders["dvd"]:
+                if e.get("season") == season and e.get("number") == episode:
+                    emb = (e.get("_embedded") or {}).get("episodes") or []
+                    name = e.get("name") or (emb[0].get("name") if emb else None)
+                    if name:
+                        return name
+        for e in orders.get("aired") or []:
+            if e.get("season") == season and e.get("number") == episode and e.get("name"):
+                return e["name"]
+    try:
+        con = imdb_open(imdb_dir or default_imdb_dir(), allow_download=False, log=lambda *a: None)
+    except Exception:
+        con = None
+    if con is not None:
+        try:
+            r = con.execute("SELECT title FROM episodes WHERE parent=? AND season=? AND episode=?",
+                            (int(series_imdb[2:]), season, episode)).fetchone()
+            if r and r[0] and not re.fullmatch(r"Episode #?[\d.]+", r[0]):
+                return r[0]
+        except Exception:
+            pass
+        finally:
+            con.close()
+    return None
+
+
+def series_of(con, h):
+    """A disc's series IMDb id, from your library (its match, or the id in your confirmed answer)."""
+    r = con.execute("SELECT imdb_id, truth, kind FROM discs WHERE hash=?", (h,)).fetchone()
+    if not r:
+        return None
+    m = re.search(r"\{imdb-(tt\d+)\}", r["truth"] or "")
+    return (m.group(1) if m else None) or r["imdb_id"]
+
+
 def _ep_code(season, numbers):
     numbers = sorted(n for n in numbers if n is not None)
     if not numbers:
@@ -4099,6 +4168,33 @@ def discdb_extras_disc(titles, hit):
     return True
 
 
+# a TheDiscDB "Trailer" or "Other" named like an ad for something else, not this film's trailer
+# (singular "Preview", "Promo", "Commercial", "TV Spot" are left alone: often this show's own
+# episode preview or this film's own spot, which are extras worth keeping)
+AD_RE = re.compile(r"\b(advert\w*|previews|commercials|sneak peeks|coming soon|also available|"
+                   r"other (titles|releases|dvds?|blu-?rays?|movies|films))\b", re.I)
+
+
+def discdb_promos(titles, hit):
+    """Titles TheDiscDB files as a Trailer (or Other) that are really ads for other releases:
+    "Advertisement for other CBS DVDs", "Previews (...)", "Commercials", "Also available from".
+    Made promos, which aren't ripped unless ticked. Returns the titles changed."""
+    items = {str(x.get("source") or "").lower(): x.get("item") or {} for x in (hit or {}).get("titles") or []}
+    changed = []
+    for t in titles:
+        clips = (t.get("clip_list") or "").split(",") if t.get("clip_list") else []
+        keys = [t["id"].lower()] + ([clips[0].lower() + ".m2ts"] if len(clips) == 1 else [])
+        m = re.fullmatch(r"Title (\d+)", t["id"])
+        if m:
+            keys += ["%02d" % int(m.group(1)), m.group(1)]
+        it = next((items[k] for k in keys if items.get(k)), {})
+        if it.get("type") in ("Trailer", "Other") and AD_RE.search(it.get("title") or "") \
+                and t.get("role") not in ("junk", "loop", "segment"):
+            t["role"], t["note"] = "promo", "TheDiscDB: %s \"%s\", which looks like an ad" % (it["type"], it["title"])
+            changed.append(t)
+    return changed
+
+
 def discdb_roles(titles, hit):
     """TheDiscDB names the disc's main movie, so trust it over our length-based guess: other
     film-length titles become alternate versions (close in length) or extras, and an overlong
@@ -4249,6 +4345,7 @@ def identify(root, args):
     lib = getattr(args, "library", None)
     step("prints")
     personal = personal_lookup(lib, fp["hash"]) if lib is not None and not sample else None
+    rep["labels"] = get_labels(lib, fp["hash"]) if lib is not None else {}   # yours: they name the rips
     rep["personal_hit"] = personal
 
     index_errors = []
@@ -4700,8 +4797,13 @@ def identify(root, args):
                                             key=lambda t: t["episode_index"])]
         rep["plex_names"] = plex_names(rep["candidates"][0], season, rep.get("episode_guess"), srcs,
                                        editions=eds)
+    mark_film_pieces(titles)
+    if db["hit"]:
+        discdb_promos(titles, db["hit"])
+    apply_labels(titles, rep.get("labels"))
     rep["titles"] = [{k: v for k, v in t.items() if k not in ("segments", "in_play_all", "item_chapters", "play_order")}
                      for t in titles]
+    labels_over_guess(rep)
     m = adopt_guess(rep["candidates"])
     rep["match"] = {"name": m["name"], "year": m.get("year"), "kind": m["kind"], "imdb_id": m.get("imdb_id"),
                     "sure": is_probable(rep["candidates"]), "source": m.get("source"),
@@ -5135,7 +5237,75 @@ CREATE TABLE IF NOT EXISTS titles (
     hash TEXT, title_id TEXT, role TEXT, duration REAL, chapters INT, episode_index INT,
     note TEXT, name TEXT, clips TEXT, PRIMARY KEY (hash, title_id));
 CREATE TABLE IF NOT EXISTS evidence (hash TEXT, path TEXT, data BLOB, PRIMARY KEY (hash, path));
+CREATE TABLE IF NOT EXISTS labels (
+    hash TEXT, title_id TEXT, type TEXT, title TEXT, season INT, episode INT, updated TEXT,
+    PRIMARY KEY (hash, title_id));
 """
+# titles: rewritten at every scan of the disc (tracks: its video / audio / subtitle tracks, JSON).
+# labels: what you say a title is (TheDiscDB's types and names); kept across rescans, used by
+# submission packets and to find what TheDiscDB could label better.
+DISCDB_ITEM_TYPES = ("MainMovie", "Episode", "Extra", "Featurette", "DeletedScene", "Trailer", "Interview",
+                     "Short", "Music", "Scene", "Other")
+# Disc Detective's own: an ad for something else ("coming soon to DVD", other releases'
+# previews). Not ripped unless ticked; TheDiscDB files these as trailers, so packets say Trailer.
+LABEL_TYPES = DISCDB_ITEM_TYPES + ("Promo",)
+LABEL_ROLES = {"MainMovie": "feature", "Episode": "episode", "Promo": "promo"}       # the rest: extras
+
+
+def labelled_episodes(labels):
+    """Your labels' episodes with a season and number: {title_id: (season, episode, title)}."""
+    return {tid: (_int(my.get("season")), _int(my.get("episode")), my.get("title"))
+            for tid, my in (labels or {}).items()
+            if my.get("type") == "Episode" and _int(my.get("season")) is not None and _int(my.get("episode"))}
+
+
+def labels_over_guess(rep):
+    """The scan's guessed names, minus the ones no title should carry: a duplicate (the same video
+    as another title, after your labels said which copy counts) needs no name of its own, nor a
+    title you've labelled (your label names it). Recomputed from the scan's names each time, so
+    clearing a label brings a guess back. Returns the names dropped."""
+    if "scan_plex_names" not in rep:
+        rep["scan_plex_names"] = list(rep.get("plex_names") or [])
+    roles = {t["id"]: t.get("role") for t in rep.get("titles") or []}
+    mine = rep.get("labels") or {}
+    keep, dropped = [], []
+    for n in rep["scan_plex_names"]:
+        src = n.partition(" -> ")[0].strip()
+        if roles.get(src) in ("duplicate", "segment", "promo") or (mine.get(src) or {}).get("type"):
+            dropped.append(n)
+        else:
+            keep.append(n)
+    rep["plex_names"] = keep
+    return dropped
+
+
+def apply_labels(titles, labels):
+    """Your labels decide what a title is: MainMovie the film, Episode an episode, Promo an ad,
+    anything else an extra. The scan's reading is kept as "scan_role", so clearing a label puts
+    it back. A title you labelled that the scan had as a copy of another ("same video as Title
+    4") becomes the one that counts, and the other becomes its copy. Returns the titles changed."""
+    by_id = {t["id"]: t for t in titles}
+    for t in titles:                                   # start from the scan's own reading
+        if "scan_role" in t:
+            t["role"], t["note"] = t.pop("scan_role"), t.pop("scan_note", t.get("note"))
+    changed = []
+    for tid, my in (labels or {}).items():
+        t = by_id.get(tid)
+        if not t or not my.get("type"):
+            continue
+        role = LABEL_ROLES.get(my["type"], "extra")
+        if t["role"] == "duplicate":
+            m = re.search(r"same video as (.+?)\s*$", t.get("note") or "")
+            twin = by_id.get(m.group(1)) if m else None
+            if twin and twin["id"] not in labels:
+                twin["scan_role"], twin["scan_note"] = twin["role"], twin.get("note")
+                twin["role"], twin["note"] = "duplicate", "same video as %s" % tid
+                changed.append(twin)
+        if t["role"] != role:
+            t["scan_role"], t["scan_note"] = t["role"], t.get("note")
+            t["role"], t["note"] = role, "your label: %s" % my["type"]
+            changed.append(t)
+    return changed
 
 
 def default_library():
@@ -5151,7 +5321,36 @@ def library_open(path):
     cols = {r[1] for r in con.execute("PRAGMA table_info(titles)")}
     if "clips" not in cols:                       # libraries made before clips were recorded
         con.execute("ALTER TABLE titles ADD COLUMN clips TEXT")
+    if "tracks" not in cols:                      # ... and before tracks were
+        con.execute("ALTER TABLE titles ADD COLUMN tracks TEXT")
     return con
+
+
+def title_tracks(t):
+    """A scanned title's tracks, as stored: {"video": {codec, height, aspect, ...}, "audio": [{lang,
+    codec, channels, kind}], "subs": [{lang, kind}]}; None when the scan read none."""
+    vi = {k: v for k, v in (t.get("video_info") or {}).items() if k not in ("audio", "subs")}
+    audio, subs = t.get("audio") or [], t.get("subs") or []
+    if not (vi or audio or subs):
+        return None
+    return json.dumps({"video": vi, "audio": audio, "subs": subs}, separators=(",", ":"))
+
+
+def get_labels(con, h):
+    """Your labels for a disc's titles: {title_id: {"type", "title", "season", "episode"}}."""
+    return {r["title_id"]: {"type": r["type"], "title": r["title"], "season": r["season"], "episode": r["episode"]}
+            for r in con.execute("SELECT * FROM labels WHERE hash=?", (h,))}
+
+
+def set_label(con, h, title_id, type_=None, title=None, season=None, episode=None):
+    """Label one title (TheDiscDB's terms); no type and no title clears it."""
+    with con:
+        if not (type_ or (title or "").strip()):
+            con.execute("DELETE FROM labels WHERE hash=? AND title_id=?", (h, title_id))
+        else:
+            con.execute("INSERT OR REPLACE INTO labels VALUES (?,?,?,?,?,?,?)",
+                        (h, title_id, type_ or None, (title or "").strip() or None, _int(season), _int(episode),
+                         now_iso()))
 
 
 def now_iso():
@@ -5238,9 +5437,10 @@ def record_disc(con, rep, fp, root, fmt, base, keep_evidence):
                 names[src.strip()] = name.strip()
         con.execute("DELETE FROM titles WHERE hash=?", (fp["hash"],))
         con.executemany("INSERT INTO titles (hash, title_id, role, duration, chapters, episode_index, note, "
-                        "name, clips) VALUES (?,?,?,?,?,?,?,?,?)", [
-            (fp["hash"], t["id"], t["role"], t["duration"], t["chapters"], t.get("episode_index"),
-             t.get("note") or None, names.get(t["id"]), t.get("clip_list")) for t in rep.get("titles") or []])
+                        "name, clips, tracks) VALUES (?,?,?,?,?,?,?,?,?,?)", [
+            (fp["hash"], t["id"], t.get("scan_role", t["role"]), t["duration"], t["chapters"], t.get("episode_index"),
+             t.get("scan_note", t.get("note")) or None, names.get(t["id"]), t.get("clip_list"), title_tracks(t))
+            for t in rep.get("titles") or []])
         stored = 0
         if keep_evidence:
             for rel, f in collect_evidence(root, fmt, base):
@@ -5269,6 +5469,10 @@ def episodes_before(con, show, season, disc, own_hash):
         return None
     total = 0
     for h in found.values():
+        mine = labelled_episodes(get_labels(con, h))
+        if mine:                                  # you numbered that disc's episodes: count them
+            total += len({(s, e) for s, e, _ in mine.values()})
+            continue
         lens = [x[0] for x in con.execute("SELECT duration FROM titles WHERE hash=? AND role='episode'", (h,))]
         if not lens:
             return None
@@ -5433,6 +5637,205 @@ def list_library(con):
         print("%-8s  %-7s  %-24s  %-34s  %-7s  %s" % (r["hash"][:8], r["format"], (r["label"] or "")[:24],
               shown[:34], r["ev"] or "-", (r["last_seen"] or "")[:16]))
     print('\n%d discs (* = confirmed truth). Set one with --set-truth HASH "Title (Year)"' % len(rows))
+
+
+SUBMIT_READY = ("ready", "confirmed by you")
+
+
+def submission_candidates(con, index=None, online=False):
+    """Discs in your library that TheDiscDB doesn't have yet, best first: ones you confirmed
+    (ready to submit), then probable answers (check the title first), then best guesses
+    (confirm first). Unidentified discs are left out (a submission needs the title). Each row:
+    hash, format, label, title, readiness, why, mastered, whether a MakeMKV log is saved."""
+    rows = con.execute("SELECT d.*, (SELECT COUNT(*) FROM titles t WHERE t.hash=d.hash) AS n_titles "
+                       "FROM discs d ORDER BY last_seen DESC").fetchall()
+    out = []
+    for r in rows:
+        status = r["status"] or ""
+        if status.startswith("identified (TheDiscDB)"):
+            continue                                  # TheDiscDB knew it when you scanned it
+        if index is not None and index_hit(index, r["hash"]):
+            continue                                  # added since
+        if online:
+            try:
+                if discdb_online(r["hash"]):
+                    continue
+            except Exception:
+                pass                                  # can't tell: keep it on the list
+        if r["truth"]:
+            rank, ready, why = 0, "ready", "confirmed by you"
+            title = r["truth"]
+        elif status.startswith(("probable", "identified")):
+            rank, ready, why = 1, "check", "probable match: check the title before submitting"
+            title = r["best_guess"]
+        elif r["best_guess"] and status.startswith("best guess"):
+            rank, ready, why = 2, "confirm", "best guess: confirm it in the app first"
+            title = r["best_guess"]
+        else:
+            continue
+        if not r["n_titles"]:
+            rank, ready, why = rank + 3, "rescan", why + "; scan it again (no titles recorded)"
+        out.append({"hash": r["hash"], "format": r["format"], "label": r["label"], "title": strip_tags(title or ""),
+                    "ready": ready, "why": why, "rank": rank, "mastered": r["mastered"],
+                    "makemkv_log": os.path.exists(makemkv_log_store(r["hash"])),
+                    "last_seen": r["last_seen"]})
+    out.sort(key=lambda x: (x["rank"], x["title"].lower()))
+    return out
+
+
+def list_submission_candidates(con, index=None, online=False):
+    rows = submission_candidates(con, index, online)
+    if not rows:
+        print("Every identified disc in your library is in TheDiscDB already (or nothing's identified yet).")
+        return rows
+    print("%-8s  %-7s  %-26s  %-36s  %-8s  %s" % ("hash", "format", "label", "title", "status", "MakeMKV log"))
+    print("-" * 110)
+    for r in rows:
+        print("%-8s  %-7s  %-26s  %-36s  %-8s  %s" % (r["hash"][:8], r["format"] or "", (r["label"] or "")[:26],
+              r["title"][:36], r["ready"], "saved" if r["makemkv_log"] else "-"))
+    ready = sum(1 for r in rows if r["ready"] == "ready")
+    print("\n%d discs not in TheDiscDB yet, %d ready (confirmed by you). Statuses: ready = confirmed;"
+          " check = probable, check the title; confirm = a best guess, confirm it first;"
+          " rescan = scan it again first." % (len(rows), ready))
+    print("Build a submission packet with --packet HASH (needs MakeMKV, or --makemkv-log FILE)."
+          " Submitting needs a GitHub account: https://thediscdb.com/contribute")
+    return rows
+
+
+def discdb_slug(text):
+    """thediscdb.com's address slugs: "Indiana Jones and the Raiders of the Lost Ark 1981" ->
+    indiana-jones-and-the-raiders-of-the-lost-ark-1981."""
+    t = re.sub(r"['\u2019]", "", (text or "").lower())
+    return re.sub(r"[^a-z0-9]+", "-", t).strip("-")
+
+
+def discdb_page(hit):
+    """The disc's page on thediscdb.com (its "Suggest edits" link is there), or None."""
+    if not (hit and hit.get("title") and hit.get("slug") and hit.get("disc")):
+        return None
+    kind = "series" if str(hit.get("type") or "").lower() in ("series", "tv", "show") else "movie"
+    name = "%s %s" % (hit["title"], hit["year"]) if hit.get("year") else hit["title"]
+    return "https://thediscdb.com/%s/%s/releases/%s/discs/%s" % (
+        kind, discdb_slug(name), hit["slug"], discdb_slug(hit["disc"]))
+
+
+IMPROVE_MIN = 120          # titles shorter than this (logos, menus, warnings) aren't worth labelling
+
+
+def improvement_candidates(con, index=None, online=False):
+    """Discs TheDiscDB has, but with titles it hasn't labelled that your scan found: the main
+    movie, episodes, or extras over two minutes (worth labelling; the scan finds them, it doesn't
+    know their names). A single-clip playlist whose clip is part of the
+    film (a 4K disc's seamless-branching pieces: Gladiator's 00356.mpls is the film's first
+    17 minutes) is a piece of the film, not an extra, and is left out."""
+    out = []
+    for r in con.execute("SELECT * FROM discs ORDER BY last_seen DESC").fetchall():
+        hit = index_hit(index, r["hash"]) if index is not None else None
+        if online and (hit or index is None):     # the site has the newest labels
+            try:
+                hit = discdb_online(r["hash"]) or hit
+            except Exception:
+                pass
+        if not hit:
+            continue
+        items = {str(t.get("source") or "").lower(): t.get("item") or {} for t in hit.get("titles") or []}
+        ours = [dict(t) for t in con.execute("SELECT * FROM titles WHERE hash=?", (r["hash"],))]
+        film_clips = set()
+        for t in ours:
+            if t["role"] in ("feature", "version", "duplicate", "play-all") and t["clips"] and "," in t["clips"]:
+                film_clips.update(t["clips"].split(","))
+        def labelled(it):
+            return bool(it.get("title") or it.get("type"))
+        # clips TheDiscDB already names (as a clip, or inside a playlist it labels): an extra that
+        # plays one is a play-all of named scenes, a scene with an intro, or another language's copy
+        named_clips = {k[:-5] for k, it in items.items() if k.endswith(".m2ts") and labelled(it)}
+        for t in ours:
+            if t["clips"] and labelled(items.get(t["title_id"].lower()) or {}):
+                named_clips.update(t["clips"].split(","))
+        missing = {"feature": [], "episode": [], "extra": []}
+        has_main = any(it.get("type") == "MainMovie" for it in items.values())
+        mine = get_labels(con, r["hash"])
+        yours, differs = [], []
+        for tid, my in mine.items():             # your labels: ones TheDiscDB lacks, or has otherwise
+            t = next((x for x in ours if x["title_id"] == tid), None)
+            if not t:
+                continue
+            clips = (t["clips"] or "").split(",") if t["clips"] else []
+            keys = [tid.lower()] + ([clips[0].lower() + ".m2ts"] if len(clips) == 1 else [])
+            m2 = re.fullmatch(r"Title (\d+)", tid)
+            if m2:
+                keys += ["%02d" % int(m2.group(1)), m2.group(1)]
+            item = next((items[k] for k in keys if items.get(k)), {})
+            if not labelled(item):
+                yours.append(tid)
+            elif (my["type"] and my["type"] != item.get("type")) or \
+                    (my["title"] and norm_title(my["title"]) != norm_title(item.get("title") or "")):
+                differs.append(tid)
+        for t in ours:
+            role = {"version": "feature"}.get(t["role"], t["role"])
+            if role not in missing or (t["duration"] or 0) < IMPROVE_MIN:
+                continue
+            if role == "feature" and has_main:
+                continue          # TheDiscDB names the film; our other "features" may be its maximizers
+            clips = (t["clips"] or "").split(",") if t["clips"] else []
+            if role == "extra" and len(clips) == 1 and clips[0] in film_clips:
+                continue                              # a piece of the film
+            if role == "extra" and named_clips.intersection(clips):
+                continue                              # plays something TheDiscDB already names
+            tid = t["title_id"]
+            keys = [tid.lower()]
+            if len(clips) == 1:
+                keys.append(clips[0].lower() + ".m2ts")
+            m = re.fullmatch(r"Title (\d+)", tid)
+            if m:                                     # TheDiscDB numbers DVD titles "01"
+                keys += ["%02d" % int(m.group(1)), m.group(1)]
+            item = next((items[k] for k in keys if items.get(k)), {})
+            if not labelled(item):
+                missing[role].append(tid)
+        for tid in yours:                         # labelled by you: missing there even if short
+            role = next((x["role"] for x in ours if x["title_id"] == tid), "extra")
+            bucket = {"feature": "feature", "version": "feature", "episode": "episode"}.get(role, "extra")
+            if tid not in missing[bucket]:
+                missing[bucket].append(tid)
+        n = sum(len(v) for v in missing.values())
+        if not n and not differs:
+            continue
+        what = []
+        if missing["feature"]:
+            what.append("the main movie" if len(missing["feature"]) == 1 else "%d versions of the film" % len(missing["feature"]))
+        if missing["episode"]:
+            what.append("%d episode%s" % (len(missing["episode"]), "" if len(missing["episode"]) == 1 else "s"))
+        if missing["extra"]:
+            what.append("%d extra%s" % (len(missing["extra"]), "" if len(missing["extra"]) == 1 else "s"))
+        if yours:
+            what.append("%d labelled by you" % len(yours))
+        if differs:
+            what.append("%d where your label differs" % len(differs))
+        out.append({"hash": r["hash"], "format": r["format"], "label": r["label"],
+                    "title": strip_tags(r["truth"] or r["best_guess"] or hit.get("title") or "").split(" | ")[0],
+                    "release": hit.get("release"), "disc": hit.get("disc"), "unlabelled": n,
+                    "page": discdb_page(hit), "yours": yours, "differs": differs,
+                    "what": ", ".join(what), "titles": missing,
+                    "labelled": sum(1 for it in items.values() if labelled(it))})
+    out.sort(key=lambda x: (-len(x["yours"]) - len(x["differs"]), -len(x["titles"]["feature"]) - len(x["titles"]["episode"]),
+                            -x["unlabelled"], x["title"].lower()))
+    return out
+
+
+def list_improvement_candidates(con, index=None, online=False):
+    rows = improvement_candidates(con, index, online)
+    if not rows:
+        print("Nothing to improve: TheDiscDB labels every title your scans found worth labelling.")
+        return rows
+    print("%-8s  %-7s  %-34s  %-30s  %s" % ("hash", "format", "title", "TheDiscDB disc", "unlabelled there"))
+    print("-" * 110)
+    for r in rows:
+        print("%-8s  %-7s  %-34s  %-30s  %s" % (r["hash"][:8], r["format"] or "", r["title"][:34],
+              ("%s, %s" % (r["disc"], r["release"]) if r["disc"] else r["release"] or "")[:30], r["what"]))
+    print("\n%d discs TheDiscDB has, with titles worth labelling that it hasn't labelled yet." % len(rows))
+    print("Watch them, then suggest the labels on the disc's page on thediscdb.com"
+          " (Suggest edits; needs a GitHub account).")
+    return rows
 
 
 def import_samples(con, folder):
@@ -5624,7 +6027,7 @@ def map_makemkv(mk_titles, our_titles, fmt):
             continue
         best = None
         for t in our_titles:
-            if t["title_id"] in used or t["role"] in ("junk", "loop", "duplicate", "play-all"):
+            if t["title_id"] in used or t["role"] in ("junk", "loop", "duplicate", "play-all", "segment"):
                 continue
             d = abs((t["duration"] or 0) - m["duration"])
             if d <= 2 and (best is None or d < best[0]):
@@ -5652,6 +6055,7 @@ def build_packet(con, prefix, log_text, out_dir, log_name=None):
     pairs = map_makemkv(mk["titles"], our, d["format"])
     truth = d["truth"] or d["best_guess"] or ""
     pt = parse_truth(truth)
+    mine = get_labels(con, h)
     labels = []
     for m in mk["titles"]:
         t, how = pairs.get(m["index"], (None, None))
@@ -5671,12 +6075,18 @@ def build_packet(con, prefix, log_text, out_dir, log_name=None):
                 entry["note"] = "episode %s on this disc - number not confirmed" % t.get("episode_index")
         elif role == "extra":
             entry["note"] = "choose Extra / Featurette / DeletedScene / Trailer / Interview / Other"
-        elif role in ("play-all", "duplicate", "junk", "loop"):
-            entry["note"] = "leave unlabeled (%s)" % role
+        elif role in ("play-all", "duplicate", "junk", "loop", "segment"):
+            entry["note"] = "leave unlabeled (%s)" % ("a piece of the film" if role == "segment" else role)
         elif not t and (m["duration"] or 0) < JUNK_MAX:
             entry["note"] = "leave unlabeled (short clip)"
         elif not t:
             entry["note"] = "no match in this disc's scan - check the log is from this disc"
+        my = mine.get(t["title_id"]) if t else None
+        if my:                                   # what you said this title is
+            entry.update(type={"Promo": "Trailer"}.get(my["type"], my["type"]) or entry["type"],
+                         title=my["title"] or entry["title"],
+                         season=my["season"] or entry["season"], episode=my["episode"] or entry["episode"],
+                         note="your label" + (" (a promo: TheDiscDB files those as Trailer)" if my["type"] == "Promo" else ""))
         labels.append(entry)
     matched = sum(1 for l in labels if l["our_title"])
     real = [l for l, m in zip(labels, mk["titles"]) if (m["duration"] or 0) >= JUNK_MAX]
@@ -5712,11 +6122,20 @@ def packet_checklist(pk, pt):
         w("- Season %s, disc %s" % (pt["season"], pt["disc"] or "?"))
     w("")
     w("## 2. Release details (from the box)")
-    w("- [ ] UPC: the barcode number on the back of the case")
-    w("- [ ] ASIN: from the Amazon listing for this edition, if there is one")
+    w("- [ ] UPC (required): the barcode number, on the back of the case, or on the shrink wrap,")
+    w("      a sticker or the slipcover (so it's often gone once a case is opened)")
+    w("- [ ] ASIN (optional): Amazon's product id for this edition, in its listing's address:")
+    w("      amazon.com/dp/**B08Z2MDGWQ** (ten characters, usually starting B0)")
     w("- [ ] Release date: street date of this edition%s" % (
         (" (disc mastered %s, so on or after that)" % pk["mastered"]) if pk["mastered"] else ""))
     w("- [ ] Cover images: photos or scans of the front (and back) of the case")
+    w("")
+    w("No case, or no barcode on it? The disc itself never carries the UPC, but the edition's listing does:")
+    w("- Blu-ray.com lists most editions with their UPC, release date, studio and runtime")
+    w("- the Amazon listing gives the ASIN, and often the UPC under product details")
+    w("- to pick the right edition of several: it was released on or after the disc's mastering date%s," % (
+        (" (%s)" % pk["mastered"]) if pk["mastered"] else ""))
+    w("  and its runtime and studio should match the disc")
     w("")
     w("## 3. Disc log")
     w("- [ ] Upload `%s` (MakeMKV log, disc name \"%s\")" % (pk["makemkv_log"], pk["makemkv_disc_name"]))
@@ -5843,7 +6262,7 @@ def print_report(rep):
         p("Titles (%d shown, %d short menu/logo clips hidden%s)" % (
             len(shown), junk - len(loops), (", %d menu loops hidden" % len(loops)) if loops else ""))
         for t in sorted(shown, key=lambda t: ({"feature": 0, "episode": 1, "version": 2, "play-all": 3,
-                                                "duplicate": 4, "extra": 5}.get(t["role"], 6),
+                                                "duplicate": 4, "extra": 5, "segment": 7}.get(t["role"], 6),
                                                t.get("episode_index", 0), _natural(t["id"]))):
             tracks = ""
             if t["audio"]:
@@ -5896,6 +6315,10 @@ def make_parser():
                     help="dev/test: also store IFOs, playlists and cover art so --corpus can re-parse the disc")
     ap.add_argument("--corpus", action="store_true", help="dev/test: re-parse every disc with stored evidence and score it")
     ap.add_argument("--list", action="store_true", help="list the discs in the library")
+    ap.add_argument("--to-submit", action="store_true",
+                    help="list the discs in your library that TheDiscDB doesn't have yet (submission candidates)")
+    ap.add_argument("--to-improve", action="store_true",
+                    help="list discs TheDiscDB has whose titles your scans can label better")
     ap.add_argument("--set-truth", nargs=2, metavar=("HASH", "TRUTH"), help='confirm a disc, e.g. 3EBA9FFF "Psych S1 D2"')
     ap.add_argument("--set-notes", nargs=2, metavar=("HASH", "NOTES"), help="attach notes to a disc")
     ap.add_argument("--import-samples", metavar="DIR", help="import old sample folders into the library")
@@ -5989,6 +6412,15 @@ def _main(args, ap):
             set_field(args.library, args.set_notes[0], "notes", args.set_notes[1])
         if args.list:
             list_library(args.library)
+        if args.to_submit or args.to_improve:
+            index = discdb_index_open(args.discdb_dir or default_discdb_dir(), allow_download=not args.offline)
+            online = not args.offline and not args.no_discdb_online
+            if args.to_submit:
+                list_submission_candidates(args.library, index, online)
+            if args.to_improve:
+                if args.to_submit:
+                    print()
+                list_improvement_candidates(args.library, index, online)
         if args.packet:
             h = resolve_hash(args.library, args.packet)
             stored = makemkv_log_store(h)
@@ -6023,8 +6455,9 @@ def _main(args, ap):
             if args.json and reports:
                 print(json.dumps(reports if len(reports) > 1 else reports[0], indent=2, default=str))
         if not (args.paths or args.corpus or args.list or args.set_truth or args.set_notes
-                or args.import_samples or args.packet):
-            ap.error("give a disc path, or one of --list, --corpus, --set-truth, --import-samples, --packet")
+                or args.import_samples or args.packet or args.to_submit or args.to_improve):
+            ap.error("give a disc path, or one of --list, --to-submit, --to-improve, --corpus, --set-truth, "
+                     "--import-samples, --packet")
     finally:
         args.library.close()
 

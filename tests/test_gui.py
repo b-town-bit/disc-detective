@@ -732,3 +732,199 @@ def test_themed_menu_shows_and_picks(gui, monkeypatch):
     assert picked == [1] and m.top is None
     m.delete(0, "end")
     assert m.index("end") is None
+
+
+def test_help_thediscdb_lists_your_discs(gui, tmp_path, monkeypatch):
+    """Settings > Help TheDiscDB: the library's discs TheDiscDB is missing, in a list to pick from."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    db = str(tmp_path / "lib.sqlite")
+    con = core.library_open(db)
+    with con:
+        con.execute("INSERT INTO discs (hash, format, label, status, best_guess, truth, first_seen, last_seen) "
+                    "VALUES (?, 'DVD', 'ARSENIC', 'probable: x', 'Arsenic and Old Lace (1944)', "
+                    "'Arsenic and Old Lace (1944)', '2026', '2026')", ("9B9067B7" + "0" * 24,))
+        con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?, 'Title 1', 'feature', 7080)",
+                    ("9B9067B7" + "0" * 24,))
+    con.close()
+    orig = app.scan_args
+
+    def args():
+        a = orig()
+        a.db, a.discdb_dir, a.no_discdb_online = db, str(tmp_path / "none"), True
+        return a
+    monkeypatch.setattr(app, "scan_args", args)
+    d = dd_app.HelpDiscDBDialog(root, app)
+    assert pump(lambda: "Up to date" in d.status.cget("text"), 20)
+    tv = d.lists["submit"]["tv"]
+    assert [tv.item(i)["values"][0] for i in tv.get_children()] == ["Arsenic and Old Lace (1944)"]
+    assert d.tabs.tab(0, "text") == "NOT IN THEDISCDB (1)"
+    tv.selection_set(tv.get_children()[0])
+    root.update()
+    assert str(d.packet_btn.cget("state")) == "normal" and "Confirmed by you" in d.lists["submit"]["note"].cget("text")
+    d.top.destroy()
+
+
+def test_label_titles_saves_your_labels(gui, tmp_path, monkeypatch):
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    db = str(tmp_path / "lib.sqlite")
+    h = "L" * 32
+    con = core.library_open(db)
+    with con:
+        con.execute("INSERT INTO discs (hash, format, label, first_seen, last_seen) VALUES (?, 'DVD', 'X', '2026', '2026')", (h,))
+        con.execute("INSERT INTO titles (hash, title_id, role, duration, tracks) VALUES (?, 'Title 4', 'extra', 420, ?)",
+                    (h, '{"video":{"aspect":"16:9"},"audio":[{"lang":"en","codec":"AC3","channels":6}],"subs":[]}'))
+        con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?, 'Title 9', 'junk', 5)", (h,))
+    con.close()
+    orig = app.scan_args
+
+    def args():
+        a = orig()
+        a.db, a.discdb_dir = db, str(tmp_path / "none")
+        return a
+    monkeypatch.setattr(app, "scan_args", args)
+    saved = []
+    d = dd_app.LabelDialog(root, app, h, "A Disc", on_save=lambda: saved.append(1))
+    assert list(d.vars) == ["Title 4"]                          # logos and menus aren't listed
+    d.vars["Title 4"]["type"].set("Featurette")
+    d.vars["Title 4"]["title"].set("Making Of")
+    d.save()
+    assert saved and core.get_labels(core.library_open(db), h)["Title 4"]["title"] == "Making Of"
+    assert dd_app.tracks_text('{"video":{"aspect":"16:9"},"audio":[{"lang":"en","codec":"AC3","channels":6}],'
+                              '"subs":[{"lang":"en"}]}') == "16:9  ·  English AC3 5.1  ·  1 subtitle"
+
+
+def test_an_episodes_name_comes_from_its_season_and_number(gui, tmp_path, monkeypatch):
+    """Label titles: give an episode its season and number and the name is filled in (from
+    TVmaze or IMDb); a name you type yourself stays."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    db = str(tmp_path / "lib.sqlite")
+    h = "P" * 32
+    con = core.library_open(db)
+    with con:
+        con.execute("INSERT INTO discs (hash, format, label, imdb_id, truth, first_seen, last_seen) VALUES "
+                    "(?, 'DVD', 'PSYCH', 'tt0491738', 'Psych (2006) S1 D2', '2026', '2026')", (h,))
+        for n in (1, 2):
+            con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?, ?, 'episode', 2600)",
+                        (h, "Title %d" % n))
+    con.close()
+    orig = app.scan_args
+
+    def args():
+        a = orig()
+        a.db, a.discdb_dir = db, str(tmp_path / "none")
+        return a
+    monkeypatch.setattr(app, "scan_args", args)
+    asked = []
+    monkeypatch.setattr(core, "episode_name", lambda series, s, e, order="aired", **kw: asked.append(series) or
+                        {("1", "3"): "Speak Now or Forever Hold Your Piece"}.get((str(s), str(e))))
+    d = dd_app.LabelDialog(root, app, h, "Psych")
+    v = d.vars["Title 1"]
+    v["season"].set("1")
+    v["episode"].set("3")
+    d.fill_episode("Title 1")
+    assert pump(lambda: v["title"].get() == "Speak Now or Forever Hold Your Piece", 5)
+    assert v["type"].get() == "Episode" and asked[0] == "tt0491738"
+    w = d.vars["Title 2"]
+    w["title"].set("My Own Name")
+    w["season"].set("1")
+    w["episode"].set("3")
+    d.fill_episode("Title 2")
+    root.update()
+    assert w["title"].get() == "My Own Name"                     # yours stays
+    w["title"].set("")                                         # a deleted scene of the same episode
+    w["type"].set("DeletedScene")
+    d.fill_episode("Title 2")
+    assert pump(lambda: w["title"].get() == "Speak Now or Forever Hold Your Piece Deleted Scene", 5)
+    d.save()
+    labels = core.get_labels(core.library_open(db), h)
+    assert labels["Title 1"] == {"type": "Episode", "title": "Speak Now or Forever Hold Your Piece", "season": 1, "episode": 3}
+    assert labels["Title 2"]["type"] == "DeletedScene"
+
+
+def test_your_labels_shape_the_rip_plan():
+    """Psych S1 D1: you labelled the international pilot an Extra and a deleted scene, so they
+    rip as extras under your names; an unlabelled episode keeps the app's own name."""
+    rep = {"content_hash": "1" * 32, "format": "DVD", "kind": "tv", "best_guess": "Psych (2006) S1 D1",
+           "candidates": [{"kind": "tv", "name": "Psych", "year": 2006, "imdb_id": "tt0491738", "score": 90}],
+           "titles": [{"id": "Title 1", "role": "episode", "duration": 3965, "episode_index": 1},
+                      {"id": "Title 2", "role": "episode", "duration": 3965, "episode_index": 2},
+                      {"id": "Title 4", "role": "extra", "duration": 461}],
+           "plex_names": ["Title 1 -> Psych (2006) {imdb-tt0491738}/Season 01/Psych - s01e01 - Pilot.mkv",
+                          "Title 2 -> Psych (2006) {imdb-tt0491738}/Season 01/Psych - s01e02 - Spellingg Bee.mkv"],
+           "labels": {"Title 2": {"type": "Extra", "title": "International Pilot", "season": 1, "episode": 1},
+                      "Title 4": {"type": "DeletedScene", "title": "Shawn's Lies", "season": None, "episode": None}}}
+    plan = {p["title_id"]: p for p in dd_app.plan_rip(rep, dd_app.preview_titles(rep), True)}
+    assert plan["Title 1"]["dest"].endswith("Season 01/Psych - s01e01 - Pilot.mkv")
+    assert (plan["Title 2"]["role"], plan["Title 2"]["dest"]) == ("extra", "Psych (2006) {imdb-tt0491738}/Other/International Pilot.mkv")
+    assert plan["Title 4"]["dest"] == "Psych (2006) {imdb-tt0491738}/Deleted Scenes/Shawn's Lies.mkv"
+    no_extras = dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)
+    assert [p["title_id"] for p in no_extras] == ["Title 1"]       # your Extra isn't ripped as an episode
+    rep["labels"] = {"Title 4": {"type": "Episode", "title": "Bonus Episode", "season": 1, "episode": 9}}
+    p4 = {p["title_id"]: p for p in dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)}["Title 4"]
+    assert p4["dest"].endswith("Season 01/Psych (2006) - s01e09 - Bonus Episode.mkv")
+
+
+def test_promos_and_repeats_stay_out_of_the_way(gui, monkeypatch):
+    """A promo isn't ripped, even with extras on; Choose titles hides duplicates, play-alls and
+    promos until you ask to see them, and keeps ticks you made on hidden rows."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    rep = {"content_hash": "2" * 32, "format": "DVD", "kind": "movie", "best_guess": "Film (2001)",
+           "candidates": [{"kind": "movie", "name": "Film", "year": 2001, "imdb_id": "tt0000001", "score": 90}],
+           "titles": [{"id": "Title 1", "role": "feature", "duration": 6000},
+                      {"id": "Title 2", "role": "duplicate", "duration": 6000, "note": "same video as Title 1"},
+                      {"id": "Title 3", "role": "extra", "duration": 300},
+                      {"id": "Title 4", "role": "extra", "duration": 200}],
+           "labels": {"Title 4": {"type": "Promo", "title": "Coming Soon to DVD"}}}
+    core.apply_labels(rep["titles"], rep["labels"])
+    assert [p["title_id"] for p in dd_app.plan_rip(rep, dd_app.preview_titles(rep), True)] == ["Title 1", "Title 3"]
+    app.rep = rep
+    picker = dd_app.TitlePicker(root, app)
+    root.update()
+    assert set(picker.vars) == {"Title 1", "Title 3"}
+    picker.show_all.set(True)
+    picker.refill()
+    assert set(picker.vars) == {"Title 1", "Title 2", "Title 3", "Title 4"}
+    picker.vars["Title 4"].set(True)
+    picker.show_all.set(False)
+    picker.refill()
+    assert "Title 4" in picker.vars                                 # ticked, so still shown
+    picker.ok()
+    assert app.selected == {"Title 1", "Title 4"}
+
+
+def test_choose_titles_shows_episode_numbers_and_ads_from_thediscdb(gui, monkeypatch):
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    rep = {"content_hash": "3" * 32, "format": "DVD", "kind": "tv", "best_guess": "Psych (2006) S1 D1",
+           "candidates": [{"kind": "tv", "name": "Psych", "year": 2006, "imdb_id": "tt0491738", "score": 90}],
+           "titles": [{"id": "Title 5", "role": "extra", "duration": 2600},
+                      {"id": "Title 9", "role": "episode", "duration": 2600, "episode_index": 1},
+                      {"id": "Title 1", "role": "episode", "duration": 2600, "episode_index": 2}],
+           "plex_names": ["Title 1 -> Psych (2006) {imdb-tt0491738}/Season 01/Psych - s01e02 - The Spelling Bee.mkv",
+                          "Title 9 -> Psych (2006) {imdb-tt0491738}/Season 01/Psych - s01e04 - Woman Seeking.mkv"],
+           "labels": {"Title 5": {"type": "Episode", "title": "Speak Now", "season": 1, "episode": 3}}}
+    core.apply_labels(rep["titles"], rep["labels"])
+    app.rep = rep
+    picker = dd_app.TitlePicker(root, app)
+    root.update()
+    texts = [w.cget("text") for w in picker.area.inner.winfo_children() if isinstance(w, dd_app.ttk.Label)]
+    assert "Episode 2" in texts and "Episode 3" in texts            # their numbers in the season
+    assert [t["id"] for t in picker.rows] == ["Title 1", "Title 5", "Title 9"]   # E2, E3 (yours), E4
+    picker.names["Title 1"] = "Psych - s01e09-e10 - Two Parter.mkv"
+    assert picker.episode_text({"id": "Title 1"}) == "Episode 9-10"
+    picker.top.destroy()
+    # TheDiscDB's "Trailer" that is an ad for other releases is a promo; this film's trailer isn't
+    titles = [{"id": "Title 7", "role": "extra"}, {"id": "Title 8", "role": "extra"}]
+    hit = {"titles": [{"source": "07", "item": {"type": "Trailer", "title": "Previews - The Smurfs"}},
+                      {"source": "08", "item": {"type": "Trailer", "title": "Theatrical Trailer"}}]}
+    assert [t["id"] for t in core.discdb_promos(titles, hit)] == ["Title 7"]
+    assert [t["role"] for t in titles] == ["promo", "extra"]
