@@ -23,6 +23,8 @@ def test_box_art_for_a_discdb_hit(github, tmp_path, movie_disc):
     assert any("cover.jpg" in p for p, _ in github.log)
     box = core.discdb_art(rep, str(tmp_path / "art"), prefer="box")  # a collection keeps its box
     assert box["what"] == "box art" and any("front.jpg" in p for p, _ in github.log)
+    import glob
+    assert not glob.glob(str(tmp_path / "art" / "*_dl.jpg"))         # downloads go once converted
     con.close()
 
 

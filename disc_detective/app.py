@@ -15,7 +15,6 @@ Needs Python 3 with Tkinter (included in the python.org Windows installer).
 MakeMKV is only needed for ripping.
 """
 import collections
-import csv
 import json
 import logging
 import os
@@ -36,6 +35,8 @@ from . import core as di
 from . import theme as th
 
 APP = "Disc Detective"
+# the main window's title bar (Windows draws it in its own font: the subtitle can't be smaller)
+WINDOW_TITLE = "Disc Detective — Optical Forensics · 221B"
 SETTINGS = os.path.join(di.data_home(), "settings.json")
 ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
 RIP_ROLES = ("feature", "episode")
@@ -119,17 +120,19 @@ def save_settings(d):
 # MakeMKV
 # --------------------------------------------------------------------------
 
-def makemkv_source(exe, drive):
-    """Find MakeMKV's disc index for a drive letter / mount via its drive list."""
-    out = subprocess.run([exe, "-r", "--cache=1", "info", "disc:9999"], capture_output=True, text=True,
-                         encoding="utf-8", errors="replace", timeout=120, creationflags=NO_WINDOW).stdout
-    want = drive.rstrip("\\/").upper()
-    for line in out.splitlines():
-        if line.startswith("DRV:"):
-            f = next(csv.reader([line[4:]]))
-            if len(f) >= 7 and f[6] and f[6].rstrip("\\/").upper() in (want, want.split(os.sep)[-1]):
-                return "disc:%s" % f[0]
-    return "disc:0"
+# MakeMKV's switches for every run: robot output, and --noscan: it opens only the drive it's
+# given, not every drive in the machine (a sensitive drive left alone while another is read)
+MAKEMKV_SWITCHES = ["-r", "--noscan", "--cache=1"]
+
+
+def makemkv_source(drive):
+    """MakeMKV's name for the disc: the drive by its own name ("dev:E:"), or a backup folder."""
+    d = drive.rstrip("\\/")
+    if re.fullmatch(r"[A-Za-z]:", d):
+        return "dev:%s" % d.upper()
+    if os.name != "nt" and d.startswith("/dev/"):
+        return "dev:%s" % d
+    return "file:%s" % os.path.abspath(drive)
 
 
 EXTRA_FOLDERS = {"Featurette": "Featurettes", "DeletedScene": "Deleted Scenes", "Trailer": "Trailers",
@@ -139,6 +142,66 @@ EXTRA_FOLDERS = {"Featurette": "Featurettes", "DeletedScene": "Deleted Scenes", 
 
 def clean(s):
     return re.sub(r'[<>"/\\|?*]', "", re.sub(r"\s*:\s*", " - ", s or "")).strip()
+
+
+def detected_for(rep, found):
+    """What the menus found (menus.menu_titles()) as labels for this scan's titles: the titles you
+    or TheDiscDB named are left be."""
+    from . import menus
+    return menus.detected_labels(found, rep.get("titles") or [],
+                                 keep=set(rep.get("labels") or {}) | discdb_named(rep))
+
+
+def all_labels(rep):
+    """Your labels, over what Detect titles read from the disc's menus (kept for this scan only)."""
+    return dict(rep.get("detected") or {}, **(rep.get("labels") or {}))
+
+
+def fit_label(lbl, text, style):
+    """Text on one line in a label; too long for it, it ends in an ellipsis (a Tooltip can show
+    the whole, when the label's text isn't it)."""
+    width = lbl.winfo_width() - 4
+    if width > 20:
+        measure = tkfont.Font(root=lbl, font=ttk.Style().lookup(style, "font") or "TkDefaultFont").measure
+        if measure(text) > width:
+            lo, hi = 0, len(text)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if measure(text[:mid].rstrip() + "…") <= width:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            text = text[:lo].rstrip() + "…"
+    if str(lbl.cget("text")) != text:
+        lbl.config(text=text)
+
+
+def suspect_line(verb, k, n):
+    """"Interrogating suspect 2 of 5…"; the last of them just "suspect 5…" (the total's often still
+    growing: the crawl finds pages as it goes); a lone one, "Interrogating suspect…"."""
+    if n <= 1:
+        return "%s suspect…" % verb
+    return "%s suspect %d…" % (verb, k) if k >= n else "%s suspect %d of %d…" % (verb, k, n)
+
+
+def suspect_report(found):
+    """Detect titles' answer, in the case's words: "The suspects named the film and 3 extras"
+    (each button pressed: a suspect; a trailer of the film's own counts among the extras)."""
+    n = len(found.get("extras") or [])
+    named = [w for w in ("the film" if found.get("feature") else "",
+                         "%d extra%s" % (n, "" if n == 1 else "s") if n else "") if w]
+    return "The %s named %s" % ("suspect" if found.get("suspects", 0) == 1 else "suspects", " and ".join(named))
+
+
+def discdb_named(rep):
+    """The titles TheDiscDB names or types for this disc ("Title 3", or a Blu-ray's playlist)."""
+    hit = (rep.get("discdb") or {}).get("hit") or {}
+    out = set()
+    for t in hit.get("titles") or []:
+        item, src = t.get("item") or {}, str(t.get("source") or "")
+        if item.get("title") or item.get("type"):
+            out.add("Title %d" % int(src) if src.isdigit() else src)
+    return out
 
 
 def plan_rip(rep, mk_titles, include_extras, selected=None):
@@ -168,7 +231,7 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
         base = show = clean(guess) or "Disc"
     # a film's special-features disc has nothing but extras: those are what to rip
     roles = RIP_ROLES + (("extra",) if include_extras or rep.get("extras_disc") else ())
-    mine = rep.get("labels") or {}           # your labels (Label titles): they win over TheDiscDB's
+    mine = all_labels(rep)                   # your labels (Edit titles): they win over TheDiscDB's
     plan = []
     for m in mk_titles:
         t, _ = pairs.get(m["index"], (None, None))
@@ -177,12 +240,12 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
             item = known.get(t["clips"].lower() + ".m2ts") or {}      # playlist of one clip
         if not item and m.get("dvd_title"):                         # TheDiscDB numbers DVD titles "01"
             item = known.get("%02d" % m["dvd_title"]) or known.get(str(m["dvd_title"])) or {}
-        role = t["role"] if t else {"MainMovie": "feature", "Episode": "episode"}.get(item.get("type"), "extra" if item else None)
+        role = t["role"] if t else di.LABEL_ROLES.get(item.get("type"), "extra") if item else None
         my = mine.get(t["title_id"]) if t else None
         if my and (my.get("type") or my.get("title")):
             item = dict(item, **{k: v for k, v in my.items() if v})
             if my.get("type"):
-                role = di.LABEL_ROLES.get(my["type"], "extra")
+                role = di.label_role(my["type"], t["role"] if t else None)
         if selected is not None:
             if not t or t["title_id"] not in selected:
                 continue
@@ -191,6 +254,9 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
         if role == "episode" and item.get("season") and item.get("episode"):
             dest = "%s/Season %02d/%s - s%02de%02d - %s.mkv" % (base, int(item["season"]), show, int(item["season"]),
                                                                int(item["episode"]), clean(item.get("title")))
+        elif role in ("play-all", "promo") and item.get("title") and item.get("type") not in (None, "", "Promo"):
+            # ticked by hand, but labelled (yours, or TheDiscDB's): saved as the label says
+            dest = "%s/%s/%s.mkv" % (base, EXTRA_FOLDERS.get(item["type"], "Other"), clean(item["title"]))
         elif t and t["title_id"] in names and not (my and role == "extra"):
             dest = names[t["title_id"]]
         elif role == "extra":
@@ -528,8 +594,8 @@ class NotesWindow:
         top.title("%s · case notes" % APP)
         # over the main window (a window beside it can land off the screen)
         parent.update_idletasks()
-        w = max(480, min(760, parent.winfo_width() - 40))
-        h = max(320, min(520, parent.winfo_height() - 60))
+        w = max(th.px(480), min(th.px(760), parent.winfo_width() - 40))
+        h = max(th.px(320), min(th.px(520), parent.winfo_height() - 60))
         x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
         top.geometry("%dx%d+%d+%d" % (w, h, max(0, x), max(0, y)))
@@ -598,12 +664,16 @@ class App:
         self.settings = load_settings()
         self.rep = None
         self.selected = None          # None = default (feature / episodes [+ extras])
+        self.titles_dialog = None     # Edit titles, while it's open (Detect titles fills it)
+        self.detecting = False        # Detect titles under way
         self.proc = None
         self.cancelled = False
         self.busy = False
         self.ripping = False
         self.last_out = None
-        root.title(APP)
+        self.mkv_scan = None          # MakeMKV reading a confirmed disc in the background (see prescan)
+        self._answer_saved = None     # a disc whose corrected answer was saved, being rescanned
+        root.title(WINDOW_TITLE)
         try:
             self._icon = tk.PhotoImage(file=ICON)
             root.iconphoto(True, self._icon)
@@ -611,11 +681,11 @@ class App:
             pass
         # as big as the design wants, but never taller or wider than the screen (with room for the
         # taskbar and title bar): a window taller than the screen hides the footer
+        self._style()                    # first: it works out the screen's scale the sizes below use
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-        w, h = min(1000, sw - 40), min(780, sh - 110)
-        root.minsize(min(760, w), min(520, h))
+        w, h = min(th.px(1000), sw - 40), min(th.px(780), sh - th.px(110))
+        root.minsize(min(th.px(760), w), min(th.px(520), h))
         root.geometry("%dx%d+%d+%d" % (w, h, max(0, (sw - w) // 2), max(0, (sh - h) // 2 - 30)))
-        self._style()
         self.source = tk.StringVar(value=self.settings.get("drive", ""))
         self.outdir = tk.StringVar(value=self.settings.get("outdir", os.path.join(os.path.expanduser("~"), "Videos", "Rips")))
         self.extras = tk.BooleanVar(value=self.settings.get("extras", False))
@@ -656,7 +726,8 @@ class App:
         inner = ttk.Frame(bar, style="Bar.TFrame", padding=(18, 10))
         inner.pack(fill="x")
         try:
-            self._scan_icon = tk.PhotoImage(file=ICON).subsample(3)
+            full = tk.PhotoImage(file=ICON)
+            self._scan_icon = th._png_photo(ICON, th.px(full.width() // 3)) or full.subsample(3)
         except (tk.TclError, OSError):
             self._scan_icon = None
         self.scan_btn = ttk.Button(inner, text=self.SCAN_TEXT, style="Scan.TButton", command=self.scan,
@@ -680,8 +751,13 @@ class App:
         # the case's standing: no case / open (being investigated, or not solved yet) / closed
         self.case_dot = th.dot(fin, th.VELLUM_300, th.INK_SUBTLE)
         self.case_dot.pack(side="left", padx=(0, 8))
-        self.standing_lbl = ttk.Label(fin, text="No case open", style="FootStatus.TLabel")
-        self.standing_lbl.pack(side="left")
+        # (only the room the links leave it: a long outcome ends in an ellipsis, whole on hover)
+        self.standing_full = "No case open"
+        self.standing_lbl = ttk.Label(fin, text=self.standing_full, style="FootStatus.TLabel", width=1, anchor="w")
+        self.standing_lbl.pack(side="left", fill="x", expand=True, padx=(0, 12))
+        self.standing_lbl.bind("<Configure>", lambda ev: self._fit_standing())
+        th.Tooltip(self.standing_lbl, lambda: self.standing_full
+                   if self.standing_lbl.cget("text") != self.standing_full else "")
         for k, (text, cmd, icon) in enumerate((("About / credits", self.about, "about"),
                                                ("Open logs folder", self.open_logs, "logs"),
                                                ("Case notes (technical log)", self.open_notes, "notes"),
@@ -727,9 +803,9 @@ class App:
         tf = tkfont.Font(font=ttk.Style().lookup("Name.TLabel", "font"))
         yf = tkfont.Font(font=ttk.Style().lookup("Year.TLabel", "font"))
         lift = round((tf.metrics("descent") + th.cap_height(tf) / 2) - (yf.metrics("descent") + th.cap_height(yf) / 2))
-        self.year_lbl.pack(side="left", anchor="sw", padx=(10, 0), pady=(0, max(0, lift)))
+        self.year_lbl.pack(side="left", anchor="sw", padx=(10, 0), pady=(0, th.real(max(0, lift))))
         if lift < 0:
-            self.title_lbl.pack_configure(pady=(0, -lift))
+            self.title_lbl.pack_configure(pady=(0, th.real(-lift)))
         facts = ttk.Frame(info, style="Desk.TFrame")
         facts.pack(anchor="w", pady=(2, 10))
         self.kind_lbl = ttk.Label(facts, text="", style="Kind.TLabel")
@@ -738,8 +814,8 @@ class App:
         self.facts_lbl = ttk.Label(facts, text="", style="Fact.TLabel")
         self.source_lbl = ttk.Label(facts, text="", style="Source.TLabel")
         self._facts_row = facts
-        # the step of the investigation and its progress bar, just under the title
-        # (shown only while there's something to say)
+        # the step of the investigation and its progress bar, above the rip card (or just under
+        # the title while there's none); shown only while there's something to say
         self.status_strip = strip = th.frame(info, th.VELLUM_200, border=th.BRASS_300, radius=5, outer=th.PARCHMENT)
         sin = ttk.Frame(strip, style="Bar.TFrame", padding=(10, 3))
         sin.pack(fill="x")
@@ -761,7 +837,7 @@ class App:
         tick = th.check(th.INK)
         self.confirm_btn = ttk.Button(self.match_row, text="That's right", style="Small.TButton", command=self.confirm,
                                       image=(tick, "disabled", tick), compound="left")
-        self.confirmed_lbl = ttk.Label(self.match_row, text="In your library", style="Ok.TLabel",
+        self.confirmed_lbl = ttk.Label(self.match_row, text="In your case files", style="Ok.TLabel",
                                        image=th.check(), compound="left")
         self.match_btn = ttk.Button(self.match_row, text="Not right?", style="Small.TButton", command=self.match_menu,
                                     image=th.caret_image(gap=5), compound="right")
@@ -808,7 +884,7 @@ class App:
         ttk.Label(a, text="AUDIO", style="InsetCap.TLabel").pack(anchor="w")
         self.audio_lbl = ttk.Label(a, text="", style="InsetVal.TLabel", wraplength=190, justify="left")
         self.audio_lbl.pack(anchor="w", pady=(2, 0))
-        a.bind("<Configure>", lambda ev: self.audio_lbl.config(wraplength=max(120, ev.width - 20)))
+        a.bind("<Configure>", lambda ev: self.audio_lbl.config(wraplength=th.real(max(th.px(120), ev.width - th.px(20)))))
         e = th.frame(minis, th.VELLUM_100, border=th.BRASS_300, pad=5, radius=5, outer=th.CARD)
         e.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
         etop = ttk.Frame(e, style="Inset.TFrame")
@@ -816,9 +892,18 @@ class App:
         ttk.Label(etop, text="EXTRACTION ENGINE", style="InsetCap.TLabel").pack(side="left")
         self.engine_lbl = ttk.Label(e, text="", style="InsetOk.TLabel")
         self.engine_lbl.pack(anchor="w", pady=(2, 0))
+        # VLC, for Detect titles (shown only while that's switched on in Settings)
+        self.vlc_lbl = ttk.Label(e, text="", style="InsetOk.TLabel")
         th.rule(rc, th.BRASS_200).pack(fill="x", pady=(9, 7))
         bottom = ttk.Frame(rc, style="Card.TFrame")
         bottom.pack(fill="x")
+        # the lab's report (MakeMKV's reading of the disc, made in the background once you've
+        # confirmed it): its own light, breathing while the lab works
+        self.bg_box = ttk.Frame(bottom, style="Card.TFrame")
+        self.bg_dot = th.dot(self.bg_box, th.CARD, th.BRASS_400)
+        self.bg_dot.pack(side="left", padx=(0, 6))
+        self.bg_lbl = ttk.Label(self.bg_box, text="", style="CardSub.TLabel")
+        self.bg_lbl.pack(side="left")
         self.rip_note = ttk.Label(bottom, text="", style="CardSub.TLabel")
         self.rip_note.pack(side="left")
         self.rip_btn = SplitButton(bottom, self.RIP_TEXT, self.rip_or_cancel, "Rip.TButton", "RipArrow.TButton",
@@ -831,31 +916,17 @@ class App:
     def _rewrap(self, event=None):
         if event is None or event.widget is self.root:
             width = event.width if event else self.root.winfo_width()
-            w = max(300, width - 100 - (self.pic_col.winfo_reqwidth() + 26 if self.pic_col.winfo_ismapped() else 0))
-            self.title_lbl.config(wraplength=max(240, w - 90))
-            self.plan_lbl.config(wraplength=max(200, w - 190))
+            w = max(th.px(300), width - th.px(100) - (self.pic_col.winfo_reqwidth() + th.px(26)
+                                                      if self.pic_col.winfo_ismapped() else 0))
+            self.title_lbl.config(wraplength=th.real(max(th.px(240), w - th.px(90))))
+            self.plan_lbl.config(wraplength=th.real(max(th.px(200), w - th.px(190))))
 
     def set_dest(self, path):
         self.dest_full = path
         self._fit_dest()
 
     def _fit_dest(self):
-        """One line; a path too long for the box ends in an ellipsis."""
-        text = self.dest_full
-        width = self.dest_lbl.winfo_width() - 4
-        if width > 20:
-            measure = tkfont.Font(root=self.root, font=ttk.Style().lookup("Path.TLabel", "font") or "TkDefaultFont").measure
-            if measure(text) > width:
-                lo, hi = 0, len(text)
-                while lo < hi:
-                    mid = (lo + hi + 1) // 2
-                    if measure(text[:mid].rstrip() + "…") <= width:
-                        lo = mid
-                    else:
-                        hi = mid - 1
-                text = text[:lo].rstrip() + "…"
-        if str(self.dest_lbl.cget("text")) != text:
-            self.dest_lbl.config(text=text)
+        fit_label(self.dest_lbl, self.dest_full, "Path.TLabel")
 
     def set_facts(self, kind, middle, source, guess=False):
         """The line under the title: KIND • facts • who identified it (empty parts left out)."""
@@ -881,10 +952,12 @@ class App:
     def _build_scan_menu(self, drives):
         m = self.drive_menu
         m.delete(0, "end")
+        # a drive being read (scan, stakeout, rip, the lab) isn't asked its label: the scan's will do
+        in_use = self.source.get() if (self.busy or getattr(self, "mkv_scan", None)) else None
         for d in drives:
             label = d
             try:
-                vol = di.volume_label(d)
+                vol = (self.rep or {}).get("label") if d == in_use else di.volume_label(d)
                 if vol:
                     label = "%s   %s" % (d, vol)
             except Exception:
@@ -914,12 +987,16 @@ class App:
             m.add_checkbutton(label="Include extras", variable=self.extras, command=self.options_changed)
         m.add_command(label="Choose titles…", command=self.choose_titles,
                       state="normal" if self.rep else "disabled")
-        m.add_command(label="Label titles…", command=self.label_titles,
+        m.add_command(label="Edit titles…", command=self.edit_titles,
                       state="normal" if self.rep else "disabled")
         if self.selected is not None:
             m.add_command(label="Back to default titles", command=self.reset_titles)
         m.add_separator()
         m.add_command(label="Open rip folder", command=self.open_out)
+        if self.makemkv_app():
+            # (not while the drive's in use: MakeMKV's window starts reading the disc as it opens)
+            m.add_command(label="Open MakeMKV", command=self.open_makemkv,
+                          state="disabled" if self.busy or self.mkv_scan else "normal")
 
     # ---- thread plumbing: workers post callables, the Tk thread runs them ----
     def post(self, fn, *a):
@@ -942,23 +1019,63 @@ class App:
         """The footer's standing of the case: "none", "open" (investigating, or unsolved) or "closed"."""
         text, colour = {"none": ("No case open", th.INK_SUBTLE), "open": ("Open case", th.WAX),
                         "closed": ("Case closed", th.GREEN_DOT)}[state]
-        self.standing_lbl.config(text=text)
+        self.standing_full = text
+        self._fit_standing()
         th.set_dot(self.case_dot, colour)
+
+    def set_outcome(self, text, colour):
+        """The last action's result in the footer, where the case's standing shows (green: it
+        worked, red: it failed); the passing status strip folds away, its work done."""
+        self.standing_full = text
+        self._fit_standing()
+        th.set_dot(self.case_dot, colour)
+        self.set_status("")
+
+    def set_background(self, text, colour=None):
+        """The rip card's lab report light: text with a breathing brown light while the lab works
+        (colour None), a steady colour once it's over (green: done); no text, gone."""
+        if not text:
+            th.stop_pulse(self.bg_dot)
+            self.bg_box.pack_forget()
+            return
+        self.bg_lbl.config(text=text)
+        if colour is None:
+            th.pulse_dot(self.bg_dot, th.BRASS_400, th.CARD)
+        else:
+            th.set_dot(self.bg_dot, colour)
+        if not self.bg_box.winfo_manager():
+            self.bg_box.pack(side="left", padx=(0, 14), before=self.rip_note)
+
+    def _fit_standing(self):
+        fit_label(self.standing_lbl, self.standing_full, "FootStatus.TLabel")
 
     def set_status(self, text):
         """A passing message (a step of the investigation, what to do next, a rip's progress) on
-        the strip under the title; the strip folds away when there's nothing to say."""
+        the strip just above the rip card (under the title while there's none); the strip folds
+        away when there's nothing to say."""
+        v = self.titles_dialog
+        if self.detecting and v is not None and v.alive():
+            v.show_status(text)               # Detect titles: its news shows where it was asked for
+            return
         self.status.config(text=text)
         showing = bool(self.status_strip.winfo_manager())
-        if (text or self.progress.winfo_manager()) and not showing:
-            self.status_strip.pack(fill="x", pady=(4, 4), before=self._facts_row)
-        elif not text and not self.progress.winfo_manager() and showing:
+        if text or self.progress.winfo_manager():
+            anchor = self.rip_card if self.rip_card.winfo_manager() else self._facts_row
+            row = self.status_strip.master.pack_slaves()
+            # right above it (rows packed before the rip card since, like the match row, go above)
+            if not showing or row.index(self.status_strip) + 1 != row.index(anchor):
+                self.status_strip.pack(fill="x", pady=(4, 4) if anchor is self._facts_row else (10, 0), before=anchor)
+        elif showing:
             self.status_strip.pack_forget()
         t = text.lower()
-        colour = th.GREEN_DOT if t.startswith(("case closed", "confirmed", "done", "disc data updated")) else \
+        colour = th.GREEN_DOT if t.startswith(("case closed", "confirmed", "done", "disc data updated",
+                                               "the suspect")) else \
             th.WAX if ("fail" in t or "couldn't" in t) else \
             th.AMBER_DOT if t.startswith(("best guess", "still a mystery", "cancel")) else th.BRASS_400
-        th.set_dot(self.status_dot, colour)
+        if colour == th.BRASS_400 and self.progress.winfo_manager():
+            th.pulse_dot(self.status_dot, colour, th.VELLUM_200)       # under way: it breathes
+        else:
+            th.set_dot(self.status_dot, colour)
 
     def tell(self, item):
         """Queue a status line (or a callable, run when its turn comes: the scan's result)."""
@@ -1105,6 +1222,30 @@ class App:
         exe = self.settings.get("makemkv")
         return exe if exe and os.path.isfile(exe) else di.find_makemkvcon()
 
+    def makemkv_app(self):
+        """MakeMKV's own window (beside makemkvcon): makemkv.exe; on a Mac the MakeMKV.app the
+        command-line tool lives in; or None."""
+        exe = self.makemkv_exe()
+        if not exe:
+            return None
+        here = os.path.dirname(exe)
+        if sys.platform == "darwin" and ".app/" in exe:
+            return exe[:exe.index(".app/") + 4]
+        for name in ("makemkv.exe", "makemkv"):
+            path = os.path.join(here, name)
+            if os.path.isfile(path):
+                return path
+        return shutil.which("makemkv")
+
+    def open_makemkv(self):
+        app = self.makemkv_app()
+        if not app or self.busy or self.mkv_scan:
+            return
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", app])
+        else:
+            subprocess.Popen([app], cwd=os.path.dirname(app) or None)
+
     def open_logs(self):
         path = di.log_dir()
         os.makedirs(path, exist_ok=True)
@@ -1160,7 +1301,7 @@ class App:
     # ---- picture ----
     def _photo(self, path):
         try:
-            img = tk.PhotoImage(file=path)
+            img = th.scaled_photo(path)            # at the screen's size on a high-DPI screen
         except (tk.TclError, TypeError):
             return None
         self._imgs.append(img)
@@ -1172,20 +1313,27 @@ class App:
                     "Box set": "Box Set"}
 
     def show_details(self, rep):
-        for w in self.details.winfo_children():
-            w.destroy()
+        rows = detail_rows(rep) if rep else None
+        if rows and rows == getattr(self, "_detail_rows", None) and self.details_card.winfo_manager():
+            return                                # nothing on the card changed (labels saved, say)
+        self._detail_rows = rows
         if not rep:
+            for w in self.details.winfo_children():
+                w.destroy()
             self.details_card.pack_forget()
             return
-        self.details.columnconfigure(1, weight=1)
-        for r, (k, v) in enumerate(detail_rows(rep)):
-            key = ttk.Label(self.details, text=self.DETAIL_NAMES.get(k, k), style="CardKey.TLabel")
+        # the new rows are built out of sight and swapped in whole: measuring them (the baselines)
+        # flushes drawing, which would otherwise show the card half-built for a moment
+        old, box = self.details, ttk.Frame(self.details_card, style="Card.TFrame", padding=(16, 8, 16, 4))
+        box.columnconfigure(1, weight=1)
+        for r, (k, v) in enumerate(rows):
+            key = ttk.Label(box, text=self.DETAIL_NAMES.get(k, k), style="CardKey.TLabel")
             if k == "IMDb":
-                cell = th.link(self.details, v, lambda v=v: webbrowser.open("https://www.imdb.com/title/%s/" % v),
+                cell = th.link(box, v, lambda v=v: webbrowser.open("https://www.imdb.com/title/%s/" % v),
                                style="CardLink.TLabel", icon="external", right=True)
                 text, lift = cell, 0
             elif k == "Fingerprint":
-                cell = ttk.Frame(self.details, style="Card.TFrame")
+                cell = ttk.Frame(box, style="Card.TFrame")
                 tag = th.frame(cell, th.VELLUM_200, border=th.BRASS_300, radius=4, outer=th.CARD)
                 tag.pack(side="left")
                 text = ttk.Label(tag, text=v, style="Badge.TLabel")
@@ -1197,13 +1345,16 @@ class App:
                 tag.update_idletasks()
                 lift = (tag.winfo_reqheight() - text.winfo_reqheight()) // 2   # the tag's border and padding
             else:
-                cell = ttk.Label(self.details, text=v, style="CardMonoBold.TLabel" if k == "Disc label" else "CardMono.TLabel",
+                cell = ttk.Label(box, text=v, style="CardMonoBold.TLabel" if k == "Disc label" else "CardMono.TLabel",
                                  wraplength=420, justify="left")
                 text, lift = cell, 0
             # sit the label's text on the same baseline as the value's text
             gap = self._baseline(cell, text, lift) - self._baseline(key, key)
-            key.grid(row=r, column=0, sticky="nw", padx=(0, 22), pady=(3 + max(0, gap), 3))
-            cell.grid(row=r, column=1, sticky="nw", pady=(3 + max(0, -gap), 3))
+            key.grid(row=r, column=0, sticky="nw", padx=(0, 22), pady=(th.real(th.px(3) + max(0, gap)), 3))
+            cell.grid(row=r, column=1, sticky="nw", pady=(th.real(th.px(3) + max(0, -gap)), 3))
+        box.pack(fill="x", before=old)
+        old.destroy()
+        self.details = box
         self.details_card.pack(fill="x", anchor="w", **self._before_rip())
 
     @staticmethod
@@ -1226,7 +1377,7 @@ class App:
             return
         have = rep.get("match") or rep.get("personal_hit") or (rep.get("discdb") or {}).get("hit")
         if rep.get("personal_hit"):
-            self.confirmed_lbl.config(text="In your library")
+            self.confirmed_lbl.config(text="In your case files")
             self.confirmed_lbl.pack(side="left")
         elif (rep.get("discdb") or {}).get("hit"):
             # TheDiscDB knows this exact disc: nothing to confirm (Not right? still fixes a bad entry)
@@ -1247,7 +1398,16 @@ class App:
             self.details_card.pack(fill="x", anchor="w", **self._before_rip())
 
     def _before_rip(self):
-        return {"before": self.rip_card} if self.rip_card.winfo_manager() else {}
+        """Where a card goes above the rip card: above the status strip too, when that's sitting
+        just over the rip card (re-placing the details card after Detect titles put it under
+        the strip, moving everything about)."""
+        if not self.rip_card.winfo_manager():
+            return {}
+        row = self.rip_card.master.pack_slaves()
+        strip = self.status_strip
+        if strip.winfo_manager() and strip in row and row.index(strip) + 1 == row.index(self.rip_card):
+            return {"before": strip}
+        return {"before": self.rip_card}
 
     def confirmable(self, rep):
         top = (rep.get("candidates") or [None])[0]
@@ -1280,9 +1440,8 @@ class App:
         rep["personal_hit"] = {"truth": truth, "notes": "", "saved": None}
         rep["status"] = di.status(rep, args.tmdb_key)
         rep["best_guess"], rep["identified_by"] = di.best_guess(rep)
-        self.scan_done(rep, None)
-        self.set_case("closed")
-        self.set_status("Confirmed: saved to your case files")
+        self.scan_done(rep, None)        # (in your case files now: the lab starts reading it)
+        self.set_outcome("Saved to your case files", th.GREEN_DOT)
 
     def match_menu(self):
         rep = self.rep
@@ -1355,7 +1514,9 @@ class App:
             di.logger.exception("saving the answer failed")
             messagebox.showerror(APP, "Couldn't save the answer: %s" % exc)
             return
+        h = self.rep["content_hash"]
         self.scan()
+        self._answer_saved = h if truth else None      # corrected: the footer says it's saved, once rescanned
 
     def picture_menu(self, event=None):
         m = self.pic_menu
@@ -1396,7 +1557,7 @@ class App:
             self.pic_lbl.config(image=img, text="", padding=0)
             full = next((d["full"] for d in rep.get("disc_images") or [] if art.get("source") == "disc"), None)
             self.pic_path = full or art["image"]
-            self.pic_cap.config(text=picture_source(rep, art), wraplength=img.width() + 10, justify="center")
+            self.pic_cap.config(text=picture_source(rep, art), wraplength=th.real(img.width() + th.px(10)), justify="center")
             self.pic_col.pack(side="left", anchor="n", padx=(0, 26), before=self.info)
         elif rep.get("art_note"):            # tell the user why there's no picture
             self.pic_lbl.config(text=rep["art_note"], image="", wraplength=170, justify="left", padding=10)
@@ -1432,13 +1593,19 @@ class App:
         self.options_changed()
 
     def choose_titles(self):
-        if not self.rep:
-            return
-        TitlePicker(self.root, self)
-
-    def label_titles(self):
+        """Rip ▾ > Choose titles: what to rip."""
         if self.rep:
-            LabelDialog(self.root, self, self.rep["content_hash"], display_title(self.rep))
+            TitlePicker(self.root, self)
+
+    def edit_titles(self):
+        """Rip ▾ > Edit titles: what each title is (and Detect titles). One at a time: open
+        already, it comes to the front."""
+        v = self.titles_dialog
+        if v is not None and v.alive():
+            v.top.lift()
+            v.top.focus_force()
+        elif self.rep:
+            TitlesDialog(self.root, self, self.rep["content_hash"], display_title(self.rep), rep=self.rep)
 
     def labels_changed(self, h):
         """Labels saved for a disc: if it's the one on the desk, its rip plan follows them now."""
@@ -1448,12 +1615,16 @@ class App:
                 self.rep["labels"] = di.get_labels(con, h)
             finally:
                 con.close()
-            di.apply_labels(self.rep.get("titles") or [], self.rep["labels"])
-            di.labels_over_guess(self.rep)
-            self.show_details(self.rep)
-            self.selected = None
-            self._build_rip_menu()
-            self.show_plan_summary()
+            self.relabel()
+
+    def relabel(self):
+        """The disc's titles follow its labels (yours, then Detect titles') again: details, plan."""
+        di.apply_labels(self.rep.get("titles") or [], all_labels(self.rep))
+        di.labels_over_guess(self.rep)
+        self.show_details(self.rep)
+        self.selected = None
+        self._build_rip_menu()
+        self.show_plan_summary()
 
     # ---- Scan ----
     def scan(self):
@@ -1463,6 +1634,10 @@ class App:
                                         "folder from the Source menu (top right)." % self.source_name())
             return
         self.remember()
+        # the lab still reading this drive: it steps aside (one thing at a time on a drive); the
+        # scan starts once MakeMKV's let go and the drive's settled
+        lab = self.stop_prescan() if self.mkv_scan and self.mkv_scan["drive"] == drive else None
+        self.set_background(None)    # a new case: the last one's lab report goes with it
         self.rep = None
         self.selected = None
         self._build_rip_menu()
@@ -1475,10 +1650,11 @@ class App:
             self._notes.clear()      # case notes closed: opening them later shows just this scan
         di.logger.info("%s %s ----", SCAN_DIVIDER, drive)
         self.tell("Arriving at the scene…")
-        self.run_bg(self._scan_worker, drive)
+        self.run_bg(self._scan_worker, drive, lab)
 
-    def _scan_worker(self, drive):
+    def _scan_worker(self, drive, lab=None):
         try:
+            self.wait_for_lab(lab)
             import tempfile
             args = self.scan_args()
             args.library = di.library_open(args.db)
@@ -1503,6 +1679,14 @@ class App:
             self.set_case("none")
             self.set_status("Scan failed: details in the case notes")
             return
+        old = self.rep
+        if old is not rep and old and old.get("menu_found") and old.get("content_hash") == rep.get("content_hash"):
+            # the same disc scanned again (an answer saved): what its menus said still holds
+            rep["menu_found"] = old["menu_found"]
+            if rep.get("kind") != "tv":
+                rep["detected"] = detected_for(rep, rep["menu_found"])
+                di.apply_labels(rep.get("titles") or [], all_labels(rep))
+                di.labels_over_guess(rep)
         self.rep = rep
         self.set_busy(False)
         self._build_rip_menu()
@@ -1521,6 +1705,11 @@ class App:
             mid.append("%d episodes" % facts["episode_count"])
         if facts.get("feature_minutes"):
             mid.append("%d min" % facts["feature_minutes"])
+        uhd, hdr = picture_format(rep)
+        if uhd:
+            mid.append("4K")                      # the picture, beside the runtime: 4K, HDR10 / Dolby Vision
+        if hdr:
+            mid.append(hdr)
         m = rep.get("match")
         guess = bool(m and not m.get("sure") and not rep.get("personal_hit") and not (rep.get("discdb") or {}).get("hit"))
         by = "Best guess" if guess else ("Identified by %s" % rep.get("identified_by", "?")) if m or rep.get("personal_hit") \
@@ -1542,6 +1731,13 @@ class App:
         else:
             msg = "Still a mystery: Choose the match to say what it is"
         self.set_status(msg)
+        if os.path.exists(di.makemkv_log_store(rep["content_hash"])):     # read by MakeMKV before
+            self.set_background("Lab report on file", th.GREEN_DOT)
+        if self._answer_saved == rep["content_hash"]:        # rescanned after you corrected it
+            self._answer_saved = None
+            self.set_outcome("Saved to your case files", th.GREEN_DOT)
+        if rep.get("personal_hit"):      # in your case files: the lab reads it, if it hasn't yet
+            self.prescan(rep)
 
     def current_plan(self, mk_titles=None, extras=None, selected="current"):
         """Must run on the Tk thread unless extras/selected are passed in (Tk variables aren't thread-safe)."""
@@ -1572,16 +1768,131 @@ class App:
             self.rip_tag.pack_forget()
         self.audio_lbl.config(text=audio_summary(self.rep, plan))
         have_mkv = bool(self.makemkv_exe())
-        self.engine_lbl.config(text="MakeMKV found" if have_mkv else "MakeMKV not found",
+        self.engine_lbl.config(text="MakeMKV linked" if have_mkv else "MakeMKV not found",
                                style="InsetOk.TLabel" if have_mkv else "InsetWarn.TLabel",
                                image=th.check() if have_mkv else "", compound="left")
-        self.rip_note.config(text=("Ready to rip" if plan else "Nothing selected: use the arrow beside Rip > Choose titles")
+        if self.settings.get("menu_detect"):
+            from . import menus
+            have_vlc = bool(menus.find_vlc(self.settings.get("vlc") or None))
+            self.vlc_lbl.config(text="VLC linked" if have_vlc else "VLC not found",
+                                style="InsetOk.TLabel" if have_vlc else "InsetWarn.TLabel",
+                                image=th.check() if have_vlc else "", compound="left")
+            self.vlc_lbl.pack(anchor="w", pady=(2, 0))
+        else:
+            self.vlc_lbl.pack_forget()
+        # (ready to rip needs no words: the Rip button says so; the lab's report shows here instead)
+        self.rip_note.config(text=("" if plan else "Nothing selected: use the arrow beside Rip > Choose titles")
                              if have_mkv else "install MakeMKV to rip (or set it in Settings)")
         th.set_dot(self.rip_dot, th.BRASS_600 if plan and have_mkv else th.INK_SUBTLE)
         if self.rep:
             self.rip_card.pack(fill="x", anchor="w", pady=(10, 0))
         self.rip_btn.set_state(bool(plan) and not self.busy and have_mkv,
                                arrow_enabled=bool(self.rep) and not self.busy)
+
+    def can_detect(self):
+        """Detect titles is on offer (Edit titles): switched on in Settings, and a DVD (a real one, not a
+        saved sample) that looks like a film; TV discs aren't handled yet."""
+        rep = self.rep
+        # (rep's path was a disc when it was scanned: not asked again, the drive may be busy)
+        return bool(self.settings.get("menu_detect") and rep and rep.get("format") == "DVD"
+                    and rep.get("kind") != "tv" and not rep.get("from_sample") and rep.get("path"))
+
+    def detect_titles(self):
+        """Read the disc's menus (VLC plays them and presses their buttons) for its feature and
+        extras; every other title becomes a Promo. Kept for this scan only: titles you've
+        labelled, and those TheDiscDB names, stay as they are."""
+        from . import menus
+        if self.busy or not self.can_detect():
+            return
+        vlc = menus.find_vlc(self.settings.get("vlc") or None)
+        if not vlc:
+            self.detect_outcome("A stakeout needs VLC: install it, or set its folder in Settings", th.WAX)
+            return
+        # one thing at a time on the drive: the lab (MakeMKV) steps aside for the stakeout, and
+        # picks up again once it's over
+        lab = self.stop_prescan("The lab waits out the stakeout…")
+        self.detecting = True
+        self.set_busy(True)
+        self.story_reset()
+        v = self.titles_dialog
+        if v is None or not v.alive():       # (Edit titles has a light of its own)
+            self.show_progress(True, indeterminate=True)
+        self.tell("Going on stakeout…")       # each line stays up a moment, as the scan's do
+        self.run_bg(self._detect_worker, self.rep, vlc, lab)
+
+    def _detect_worker(self, rep, vlc, lab=None):
+        from . import menus
+        self.wait_for_lab(lab)           # MakeMKV gone from the drive, and the drive settled
+        count = {"before": 0, "total": 0}     # the crawl counts each round's presses from 1
+
+        def log(line):
+            di.logger.info("menus: %s", line.strip())
+            q = re.match(r"\s*questioning .*\((\d+) of (\d+)\)", line)
+            if q:                        # each page read: a suspect questioned (quick)
+                self.post(self.tell, suspect_line("Questioning", int(q.group(1)), int(q.group(2))))
+                return
+            m = re.match(r"\s*\[(\d+)/(\d+)\]", line)
+            if m:                        # each button pressed: a suspect
+                i, n = int(m.group(1)), int(m.group(2))
+                if i == 1:               # a new round: its suspects join those already heard
+                    count["before"] = count["total"]
+                count["total"] = count["before"] + n
+                self.post(self.tell, suspect_line("Interrogating", count["before"] + i, count["total"]))
+        try:
+            root = rep["path"]
+            structure = menus.read_structure(root, vlc, log=log)
+            out = menus.menu_dir(rep["content_hash"])
+            log("reading the menus of %s with VLC %s" % (root, vlc))
+            result = menus.crawl(root, vlc, structure, out, log=log)
+            try:                         # names OCR made up out of the backdrop: plain names
+                is_word = di.title_words(di.imdb_open(self.scan_args().imdb_dir, allow_download=False,
+                                                      log=lambda m: None))
+            except Exception:
+                is_word = None
+            result["found"] = menus.plain_names(result["found"], is_word)
+            for line in menus.found_text(result["found"]).splitlines():
+                log(line)
+            suspects = sum(1 for p in result["pages"] for b in p["buttons"] if "chain" in b)
+            found = dict(result["found"], suspects=suspects)
+            # the answer in its turn, once the last suspect has had their moment
+            self.post(self.tell, lambda: self.detect_done(rep, found, None))
+        except Exception as exc:     # show it rather than dying silently in a thread
+            di.logger.exception("reading the menus failed")
+            msg = "%s: %s" % (type(exc).__name__, exc)
+            self.post(self.tell, lambda: self.detect_done(rep, None, msg))
+
+    def detect_outcome(self, text, colour):
+        """How the stakeout went: in Edit titles, where it was asked for, while that's open; else
+        in the footer."""
+        v = self.titles_dialog
+        if v is not None and v.alive():
+            v.show_outcome(text, colour)
+        else:
+            self.set_outcome(text, colour)
+
+    def detect_done(self, rep, found, err):
+        self.detecting = False
+        if self.progress.winfo_manager():
+            self.show_progress(False)
+        self.set_busy(False)
+        if rep is not self.rep:          # another disc was scanned meanwhile
+            return
+        d = self.titles_dialog
+        if d is not None and d.rep is rep:
+            self.post(d.detected)         # (after the labels below are in)
+        if rep.get("personal_hit"):      # the lab, stopped for the stakeout, picks up again
+            self.prescan(rep)
+        if found:
+            rep["menu_found"] = found
+        labels = detected_for(rep, found) if found else {}
+        if not labels:
+            self.show_plan_summary()
+            self.detect_outcome(*(("The stakeout couldn't go ahead: details in the case notes", th.WAX) if err else
+                                  ("The stakeout turned up nothing: titles unchanged", th.AMBER_DOT)))
+            return
+        rep["detected"] = labels
+        self.relabel()
+        self.detect_outcome(suspect_report(found), th.GREEN_DOT)
 
     FILM_COLS = 5
 
@@ -1611,7 +1922,7 @@ class App:
                     self._film_imgs.append(thumb)
                     ttk.Label(cell, image=thumb, style="Card.TLabel").pack(anchor="w")
                 else:                            # no poster: an empty frame of the same size
-                    tk.Frame(cell, width=pw, height=ph, background=th.VELLUM_100, highlightthickness=1,
+                    tk.Frame(cell, width=th.px(pw), height=th.px(ph), background=th.VELLUM_100, highlightthickness=1,
                              highlightbackground=th.BRASS_300).pack(anchor="w")
                 ttk.Label(cell, text=e["name"], style="CardStrip.TLabel", wraplength=wrap,
                           justify="left").pack(anchor="w", pady=(3, 0))
@@ -1622,6 +1933,101 @@ class App:
             self.cancel()
         else:
             self.rip()
+
+    # ---- MakeMKV's reading of the disc (its title list), ahead of time ----
+    def prescan(self, rep):
+        """For a disc in your case files (confirmed or corrected; after a scan or stakeout of one
+        too, if the lab hasn't read it yet), with MakeMKV linked:
+        MakeMKV reads the disc's titles in the background (minutes, on a protected disc) and the
+        reading is saved with the disc. A rip then starts straight away, and a TheDiscDB packet
+        can be built later without the disc. Nothing to do if it's saved already."""
+        exe = self.makemkv_exe()
+        if not exe or not rep or rep.get("from_sample") or self.mkv_scan or self.busy:   # (busy: the drive's in use)
+            return
+        if os.path.exists(di.makemkv_log_store(rep["content_hash"])):
+            di.logger.info("MakeMKV's reading of %s is saved already (from an earlier rip or reading)",
+                           rep["content_hash"][:8])
+            self.set_background("Lab report on file", th.GREEN_DOT)
+            return
+        if (rep.get("discdb") or {}).get("hit"):
+            # TheDiscDB has it: no packet to build, so the reading would only spare the rip its
+            # own (which it does when it starts); the drive is left alone
+            di.logger.info("TheDiscDB has %s: no background reading by MakeMKV", rep["content_hash"][:8])
+            return
+        job = {"hash": rep["content_hash"], "drive": self.source.get(), "proc": None, "done": threading.Event(),
+               "stopped": False, "ok": False}
+        self.mkv_scan = job
+        self.set_background("The lab is examining the disc…")
+        self._build_rip_menu()           # (Open MakeMKV waits while the lab has the drive)
+        di.logger.info("MakeMKV reads %s in the background (saved for rips and TheDiscDB packets)",
+                       rep["content_hash"][:8])
+        self.run_bg(self._prescan_worker, exe, self.source.get(), job)
+
+    def _prescan_worker(self, exe, drive, job):
+        try:
+            source = makemkv_source(drive)
+            if job["stopped"]:
+                return
+            job["proc"] = subprocess.Popen([exe, *MAKEMKV_SWITCHES, "info", source], stdout=subprocess.PIPE,
+                                           stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+                                           creationflags=NO_WINDOW)
+            info = job["proc"].communicate()[0]
+            if job["stopped"] or not di.parse_makemkv_log(info)["titles"]:
+                di.logger.info("MakeMKV's background reading %s", "stopped" if job["stopped"] else "found no titles")
+                return
+            store = di.makemkv_log_store(job["hash"])
+            os.makedirs(os.path.dirname(store), exist_ok=True)
+            with open(store, "w", encoding="utf-8", newline="") as fh:
+                fh.write(info)
+            job["ok"] = True
+            di.logger.info("MakeMKV's reading of %s saved", job["hash"][:8])
+        except Exception:
+            di.logger.exception("MakeMKV's background reading failed")
+        finally:
+            job["done"].set()
+            self.post(self._prescan_over, job)
+
+    def _prescan_over(self, job):
+        if self.mkv_scan is job:
+            self.mkv_scan = None
+            self._build_rip_menu()
+        # its report, on its case: (a scan since will say "on file" itself, once it's done)
+        if not job["stopped"] and self.rep and self.rep.get("content_hash") == job["hash"]:
+            self.set_background(*(("Lab report filed", th.GREEN_DOT) if job["ok"] else
+                                  ("The lab couldn't read the disc", th.AMBER_DOT)))
+
+    DRIVE_SETTLE = 2.0       # seconds a drive gets to settle after MakeMKV lets go of it
+
+    def wait_for_lab(self, job):
+        """(Worker thread) Wait until the lab (MakeMKV's background reading) has let go of the drive:
+        only one thing at a time reads it. Stopped, it's MakeMKV quitting (a moment), then a
+        breath for the drive; still working, the whole reading."""
+        if not job:
+            return
+        if job["stopped"]:
+            job["done"].wait()
+            time.sleep(self.DRIVE_SETTLE)
+        elif not job["done"].is_set():
+            di.logger.info("waiting for MakeMKV's background reading to finish with the drive")
+            self.post(self.tell, "Waiting for the lab to finish with the disc…")
+            job["done"].wait()
+
+    def stop_prescan(self, why=None):
+        """Stop MakeMKV's background reading: something else needs the drive (a stakeout, a new
+        scan), or the app's closing. why: said in the rip card meanwhile (it starts again after:
+        a confirmed disc without a saved reading gets one). Returns the stopped job, for whoever
+        needs the drive to wait_for_lab on (MakeMKV quits, the drive settles), or None."""
+        job = self.mkv_scan
+        if not job:
+            return None
+        job["stopped"] = True
+        if job["proc"] and job["proc"].poll() is None:
+            job["proc"].terminate()
+        self.mkv_scan = None
+        self._build_rip_menu()
+        di.logger.info("MakeMKV's background reading stopped%s", " (%s)" % why if why else "")
+        self.set_background(why, th.BRASS_400)
+        return job
 
     def rip(self):
         if not self.rep:
@@ -1641,30 +2047,53 @@ class App:
         self.cancelled = False
         self.set_busy(True, ripping=True)
         self.show_progress(True)
+        th.pulse_dot(self.rip_dot, th.BRASS_600, th.CARD)     # the rip card's light breathes while it rips
         self.set_status("Sending the disc to the lab (MakeMKV)…")
         # read every setting here, on the Tk thread; the worker only gets plain values
+        job = self.mkv_scan if self.mkv_scan and self.mkv_scan["hash"] == self.rep["content_hash"] else None
         opts = {"extras": bool(self.extras.get()),
-                "selected": set(self.selected) if self.selected is not None else None}
+                "selected": set(self.selected) if self.selected is not None else None, "prescan": job}
         self.run_bg(self._rip_worker, exe, self.source.get(), out, self.rep, opts)
 
     def _rip_worker(self, exe, drive, out, rep, opts):
         try:
-            source = makemkv_source(exe, drive)
-            info = subprocess.run([exe, "-r", "--cache=1", "info", source], capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace", timeout=900,
-                                  creationflags=NO_WINDOW).stdout
-            mk = di.parse_makemkv_log(info)
-            if not mk["titles"]:
-                raise RuntimeError("MakeMKV found no titles on %s" % source)
+            # MakeMKV's title list: read once per disc and kept (a confirmed disc's was read in the
+            # background, maybe still being read: wait for it rather than read it twice)
+            job = opts.get("prescan")
+            if job and not job["done"].is_set():
+                di.logger.info("waiting for MakeMKV's background reading of the disc")
+                self.post(self.set_status, "Waiting for the lab to finish examining the disc…")
+                while not job["done"].wait(0.5):
+                    if self.cancelled:
+                        self.post(self.rip_done, [], 0, None)
+                        return
+            source = makemkv_source(drive)
             store = di.makemkv_log_store(rep["content_hash"])        # reused by --packet later
-            os.makedirs(os.path.dirname(store), exist_ok=True)
-            with open(store, "w", encoding="utf-8", newline="") as fh:
-                fh.write(info)
+            mk = {"titles": []}
+            if os.path.exists(store):
+                with open(store, encoding="utf-8", errors="replace") as fh:
+                    mk = di.parse_makemkv_log(fh.read())
+                if mk["titles"]:
+                    di.logger.info("using MakeMKV's saved reading of the disc")
+            if not mk["titles"]:
+                info = subprocess.run([exe, *MAKEMKV_SWITCHES, "info", source], capture_output=True, text=True,
+                                      encoding="utf-8", errors="replace", timeout=900,
+                                      creationflags=NO_WINDOW).stdout
+                mk = di.parse_makemkv_log(info)
+                if not mk["titles"]:
+                    raise RuntimeError("MakeMKV found no titles on %s" % source)
+                os.makedirs(os.path.dirname(store), exist_ok=True)
+                with open(store, "w", encoding="utf-8", newline="") as fh:
+                    fh.write(info)
             plan = self.current_plan(mk["titles"], extras=opts["extras"], selected=opts["selected"])
             di.logger.info("rip %s from %s (%s) into %s: %d titles", rep["content_hash"][:8], drive, source, out, len(plan))
             for item in plan:
                 di.logger.info("  MakeMKV title %s (%s, %s) -> %s", item["mk"], item["title_id"], item["length"], item["dest"])
             done = []
+            # One MakeMKV run per title: makemkvcon's mkv takes one title or "all", not a list, and
+            # each run rescans the disc (minutes, on a protected one). A list is a requested
+            # MakeMKV feature (forum.makemkv.com/forum/viewtopic.php?f=10&t=40891): once it's
+            # there, one run for the whole plan scans the disc once.
             for i, item in enumerate(plan):
                 if self.cancelled:
                     break
@@ -1691,7 +2120,7 @@ class App:
             self.post(self.rip_done, [], 0, "%s: %s" % (type(exc).__name__, exc))
 
     def _run_mkv(self, exe, source, idx, work, n, total):
-        cmd = [exe, "-r", "--progress=-same", "mkv", source, str(idx), work]
+        cmd = [exe, *MAKEMKV_SWITCHES, "--progress=-same", "mkv", source, str(idx), work]
         di.logger.info("  run: %s", subprocess.list2cmdline(cmd))
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                      encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
@@ -1715,17 +2144,23 @@ class App:
         return ok or rc == 0
 
     def rip_done(self, done, planned, err):
+        """The rip's outcome, in the footer: green, all ripped; amber, called off or some didn't
+        make it; red, it failed."""
         self.show_progress(False)
         self.set_busy(False)
+        th.set_dot(self.rip_dot, th.BRASS_600 if self.rep else th.INK_SUBTLE)
         if done:
             self.last_out = os.path.dirname(done[0])
         if err:
-            self.set_status("Rip failed · details in the log (Open logs folder, at the bottom)")
+            self.set_outcome("The lab couldn't rip it: details in the logs", th.WAX)
             messagebox.showerror(APP, err + "\n\nDetails are in errors.log (Open logs folder, at the bottom of the window).")
         elif self.cancelled:
-            self.set_status("Cancelled after %d of %d titles" % (len(done), planned))
+            self.set_outcome("Rip called off after %d of %d titles" % (len(done), planned), th.AMBER_DOT)
+        elif len(done) < planned:
+            self.set_outcome("Evidence bagged: %d of %d titles ripped (details in the logs)" % (len(done), planned),
+                             th.AMBER_DOT)
         else:
-            self.set_status("Done: %d of %d titles ripped · Open rip folder from the arrow beside Rip" % (len(done), planned))
+            self.set_outcome("Evidence bagged: %d of %d titles ripped" % (len(done), planned), th.GREEN_DOT)
 
     def cancel(self):
         self.cancelled = True
@@ -1737,6 +2172,7 @@ class App:
         if self.busy and not messagebox.askyesno(APP, "A job is still running. Quit anyway?"):
             return
         self.cancel()
+        self.stop_prescan()
         self.remember()
         di.logger.removeHandler(self._notes_handler)
         self.root.destroy()
@@ -1773,21 +2209,35 @@ ART_SOURCE_NAMES = {"TMDB": "TMDB", "TheDiscDB": "DISCDB", "disc": "DISC", "IMDb
 
 
 def picture_source(rep, art):
-    """The line under the picture: where it comes from, with the film's id there
-    ("SOURCE: TMDb ID #11943", "SOURCE: Disc Art")."""
+    """The line under the picture: where it comes from, and the film's id there
+    ("VERIFIED TMDb ASSET #11943"; no id for the disc's own: "VERIFIED Disc Art ASSET")."""
     src = art.get("source")
-    m = rep.get("match") or {}
+    ref = art.get("ref") or ""
+    asset = None
     if src == "disc":
-        line = "Disc Art"
-    elif src == "TMDB":
-        line = art.get("ref") or "TMDb"
+        where = "Disc Art"
+    elif src == "TMDB":            # its ref: "TMDb ID #11943"
+        where, asset = "TMDb", (re.search(r"#\S+", ref) or [None])[0]
     elif src == "TheDiscDB" and art.get("what") == "box set cover":
-        line = art.get("ref") or "TheDiscDB"
-    elif src == "TheDiscDB":       # TheDiscDB files films by their IMDb id
-        line = "TheDiscDB \u00b7 %s" % m["imdb_id"] if m.get("imdb_id") else "TheDiscDB"
+        where, asset = "TheDiscDB", ref.partition("\u00b7")[2].strip() or None    # "TheDiscDB \u00b7 <set>"
+    elif src == "TheDiscDB":       # (no id of its own: it files films by their IMDb id)
+        where = "TheDiscDB"
     else:
-        line = src or ""
-    return ("SOURCE: %s" % line) if line else ""
+        where = src or ""
+    if not where:
+        return ""
+    return "VERIFIED %s ASSET%s" % (where, " %s" % asset if asset else "")
+
+
+def picture_format(rep):
+    """(4K, HDR) for the disc's main video: whether its film (or episodes) are 2160 lines, and
+    their HDR ("HDR10", "Dolby Vision") if any. A 4K disc's 1080p extras don't count."""
+    main = [t for t in (rep or {}).get("titles") or [] if t.get("role") in ("feature", "episode")] or \
+        [t for t in (rep or {}).get("titles") or [] if t.get("role") == "version"]
+    vis = [t.get("video_info") or {} for t in main]
+    uhd = any((v.get("height") or 0) >= 2160 for v in vis)
+    hdr = next((v["hdr"] for v in vis if v.get("hdr")), None)
+    return uhd, hdr
 
 
 def rip_films(rep, plan):
@@ -2000,6 +2450,17 @@ class ScrollArea(ttk.Frame):
                     ScrollArea._areas.discard(area)
         return None
 
+    @staticmethod
+    def wheel_scrolls(widget):
+        """The wheel over a widget in a list (a dropdown) scrolls the list, as it does over the
+        rest of it, rather than changing what the widget says."""
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            widget.bind(seq, lambda e: (ScrollArea._dispatch(e), "break")[1])
+        try:
+            widget.bind("<TouchpadScroll>", lambda e: (ScrollArea._dispatch_touch(e), "break")[1])
+        except tk.TclError:
+            pass                                  # (before Tk 9: no such event)
+
     def fit(self):
         self.update_idletasks()
         w, h = self.inner.winfo_reqwidth(), self.inner.winfo_reqheight()
@@ -2067,50 +2528,61 @@ class DeskScroll(ScrollArea):
 
 
 class TitlePicker:
-    """Rip menu > Choose titles: tick exactly which titles to rip."""
+    """Rip menu > Choose titles: tick exactly which titles to rip. What each title is shows as
+    it stands; Edit titles (Rip ▾ too) is where that's changed."""
 
     def __init__(self, root, app):
         self.app = app
-        rep = app.rep
         self.top = top = new_dialog(root, grab=True)
         top.title("Choose titles")
         top.transient(root)
         ttk.Label(top, text="Tick the titles to rip.", style="Sub.TLabel").pack(anchor="w", padx=12, pady=(12, 6))
-        default = {p["title_id"] for p in plan_rip(rep, preview_titles(rep), app.extras.get())}
-        self.current = set(app.selected if app.selected is not None else default)
-        self.default = default
-        order = {"feature": 0, "episode": 1, "extra": 2, "version": 3, "play-all": 4, "duplicate": 5,
-                 "promo": 6, "segment": 7}
-        rows = [t for t in rep["titles"] if t["role"] in order]
+        btns = ttk.Frame(top)
+        btns.pack(side="bottom", fill="x", padx=12, pady=12)     # packed first: always on screen
+        self.show_all = tk.BooleanVar(value=False)
+        self.more = ttk.Checkbutton(top, variable=self.show_all, command=self.refill)
+        self.area = ScrollArea(top)
+        self.area.pack(fill="both", expand=True, padx=12)
+        self.vars = {}
+        self.current = None
+        self.load()
+        ttk.Button(btns, text="OK", command=self.ok).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=top.destroy).pack(side="right", padx=6)
+        ttk.Button(btns, text="Default", command=self.to_default).pack(side="left")
+
+    ORDER = {"feature": 0, "episode": 1, "extra": 2, "version": 3, "play-all": 4, "duplicate": 5,
+             "promo": 6, "segment": 7}
+    # repeats of other titles, ads, the film's pieces: rarely wanted, so out of the way
+    HIDDEN = ("play-all", "duplicate", "promo", "segment")
+    ROLE_TEXT = {"promo": "Promo", "segment": "Piece of the film", "play-all": "Play-all", "duplicate": "Duplicate"}
+
+    def load(self):
+        """The rows and their ticks, from the disc as it now stands (again after Edit titles: ticks
+        you hadn't changed follow the new plan; ones you had stay)."""
+        rep = self.app.rep
+        old_default = getattr(self, "default", None)
+        self.default = {p["title_id"] for p in plan_rip(rep, preview_titles(rep), self.app.extras.get())}
+        if self.current is None:
+            self.current = set(self.app.selected if self.app.selected is not None else self.default)
+        else:
+            for k, v in self.vars.items():
+                (self.current.add if v.get() else self.current.discard)(k)
+            if self.current == old_default:
+                self.current = set(self.default)
+        self.vars = {}
+        rows = [t for t in rep["titles"] if t["role"] in self.ORDER]
         self.names = {}
         for p in plan_rip(rep, preview_titles(rep), True, selected={t["id"] for t in rows}):
             self.names[p["title_id"]] = p["dest"].split("/")[-1]
+        self.labels = all_labels(rep)
 
         def place(t):
             """Episodes by season and episode as they'll be named (then by title); the rest by title."""
             code = re.search(r"\bs(\d+)e(\d+)", self.names.get(t["id"], ""), re.I) if t["role"] == "episode" else None
             ep = (int(code.group(1)), int(code.group(2))) if code else (9999, t.get("episode_index") or 9999)
-            return (order[t["role"]], ep, di._natural(t["id"]))
+            return (self.ORDER[t["role"]], ep, di._natural(t["id"]))
         self.rows = sorted(rows, key=place)
-        btns = ttk.Frame(top)
-        btns.pack(side="bottom", fill="x", padx=12, pady=12)     # packed first: always on screen
-        hidden = [t for t in self.rows if t["role"] in self.HIDDEN]
-        self.show_all = tk.BooleanVar(value=False)
-        if hidden:
-            ttk.Checkbutton(top, variable=self.show_all, command=self.refill,
-                            text="Show %d more: duplicates, play-alls, promos and pieces of the film" % len(hidden)
-                            ).pack(side="bottom", anchor="w", padx=12)
-        self.area = ScrollArea(top)
-        self.area.pack(fill="both", expand=True, padx=12)
-        self.vars = {}
         self.refill()
-        ttk.Button(btns, text="OK", command=self.ok).pack(side="right")
-        ttk.Button(btns, text="Cancel", command=top.destroy).pack(side="right", padx=6)
-        ttk.Button(btns, text="Default", command=self.to_default).pack(side="left")
-
-    # repeats of other titles, ads, the film's pieces: rarely wanted, so out of the way
-    HIDDEN = ("play-all", "duplicate", "promo", "segment")
-    ROLE_TEXT = {"promo": "Promo", "segment": "Piece of the film", "play-all": "Play-all", "duplicate": "Duplicate"}
 
     def refill(self):
         for k, v in self.vars.items():               # keep ticks across showing / hiding
@@ -2121,26 +2593,41 @@ class TitlePicker:
         for col, head in enumerate(("", "Title", "", "Length", "Video", "Saves as")):
             ttk.Label(body, text=head, style="Sub.TLabel").grid(row=0, column=col, sticky="w", padx=(0, 10))
         self.vars = {}
+        hidden = [t for t in self.rows if t["role"] in self.HIDDEN]
         shown = [t for t in self.rows if self.show_all.get() or t["role"] not in self.HIDDEN
                  or t["id"] in self.current]
         for r, t in enumerate(shown, 1):
             v = tk.BooleanVar(value=t["id"] in self.current)
             self.vars[t["id"]] = v
-            if t["role"] == "episode":
-                label = self.episode_text(t)
-            else:
-                label = self.ROLE_TEXT.get(t["role"], t["role"].title())
-            if t["role"] == "version" and t.get("edition"):
-                label = "Version: %s" % t["edition"]
-            if t["role"] == "duplicate" and t.get("note"):
-                label = "Duplicate (%s)" % t["note"]
             ttk.Checkbutton(body, variable=v).grid(row=r, column=0, sticky="w")
-            ttk.Label(body, text=label).grid(row=r, column=1, sticky="w", padx=(0, 10))
+            ttk.Label(body, text=self.what(t)).grid(row=r, column=1, sticky="w", padx=(0, 10))
             ttk.Label(body, text=t["id"], style="Sub.TLabel").grid(row=r, column=2, sticky="w", padx=(0, 10))
             ttk.Label(body, text=di.hms(t["duration"])).grid(row=r, column=3, sticky="e", padx=(0, 10))
             ttk.Label(body, text=t.get("video") or "", style="Sub.TLabel").grid(row=r, column=4, sticky="w",
                                                                                 padx=(0, 10))
             ttk.Label(body, text=self.names.get(t["id"], ""), style="Sub.TLabel").grid(row=r, column=5, sticky="w")
+        if hidden:
+            self.more.config(text="Show %d more: duplicates, play-alls, promos and pieces of the film" % len(hidden))
+            self.more.pack(side="bottom", anchor="w", padx=12, before=self.area)
+        else:
+            self.more.pack_forget()
+
+    def what(self, t):
+        """What a title is, in a few words: your label's (or the menus') name, else its kind."""
+        if t["role"] == "episode":
+            label = self.episode_text(t)
+        else:
+            label = self.ROLE_TEXT.get(t["role"], t["role"].title())
+        if t["role"] == "version" and t.get("edition"):
+            label = "Version: %s" % t["edition"]
+        if t["role"] == "duplicate" and t.get("note"):
+            label = "Duplicate (%s)" % t["note"]
+        if t["role"] == "promo" and (self.labels.get(t["id"]) or {}).get("type") == "Other":
+            label = "Other"
+        name = (self.labels.get(t["id"]) or {}).get("title")
+        if name and t["role"] not in ("episode", "feature"):
+            label = "%s: %s" % (label, name)
+        return label
 
     def episode_text(self, t):
         """"Episode 11": its number in the season as it will be named (your label, or the guess);
@@ -2158,10 +2645,537 @@ class TitlePicker:
 
     def ok(self):
         chosen = (self.current - set(self.vars)) | {k for k, v in self.vars.items() if v.get()}
-        default = {p["title_id"] for p in plan_rip(self.app.rep, preview_titles(self.app.rep), self.app.extras.get())}
-        self.app.selected = None if chosen == default else chosen
+        self.app.selected = None if chosen == self.default else chosen
         self.top.destroy()
         self.app.options_changed()
+
+
+class TitlesDialog:
+    """Edit titles (Rip ▾, or Help TheDiscDB for a disc in your case files): what each
+    title of a disc is, in TheDiscDB's terms. Each row starts from the best word on it (yours,
+    then TheDiscDB's, then the menus' (Detect titles, here), then the scan's guess). A row you
+    change is saved with the disc (through rescans, for rips and submission packets); what the
+    menus found is saved only once confirmed (Confirm?, ticked for you when you change the row),
+    and left be otherwise. With rep (the disc on the desk) its scan's guesses and Detect from
+    menus come too."""
+
+    ORDER = {"feature": 0, "version": 1, "episode": 2, "extra": 3, "play-all": 4, "duplicate": 5, "segment": 6,
+             "promo": 7}
+    HIDDEN = TitlePicker.HIDDEN
+    # the scan's reading in TheDiscDB's terms (a copy, a play-all or a piece of the film has none)
+    ROLE_TYPES = {"feature": "MainMovie", "version": "MainMovie", "episode": "Episode", "extra": "Extra",
+                  "promo": "Promo"}
+    MIN_SECONDS = 60                  # (a disc from your case files: logos and menu loops aren't listed)
+
+    def __init__(self, root, app, h, name, rep=None, on_save=None, on_close=None):
+        self.app, self.h, self.rep, self.on_save, self.on_close = app, h, rep, on_save, on_close
+        args = app.scan_args()
+        self.db = args.db
+        con = di.library_open(self.db)
+        self.stored = {r["title_id"]: dict(r) for r in con.execute("SELECT * FROM titles WHERE hash=?", (h,))}
+        # (the disc on the desk carries yours: read when it was scanned, kept up to date since)
+        self.mine = rep["labels"] if rep is not None and "labels" in rep else di.get_labels(con, h)
+        self.series = di.series_of(con, h)        # for episode names from season and number
+        disc = con.execute("SELECT kind FROM discs WHERE hash=?", (h,)).fetchone()
+        self.tv = (rep.get("kind") if rep is not None else disc and disc["kind"]) == "tv"
+        con.close()
+        self.order = args.episode_order
+        self.online = not args.offline
+        if rep is not None:
+            hit = (rep.get("discdb") or {}).get("hit")
+        else:
+            index = di.discdb_index_open(args.discdb_dir or di.default_discdb_dir(), allow_download=False)
+            hit = di.index_hit(index, h) if index is not None else None
+        self.items = {str(t.get("source") or "").lower(): t.get("item") or {} for t in (hit or {}).get("titles") or []}
+        # {title id: {"type", "title", "season", "episode", "from", "was": what it started as, "ok": confirmed}}
+        self.state = {}
+        self.locked = False                       # while Detect titles is under way
+        self.pictures = {}                        # {title id: the menu button that plays it} (load())
+        self.viewer = None                        # MenuPicture, once one's been looked at
+        self.guide = None                         # TypeGuide, once it's been asked for
+        self.rows = []
+        self.top = top = new_dialog(root, grab=on_close is not None)
+        top.title("Edit titles")
+        top.transient(root)
+        top.configure(background=th.PARCHMENT)
+        th.color_title_bar(top)
+        body = ttk.Frame(top, style="Desk.TFrame", padding=(18, 14, 18, 14))
+        body.pack(fill="both", expand=True)
+        head = ttk.Frame(body, style="Desk.TFrame")
+        head.pack(fill="x")
+        ttk.Label(head, text=name, style="Title.TLabel", background=th.PARCHMENT).pack(side="left", anchor="w")
+        self.detect_btn = None
+        if rep is not None and app.can_detect():          # experimental: Settings > Ripping
+            self.detect_btn = ttk.Button(head, text="Detect titles", style="Small.TButton", command=self.detect)
+            self.detect_btn.pack(side="right")
+        # Detect titles' news, just under the title, near the button, on a strip like the main
+        # window's: a light (breathing while it's under way), a line, and a bar that moves
+        self.news = th.frame(body, th.VELLUM_200, border=th.BRASS_300, radius=5, outer=th.PARCHMENT)
+        nin = ttk.Frame(self.news, style="Bar.TFrame", padding=(10, 3))
+        nin.pack(fill="x")
+        self.news_dot = th.dot(nin, th.VELLUM_200, th.BRASS_400)
+        self.news_dot.pack(side="left", padx=(0, 8))
+        self.news_bar = ttk.Progressbar(nin, mode="indeterminate", length=160)
+        self.news_lbl = ttk.Label(nin, text="", style="BarStatus.TLabel")
+        self.news_lbl.pack(side="left", fill="x", expand=True)
+        self.intro = ttk.Label(body, text="Change a title's type or name and it's saved to your case files with this "
+                             "disc (fingerprint %s), for rips and submission packets. To clear a saved title, set "
+                             "its type and name to empty. Promo is for ads." % h[:8] +
+                             (" What Detect titles finds is saved once you confirm it." if self.detect_btn else ""),
+                  style="DeskSub.TLabel", wraplength=720, justify="left")
+        self.intro.pack(anchor="w", pady=(2, 10))
+        btns = ttk.Frame(body, style="Desk.TFrame")
+        btns.pack(side="bottom", fill="x", pady=(10, 0))           # first: always on screen
+        self.save_btn = ttk.Button(btns, text="Save", command=self.save)
+        self.save_btn.pack(side="right")
+        ttk.Button(btns, text="Cancel", command=self.close).pack(side="right", padx=(0, 8))
+        self.confirm_btn = ttk.Button(btns, text="Confirm all", command=self.confirm_all)
+        self.confirm_btn.pack(side="left")
+        self.show_all = tk.BooleanVar(value=False)
+        self.more = ttk.Checkbutton(body, variable=self.show_all, command=self.refill)
+        self.area = ScrollArea(body)
+        self.area.pack(fill="both", expand=True)
+        self.vars = {}
+        self.load()
+        self.refill()
+        app.titles_dialog = self
+        top.protocol("WM_DELETE_WINDOW", self.close)
+        top.bind("<Escape>", lambda e: self.close())
+        centre_over(top, root)
+
+    def alive(self):
+        try:
+            return bool(self.top.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def close(self):
+        for w in (self.viewer, self.guide):
+            if w is not None and w.alive():
+                w.top.destroy()
+        self.top.destroy()
+        if self.app.titles_dialog is self:
+            self.app.titles_dialog = None
+        if self.on_close:
+            self.on_close()
+
+    # ---- what each title is ----
+    def load(self):
+        """The rows, and each row's best word (keeping what you've made yours here already)."""
+        stored = self.stored
+        if self.rep is not None:
+            titles = [{"id": t["id"], "role": t["role"], "duration": t["duration"],
+                       "clips": t.get("clip_list") or [], "episode_index": t.get("episode_index"),
+                       "sub": tracks_text((stored.get(t["id"]) or {}).get("tracks")) or t.get("video") or ""}
+                      for t in self.rep.get("titles") or [] if t["role"] in self.ORDER]
+        else:
+            titles = [{"id": t["title_id"], "role": t["role"], "duration": t["duration"] or 0,
+                       "clips": (t["clips"] or "").split(",") if t.get("clips") else [],
+                       "episode_index": t.get("episode_index"), "sub": tracks_text(t.get("tracks"))}
+                      for t in stored.values() if t["role"] in self.ORDER and (t["duration"] or 0) >= self.MIN_SECONDS]
+        self.rows = sorted(titles, key=lambda t: (self.ORDER[t["role"]], t.get("episode_index") or 0,
+                                                  di._natural(t["id"])))
+        guesses = self.scan_names()
+        # the menu pages Detect titles saw: for each title a button plays, that button (this
+        # session's pictures: gone when the app closes, unless kept as test data)
+        pics = (((self.rep or {}).get("menu_found") or {}).get("pictures")) or {}
+        self.pictures = {"Title %d" % int(t): v for t, v in pics.items() if os.path.isfile(v.get("image") or "")}
+        detected = (self.rep or {}).get("detected") or {}
+        for t in self.rows:
+            tid = t["id"]
+            if self.state.get(tid) and (self.state[tid]["ok"] or self.changed(tid)):
+                continue                          # changed or confirmed here: stays
+            mine, theirs = self.mine.get(tid), self.discdb_item(t)
+            if mine:
+                word, source = mine, "yours"
+            elif theirs.get("type") or theirs.get("title"):
+                word, source = theirs, "discdb"
+            elif self.found_by_menus(detected.get(tid)):
+                word, source = detected[tid], "menus"
+            else:
+                word, source = dict(guesses.get(tid) or {}, type=self.ROLE_TYPES.get(t["role"], "")), "scan"
+            row = {"type": word.get("type") or "", "title": word.get("title") or "",
+                   "season": str(word["season"]) if word.get("season") else "",
+                   "episode": str(word["episode"]) if word.get("episode") else ""}
+            self.state[tid] = dict(row, was=dict(row), ok=False, auto=None, **{"from": source})
+
+    FIELDS = ("type", "title", "season", "episode")
+
+    @staticmethod
+    def found_by_menus(label):
+        """Whether the menus' word on a title is worth confirming: the film, an ad, or an extra
+        with its name read (an extra the menus couldn't name says nothing: the scan's guess
+        stands)."""
+        return bool(label) and (label.get("type") in ("MainMovie", "Promo") or bool((label.get("title") or "").strip()))
+
+    def changed(self, tid):
+        s = self.state[tid]
+        return any(s[k].strip() != s["was"][k].strip() for k in self.FIELDS)
+
+    def discdb_item(self, t):
+        tid = t["id"]
+        keys = [tid.lower()] + ([t["clips"][0].lower() + ".m2ts"] if len(t["clips"]) == 1 else [])
+        m = re.fullmatch(r"Title (\d+)", tid)
+        if m:
+            keys += ["%02d" % int(m.group(1)), m.group(1)]
+        return next((self.items[k] for k in keys if self.items.get(k)), {})
+
+    def scan_names(self):
+        """The scan's guessed episodes, from the names it would save them as: {title id: {"season",
+        "episode", "title"}} ("Psych - s01e02 - The Spelling Bee.mkv")."""
+        out = {}
+        for n in (self.rep or {}).get("plex_names") or []:
+            src, _, dest = n.partition(" -> ")
+            m = re.search(r"\bs(\d+)e(\d+)(?:-e\d+)*(?: - (.+?))?\.\w+$", dest.strip(), re.I)
+            if m:
+                out[src.strip()] = {"season": int(m.group(1)), "episode": int(m.group(2)), "title": m.group(3) or ""}
+        return out
+
+    # ---- the table ----
+    def refill(self):
+        g = self.area.inner
+        for w in g.winfo_children():
+            w.destroy()
+        heads = ("TITLE", "LENGTH", "TYPE", "NAME", "S", "E", "CONFIRM?")
+        self.cols = {h: c for c, h in enumerate(heads)}
+        self.heads = {}
+        for c, head in enumerate(heads):
+            if head == "TYPE":                    # what each type is for: a click away
+                self.heads[head] = th.link(g, head, self.show_types, style="Cap.TLabel", icon="help", right=True)
+                th.Tooltip(self.heads[head], lambda: "What each type is for")
+            else:
+                self.heads[head] = ttk.Label(g, text=head, style="Cap.TLabel")
+            self.heads[head].grid(row=0, column=c, sticky="w", padx=(0, 8), pady=(0, 4))
+        # what the menus found, to confirm, comes first and always shows (the ads too): the film,
+        # then the extras together, then the promos
+        found = set(self.found())
+        rank = {"MainMovie": 0, "Promo": 2}
+        first = sorted((t for t in self.rows if t["id"] in found),
+                       key=lambda t: (rank.get(self.state[t["id"]]["was"]["type"], 1), di._natural(t["id"])))
+        rest = [t for t in self.rows if t["id"] not in found]
+        hidden = [t for t in rest if t["role"] in self.HIDDEN]
+        shown = first + [t for t in rest if self.show_all.get() or t["role"] not in self.HIDDEN]
+        self.vars, self.episode_boxes = {}, {}
+        for r, t in enumerate(shown, 1):
+            self.add_row(g, r, t)
+        if hidden:
+            self.more.config(text="Show %d more: duplicates, play-alls, promos and pieces of the film" % len(hidden))
+            self.more.pack(side="bottom", anchor="w", pady=(6, 0), before=self.area)
+        else:
+            self.more.pack_forget()
+        self.episode_heads()
+        self.heads["CONFIRM?"].config(text="CONFIRM?" if self.found() else "")
+        state = "disabled" if self.locked else "normal"
+        self.confirm_btn.config(state=state if self.found() else "disabled")
+        self.save_btn.config(state=state)
+        self.more.config(state=state)
+
+    def found(self):
+        """The rows Detect titles has a word on (to confirm, or not)."""
+        return [tid for tid, s in self.state.items() if s["from"] == "menus"]
+
+    def add_row(self, g, r, t):
+        tid, s, col = t["id"], self.state[t["id"]], self.cols
+        cell = ttk.Frame(g)
+        cell.grid(row=r, column=col["TITLE"], sticky="w", padx=(0, 8), pady=2)
+        line = ttk.Frame(cell)
+        line.pack(anchor="w")
+        ttk.Label(line, text=tid).pack(side="left")
+        pic = self.pictures.get(tid)
+        if pic:                                   # the menu button that plays it, to look at
+            see = th.link(line, "", lambda: self.show_picture(tid), style="DeskLink.TLabel", icon="picture")
+            see.pack(side="left", padx=(6, 0))
+            th.Tooltip(see, lambda: "The menu button that plays it")
+        if t.get("sub"):
+            ttk.Label(cell, text=t["sub"], style="Sub.TLabel").pack(anchor="w")
+        ttk.Label(g, text=di.hms(t["duration"])).grid(row=r, column=col["LENGTH"], sticky="w", padx=(0, 8))
+        v = {k: tk.StringVar(value=s[k]) for k in ("type", "title", "season", "episode")}
+        v["ok"] = tk.BooleanVar(value=s["ok"])
+        off = self.locked                         # (Detect titles under way: hands off)
+        kind = ttk.Combobox(g, textvariable=v["type"], values=("",) + di.LABEL_TYPES, width=12,
+                            state="disabled" if off else "readonly")
+        kind.grid(row=r, column=col["TYPE"], sticky="w", padx=(0, 6))
+        ScrollArea.wheel_scrolls(kind)            # (not the type under the pointer)
+        ttk.Entry(g, textvariable=v["title"], width=30, state="disabled" if off else "normal").grid(
+            row=r, column=col["NAME"], sticky="we", padx=(0, 6))
+        se = ttk.Entry(g, textvariable=v["season"], width=3, state="disabled" if off else "normal")
+        ep = ttk.Entry(g, textvariable=v["episode"], width=3, state="disabled" if off else "normal")
+        se.grid(row=r, column=col["S"], sticky="w", padx=(0, 4))
+        ep.grid(row=r, column=col["E"], sticky="w", padx=(0, 8))
+        self.episode_boxes[tid] = (se, ep)
+        if s["from"] == "menus":                  # what the menus found: saved once confirmed
+            ttk.Checkbutton(g, variable=v["ok"], command=lambda: self.confirmed(tid),
+                            state="disabled" if off else "normal").grid(row=r, column=col["CONFIRM?"])
+        self.vars[tid] = v
+        for w in (se, ep):
+            w.bind("<FocusOut>", lambda e, tid=tid: self.fill_episode(tid))
+        for k in ("type", "title", "season", "episode"):
+            v[k].trace_add("write", lambda *a, tid=tid, k=k: self.edited(tid, k))
+        self.show_episode(tid)
+
+    def edited(self, tid, k):
+        """A change to a row (saved, as it's changed). One of the menus' rows given a type or a
+        name of your own is confirmed for you (not for the name we filled in from its episode)."""
+        v, s = self.vars[tid], self.state[tid]
+        s[k] = v[k].get()
+        if k == "type":
+            self.show_episode(tid)
+            self.episode_heads()
+            self.fill_episode(tid)
+        if s["from"] != "menus" or (k == "type" and not s["type"]) or \
+                (k == "title" and s["auto"] is not None and s["title"] == s["auto"]):
+            return
+        self.confirm(tid)
+
+    def confirm(self, tid, ok=True):
+        self.state[tid]["ok"] = ok
+        v = self.vars.get(tid)
+        if v and v["ok"].get() != ok:
+            v["ok"].set(ok)
+
+    def confirmed(self, tid):
+        self.confirm(tid, self.vars[tid]["ok"].get())
+
+    def confirm_all(self):
+        """Everything the menus found, confirmed."""
+        for tid in self.found():
+            self.confirm(tid)
+
+    # season and number: for an episode (or an episode's deleted scene) only
+    NAMED = {"Episode": "%s", "DeletedScene": "%s Deleted Scene"}
+
+    def numbered(self, kind):
+        """Whether a title of this type has a season and episode: an episode, or a TV disc's
+        deleted scene (an episode's own)."""
+        return kind == "Episode" or kind in self.NAMED and self.tv
+
+    def show_episode(self, tid):
+        se, ep = self.episode_boxes[tid]
+        for w in (se, ep):
+            if self.numbered(self.state[tid]["type"]):
+                w.grid()
+            else:
+                w.grid_remove()
+
+    def episode_heads(self):
+        any_ep = any(self.numbered(self.state[tid]["type"]) for tid in self.vars)
+        for h in ("S", "E"):
+            self.heads[h].config(text=h if any_ep else "")
+
+    def named(self, kind, episode_title):
+        return self.NAMED.get(kind, "%s") % episode_title if episode_title else None
+
+    def fill_episode(self, tid):
+        """An episode with a season and number: its title from TVmaze or IMDb, unless you've typed
+        one."""
+        v, s = self.vars[tid], self.state[tid]
+        season, episode = s["season"].strip(), s["episode"].strip()
+        if not (season.isdigit() and episode.isdigit()) or not self.numbered(s["type"]):
+            return
+        kind = s["type"]
+        if s["title"].strip() and s["title"] != s["auto"]:
+            return                                # a name you typed stays
+        key = (season, episode)
+        s["want"] = key
+
+        def work():
+            name = self.named(kind, di.episode_name(self.series, season, episode, self.order, online=self.online))
+
+            def done():
+                if self.alive() and s.get("want") == key and name and \
+                        (not s["title"].strip() or s["title"] == s["auto"]):
+                    s["auto"] = name
+                    if self.vars.get(tid) is v:
+                        v["title"].set(name)
+                    else:
+                        s["title"] = name
+            self.app.post(done)
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_picture(self, tid):
+        """The menu page with the button that plays tid outlined (one window, reused)."""
+        v = self.viewer
+        if v is None or not v.alive():
+            v = self.viewer = MenuPicture(self.top)
+        v.show(tid, self.pictures[tid])
+
+    def show_types(self):
+        """What each type is for (one window, kept to the front)."""
+        if self.guide is not None and self.guide.alive():
+            self.guide.top.lift()
+        else:
+            self.guide = TypeGuide(self.top)
+
+    # ---- Detect titles: its news shows here ----
+    def detect(self):
+        self.detect_btn.config(state="disabled")
+        self.app.detect_titles()
+        if self.app.busy:                         # under way: the table's locked till it's back
+            self.locked = True
+            self.refill()
+        else:                                     # (didn't go: no VLC, or the desk is busy)
+            self.detect_btn.config(state="normal")
+
+    def show_status(self, text):
+        """A step of the stakeout, with the light breathing."""
+        self.news_lbl.config(text=text)
+        if text:
+            self.news.pack(fill="x", pady=(6, 2), before=self.intro)
+            th.pulse_dot(self.news_dot, th.BRASS_400, th.VELLUM_200)
+            if not self.news_bar.winfo_manager():
+                self.news_bar.pack(side="right", padx=(12, 0), before=self.news_lbl)
+                self.news_bar.start(12)
+
+    def show_outcome(self, text, colour):
+        """How the stakeout went: a steady light (green: titles named)."""
+        self.show_status(text)
+        self.news_bar.stop()
+        self.news_bar.pack_forget()
+        th.set_dot(self.news_dot, colour)
+
+    def detected(self):
+        """Detect titles is back: rows not yours take the menus' word."""
+        if not self.alive():
+            return
+        if self.detect_btn:
+            self.detect_btn.config(state="normal")
+        self.locked = False
+        self.load()
+        self.refill()
+
+    # ---- saving ----
+    def save(self):
+        con = di.library_open(self.db)
+        try:
+            for tid, s in self.state.items():
+                # the menus' word once confirmed; any other row once changed (emptied: cleared)
+                if not (s["ok"] if s["from"] == "menus" else self.changed(tid)):
+                    continue
+                if self.numbered(s["type"]) and not s["title"].strip() \
+                        and s["season"].strip().isdigit() and s["episode"].strip().isdigit():
+                    s["title"] = self.named(s["type"], di.episode_name(
+                        self.series, s["season"], s["episode"], self.order, online=self.online)) or ""
+                di.set_label(con, self.h, tid, s["type"] or None, s["title"],
+                             (s["season"] or None) if self.numbered(s["type"]) else None,
+                             (s["episode"] or None) if self.numbered(s["type"]) else None)
+        finally:
+            con.close()
+        self.close()
+        self.app.labels_changed(self.h)
+        if self.on_save:
+            self.on_save()
+
+
+class TypeGuide:
+    """Edit titles' guide to the types: what each is for, and where a rip saves it."""
+
+    # (type, what it's for, the folder a rip saves it in)
+    TYPES = (("MainMovie", "The film itself, in any cut (theatrical, extended, director's).", "The film's"),
+             ("Episode", "A TV episode. Give it its season and episode.", "Its season's"),
+             ("Extra", "Bonus material no other type fits: making-ofs, panels, galleries.", "Other"),
+             ("Featurette", "Short behind-the-scenes pieces, gag reels.", "Featurettes"),
+             ("DeletedScene", "Deleted and extended scenes.", "Deleted Scenes"),
+             ("Trailer", "This film's own trailers and teasers.", "Trailers"),
+             ("Interview", "Interviews with the cast and crew.", "Interviews"),
+             ("Short", "Short films.", "Shorts"),
+             ("Music", "Music videos, songs, sing-alongs, concert clips.", "Other"),
+             ("Scene", "A single scene or shot from the film.", "Scenes"),
+             ("Other", "Logos, warnings, disclaimers. Not ripped unless ticked.", "Other"),
+             ("Promo", "Ads for other releases: coming soon, sneak peeks. Not ripped unless ticked.", "Other"))
+
+    def __init__(self, parent):
+        self.top = top = new_dialog(parent)
+        top.title("Title types")
+        top.transient(parent)
+        top.configure(background=th.PARCHMENT)
+        body = ttk.Frame(top, style="Desk.TFrame", padding=(14, 12, 14, 12))
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Title types", style="Title.TLabel", background=th.PARCHMENT).pack(anchor="w")
+        ttk.Label(body, text="TheDiscDB's types, and the folder each is saved in when ripped. "
+                             "Promo is Disc Detective's own: it goes to TheDiscDB as a Trailer.",
+                  style="DeskSub.TLabel", wraplength=th.px(560), justify="left").pack(anchor="w", pady=(2, 10))
+        g = ttk.Frame(body, style="Desk.TFrame")
+        g.pack(fill="x")
+        for c, head in enumerate(("TYPE", "WHAT IT'S FOR", "SAVED IN")):
+            ttk.Label(g, text=head, style="DeskCap.TLabel").grid(row=0, column=c, sticky="w", padx=(0, 12), pady=(0, 4))
+        for r, (kind, what, folder) in enumerate(self.TYPES, 1):
+            ttk.Label(g, text=kind, style="DeskMonoBold.TLabel").grid(row=r, column=0, sticky="nw", padx=(0, 12), pady=1)
+            ttk.Label(g, text=what, style="Desk.TLabel", wraplength=th.px(340), justify="left").grid(
+                row=r, column=1, sticky="nw", padx=(0, 12), pady=1)
+            ttk.Label(g, text=folder, style="DeskSub.TLabel").grid(row=r, column=2, sticky="nw", pady=1)
+        ttk.Label(body, text="A Play All takes the type of what it plays (Deleted Scenes: Play All is a "
+                             "DeletedScene). It isn't ripped unless ticked, as what it plays is ripped on its own.",
+                  style="DeskSub.TLabel", wraplength=th.px(560), justify="left").pack(anchor="w", pady=(10, 0))
+        btns = ttk.Frame(body, style="Desk.TFrame")
+        btns.pack(fill="x", pady=(10, 0))
+        ttk.Button(btns, text="Close", command=top.destroy).pack(side="right")
+        top.bind("<Escape>", lambda e: top.destroy())
+
+    def alive(self):
+        try:
+            return bool(self.top.winfo_exists())
+        except tk.TclError:
+            return False
+
+
+class MenuPicture:
+    """Edit titles' picture of a menu page: the button that plays a title outlined, and what
+    Detect titles read on it, for naming a title (or putting its name right) without going
+    through the disc's menus in VLC."""
+
+    FRAME = (720, 480)                    # the disc's own coordinates, the buttons' rectangles in
+
+    def __init__(self, parent):
+        self.top = top = new_dialog(parent)
+        top.title("Menu button")
+        top.transient(parent)
+        top.configure(background=th.PARCHMENT)
+        body = ttk.Frame(top, style="Desk.TFrame", padding=(14, 12, 14, 12))
+        body.pack(fill="both", expand=True)
+        self.head = ttk.Label(body, text="", style="Title.TLabel", background=th.PARCHMENT)
+        self.head.pack(anchor="w")
+        self.read = ttk.Label(body, text="", style="DeskSub.TLabel", wraplength=640, justify="left")
+        self.read.pack(anchor="w", pady=(2, 8))
+        self.pic = ttk.Label(body, style="DeskSub.TLabel")
+        self.pic.pack()
+        btns = ttk.Frame(body, style="Desk.TFrame")
+        btns.pack(fill="x", pady=(10, 0))
+        ttk.Button(btns, text="Close", command=top.destroy).pack(side="right")
+        top.bind("<Escape>", lambda e: top.destroy())
+        self.photo = None
+
+    def alive(self):
+        try:
+            return bool(self.top.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def show(self, tid, pic):
+        import base64
+        import io
+        from PIL import Image, ImageDraw
+        self.head.config(text="%s plays from this button" % tid)
+        words = (pic.get("text") or "").strip()
+        self.read.config(text="Detect titles read it as “%s”." % words if words else
+                         "Detect titles couldn't read its words.")
+        with Image.open(pic["image"]) as im:
+            im = im.convert("RGB")
+        sx, sy = im.width / self.FRAME[0], im.height / self.FRAME[1]
+        x0, y0, x1, y1 = pic["rect"]
+        box = (x0 * sx - 3, y0 * sy - 3, x1 * sx + 3, y1 * sy + 3)
+        draw = ImageDraw.Draw(im)
+        w = max(3, round(im.width / 180))
+        draw.rectangle(box, outline=(255, 255, 255), width=w + 2)     # (seen on dark menus and light)
+        draw.rectangle(box, outline=th.WAX, width=w)
+        k = th.SCALE * min(1.0, 900 / im.width)
+        if k != 1.0:
+            im = im.resize((round(im.width * k), round(im.height * k)), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+        self.photo = tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
+        self.pic.config(image=self.photo)
+        self.top.deiconify()
+        self.top.lift()
 
 
 def human_count(n):
@@ -2888,149 +3902,6 @@ def tracks_text(tracks):
     return "  \u00b7  ".join(parts)
 
 
-class LabelDialog:
-    """Label titles: say what each title of a disc in your library is, in TheDiscDB's terms.
-    Your labels stay across rescans; submission packets use them, and Help TheDiscDB lists the
-    discs where they'd fill a gap in TheDiscDB (or differ from it)."""
-
-    ROLE_NAMES = {"feature": "the film", "version": "another version", "episode": "episode", "extra": "extra",
-                  "play-all": "play-all", "duplicate": "duplicate", "segment": "piece of the film", "promo": "promo"}
-    ORDER = {"feature": 0, "version": 1, "episode": 2, "extra": 3, "play-all": 4, "duplicate": 5, "segment": 6,
-             "promo": 7}
-    MIN_SECONDS = 60
-
-    def __init__(self, root, app, h, name, on_save=None):
-        self.app, self.h, self.on_save = app, h, on_save
-        args = app.scan_args()
-        self.db = args.db
-        con = di.library_open(self.db)
-        titles = [dict(r) for r in con.execute("SELECT * FROM titles WHERE hash=?", (h,))]
-        mine = di.get_labels(con, h)
-        self.series = di.series_of(con, h)        # for episode names from season and number
-        con.close()
-        self.order = args.episode_order
-        self.online = not args.offline
-        index = di.discdb_index_open(args.discdb_dir or di.default_discdb_dir(), allow_download=False)
-        hit = di.index_hit(index, h) if index is not None else None
-        items = {str(t.get("source") or "").lower(): t.get("item") or {} for t in (hit or {}).get("titles") or []}
-        rows = sorted((t for t in titles if t["role"] in self.ORDER and (t["duration"] or 0) >= self.MIN_SECONDS),
-                      key=lambda t: (self.ORDER[t["role"]], t.get("episode_index") or 0, di._natural(t["title_id"])))
-        self.top = top = new_dialog(root)
-        top.title("Label titles")
-        top.transient(root)
-        top.configure(background=th.PARCHMENT)
-        th.color_title_bar(top)
-        body = ttk.Frame(top, style="Desk.TFrame", padding=(18, 14, 18, 14))
-        body.pack(fill="both", expand=True)
-        ttk.Label(body, text=name, style="Title.TLabel", background=th.PARCHMENT).pack(anchor="w")
-        ttk.Label(body, text="Say what each title is, in TheDiscDB's terms. For an episode or an episode's deleted "
-                             "scene, its season and number are enough: the name is filled in. Promo is for ads (coming soon, other "
-                             "releases): not ripped unless you tick it. Your labels stay with this disc (fingerprint %s) "
-                             "through rescans, and rips and submission packets use them." % h[:8],
-                  style="DeskSub.TLabel", wraplength=720, justify="left").pack(anchor="w", pady=(2, 10))
-        btns = ttk.Frame(body, style="Desk.TFrame")
-        btns.pack(side="bottom", fill="x", pady=(10, 0))           # first: always on screen
-        ttk.Button(btns, text="Save", command=self.save).pack(side="right")
-        ttk.Button(btns, text="Cancel", command=top.destroy).pack(side="right", padx=(0, 8))
-        if not rows:
-            ttk.Label(body, text="No titles recorded for this disc yet: scan it once first.",
-                      style="DeskSub.TLabel").pack(anchor="w")
-        area = ScrollArea(body)
-        area.pack(fill="both", expand=True)
-        g = area.inner
-        for c, head in enumerate(("Title", "Length", "Disc Detective read", "TheDiscDB says", "Type", "Name", "S", "E")):
-            ttk.Label(g, text=head.upper(), style="Cap.TLabel").grid(row=0, column=c, sticky="w", padx=(0, 10), pady=(0, 4))
-        self.vars = {}
-        for r, t in enumerate(rows, 1):
-            tid = t["title_id"]
-            clips = (t["clips"] or "").split(",") if t["clips"] else []
-            keys = [tid.lower()] + ([clips[0].lower() + ".m2ts"] if len(clips) == 1 else [])
-            m = re.fullmatch(r"Title (\d+)", tid)
-            if m:
-                keys += ["%02d" % int(m.group(1)), m.group(1)]
-            item = next((items[k] for k in keys if items.get(k)), {})
-            theirs = " \u00b7 ".join(x for x in (item.get("type"), item.get("title")) if x) or ("\u2014" if hit else "not in TheDiscDB")
-            cell = ttk.Frame(g)
-            cell.grid(row=r, column=0, sticky="w", padx=(0, 10), pady=2)
-            ttk.Label(cell, text=tid).pack(anchor="w")
-            tr = tracks_text(t.get("tracks"))
-            if tr:
-                ttk.Label(cell, text=tr, style="Sub.TLabel").pack(anchor="w")
-            ttk.Label(g, text=di.hms(t["duration"])).grid(row=r, column=1, sticky="w", padx=(0, 10))
-            ttk.Label(g, text=self.ROLE_NAMES.get(t["role"], t["role"]), style="Sub.TLabel").grid(
-                row=r, column=2, sticky="w", padx=(0, 10))
-            ttk.Label(g, text=theirs, style="Sub.TLabel", wraplength=200, justify="left").grid(
-                row=r, column=3, sticky="w", padx=(0, 10))
-            my = mine.get(tid) or {}
-            v = {"type": tk.StringVar(value=my.get("type") or ""), "title": tk.StringVar(value=my.get("title") or ""),
-                 "season": tk.StringVar(value=str(my["season"]) if my.get("season") else ""),
-                 "episode": tk.StringVar(value=str(my["episode"]) if my.get("episode") else "")}
-            v["auto"] = None                          # the name we filled in (yours replaces it)
-            ttk.Combobox(g, textvariable=v["type"], values=("",) + di.LABEL_TYPES, width=12,
-                         state="readonly").grid(row=r, column=4, sticky="w", padx=(0, 6))
-            ttk.Entry(g, textvariable=v["title"], width=28).grid(row=r, column=5, sticky="we", padx=(0, 6))
-            se = ttk.Entry(g, textvariable=v["season"], width=3)
-            se.grid(row=r, column=6, sticky="w", padx=(0, 4))
-            ep = ttk.Entry(g, textvariable=v["episode"], width=3)
-            ep.grid(row=r, column=7, sticky="w")
-            for w in (se, ep):
-                w.bind("<FocusOut>", lambda e, tid=tid: self.fill_episode(tid))
-            v["type"].trace_add("write", lambda *a, tid=tid: self.fill_episode(tid))
-            self.vars[tid] = v
-        top.bind("<Escape>", lambda e: top.destroy())
-        centre_over(top, root)
-
-    # types named from the episode they belong to: an episode is its title; a deleted scene
-    # "<episode title> Deleted Scene" (several in one Deleted Scenes folder need their own names)
-    NAMED = {"Episode": "%s", "DeletedScene": "%s Deleted Scene"}
-
-    def named(self, kind, episode_title):
-        return self.NAMED.get(kind, "%s") % episode_title if episode_title else None
-
-    def fill_episode(self, tid):
-        """An episode with a season and number: its title from TVmaze or IMDb, unless you've typed
-        one (a number given with no type makes it an Episode)."""
-        v = self.vars[tid]
-        season, episode = v["season"].get().strip(), v["episode"].get().strip()
-        if not (season.isdigit() and episode.isdigit()) or v["type"].get() not in ("",) + tuple(self.NAMED):
-            return
-        if not v["type"].get():
-            v["type"].set("Episode")
-        kind = v["type"].get()
-        if v["title"].get().strip() and v["title"].get() != v["auto"]:
-            return                                # a name you typed stays
-        key = (season, episode)
-        v["want"] = key
-
-        def work():
-            name = self.named(kind, di.episode_name(self.series, season, episode, self.order, online=self.online))
-
-            def done():
-                if self.top.winfo_exists() and v.get("want") == key and name and \
-                        (not v["title"].get().strip() or v["title"].get() == v["auto"]):
-                    v["auto"] = name
-                    v["title"].set(name)
-            self.app.post(done)
-        threading.Thread(target=work, daemon=True).start()
-
-    def save(self):
-        con = di.library_open(self.db)
-        try:
-            for tid, v in self.vars.items():
-                if v["type"].get() in self.NAMED and not v["title"].get().strip() \
-                        and v["season"].get().strip().isdigit() and v["episode"].get().strip().isdigit():
-                    v["title"].set(self.named(v["type"].get(), di.episode_name(
-                        self.series, v["season"].get(), v["episode"].get(), self.order, online=self.online)) or "")
-                di.set_label(con, self.h, tid, v["type"].get() or None, v["title"].get(),
-                             v["season"].get() or None, v["episode"].get() or None)
-        finally:
-            con.close()
-        self.top.destroy()
-        self.app.labels_changed(self.h)
-        if self.on_save:
-            self.on_save()
-
-
 class HelpDiscDBDialog:
     """Settings > Disc data > Help TheDiscDB: the discs in your library TheDiscDB doesn't have yet
     (submit them), and the ones it has with titles worth labelling (suggest edits). Submitting
@@ -3051,7 +3922,7 @@ class HelpDiscDBDialog:
         body = ttk.Frame(top, style="Desk.TFrame", padding=(18, 14, 18, 14))
         body.pack(fill="both", expand=True)
         ttk.Label(body, text="Help TheDiscDB", style="Title.TLabel", background=th.PARCHMENT).pack(anchor="w")
-        ttk.Label(body, text="Discs from your library that TheDiscDB is missing, or could label better. "
+        ttk.Label(body, text="Discs from your case files that TheDiscDB is missing, or could label better. "
                              "Submitting and suggesting edits need your own GitHub account on thediscdb.com.",
                   style="DeskSub.TLabel", wraplength=640, justify="left").pack(anchor="w", pady=(2, 10))
         self.tabs = ttk.Notebook(body)
@@ -3098,7 +3969,7 @@ class HelpDiscDBDialog:
         self.label_i.pack(side="left", padx=(8, 0))
         foot = ttk.Frame(body, style="Desk.TFrame")
         foot.pack(fill="x", pady=(10, 0))
-        self.status = ttk.Label(foot, text="Looking through your library…", style="DeskSub.TLabel")
+        self.status = ttk.Label(foot, text="Looking through your case files…", style="DeskSub.TLabel")
         self.status.pack(side="left")
         ttk.Button(foot, text="Close", command=top.destroy).pack(side="right")
         top.bind("<Escape>", lambda e: top.destroy())
@@ -3138,7 +4009,7 @@ class HelpDiscDBDialog:
         self.tabs.tab(0, text="NOT IN THEDISCDB (%d)" % len(sub))
         self.tabs.tab(1, text="COULD BE LABELLED (%d)" % len(imp))
         if err:
-            self.status.config(text="Couldn't read your library: %s" % err)
+            self.status.config(text="Couldn't read your case files: %s" % err)
         elif checked_online or self.app.scan_args().no_discdb_online:
             self.status.config(text="Up to date with %s." % ("thediscdb.com" if checked_online
                                                              else "your downloaded TheDiscDB data"))
@@ -3200,7 +4071,7 @@ class HelpDiscDBDialog:
     def label(self, key):
         r = self.current(key)
         if r:
-            LabelDialog(self.top, self.app, r["hash"], r["title"], on_save=lambda: self.load(online=False))
+            TitlesDialog(self.top, self.app, r["hash"], r["title"], on_save=lambda: self.load(online=False))
 
     def open_page(self):
         r = self.current("improve")
@@ -3221,6 +4092,12 @@ class HelpDiscDBDialog:
                 "Install MakeMKV (or set it in Settings), then scan this disc and build the packet."),
                 parent=self.top)
             return
+        if not os.path.exists(stored) and (self.app.mkv_scan or self.app.busy):
+            # one thing at a time on the drive
+            messagebox.showinfo("Help TheDiscDB", "The drive is busy with this disc right now (the lab is examining "
+                                "it, or a scan, stakeout or rip is under way).\n\nBuild the packet when it's done.",
+                                parent=self.top)
+            return
         args = self.app.scan_args()
         out = os.path.join(os.path.dirname(args.db), "packets", "thediscdb_%s" % h[:8])
         drive = self.app.source.get()
@@ -3234,7 +4111,7 @@ class HelpDiscDBDialog:
                     with open(stored, encoding="utf-8", errors="replace") as fh:
                         log_text = fh.read()
                 else:
-                    log_text = subprocess.run([exe, "-r", "--cache=1", "info", makemkv_source(exe, drive)],
+                    log_text = subprocess.run([exe, *MAKEMKV_SWITCHES, "info", makemkv_source(drive)],
                                               capture_output=True, text=True, encoding="utf-8", errors="replace",
                                               timeout=900, creationflags=NO_WINDOW).stdout
                     if "TINFO:" not in log_text:
@@ -3315,7 +4192,7 @@ class SettingsDialog:
         self.prog_row = r
         r += 1
         head("Help TheDiscDB")
-        ttk.Label(f, text="Discs from your library that TheDiscDB is missing, or could label better.",
+        ttk.Label(f, text="Discs from your case files that TheDiscDB is missing, or could label better.",
                   style="Sub.TLabel", wraplength=300, justify="left").grid(row=r, column=0, columnspan=2, sticky="w")
         ttk.Button(f, text="Show discs…", style="Small.TButton",
                    command=lambda: HelpDiscDBDialog(self.top, self.app)).grid(row=r, column=2, sticky="e")
@@ -3377,6 +4254,24 @@ class SettingsDialog:
         self.mkv.trace_add("write", lambda *a: self.refresh_mkv())
         r += 1
 
+        head("VLC")
+        self.vlc = tk.StringVar(value=st.get("vlc", ""))
+        ttk.Entry(f, textvariable=self.vlc, width=38).grid(row=r, column=0, columnspan=2, sticky="we")
+        ttk.Button(f, text="Browse…", command=self.browse_vlc).grid(row=r, column=2, sticky="e", padx=(6, 0))
+        r += 1
+        self.vlc_note = ttk.Label(f, text="", style="Sub.TLabel")
+        self.vlc_note.grid(row=r, column=0, columnspan=3, sticky="w")
+        self.vlc.trace_add("write", lambda *a: self.refresh_vlc())
+        r += 1
+        self.detect = tk.BooleanVar(value=st.get("menu_detect", False))
+        ttk.Checkbutton(f, text="Detect titles from a DVD's menus (experimental)", variable=self.detect).grid(
+            row=r, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        r += 1
+        ttk.Label(f, text="Adds Detect titles to Edit titles (the menu beside Rip): VLC plays the menus and presses their buttons "
+                          "to find the film and its extras. Anything else is left out of the rip.",
+                  style="Sub.TLabel", wraplength=420, justify="left").grid(row=r, column=0, columnspan=3, sticky="w")
+        r += 1
+
         btns = ttk.Frame(outer)
         btns.pack(fill="x", pady=(12, 0))
         ttk.Button(btns, text="Close", command=self.close).pack(side="right")
@@ -3384,7 +4279,9 @@ class SettingsDialog:
         centre_over(top, root)
         self.refresh_status()
         self.refresh_mkv()
-        for var in (self.online, self.pictures, self.key, self.gkey, self.mkv, self.order):   # saved as you go
+        self.refresh_vlc()
+        for var in (self.online, self.pictures, self.key, self.gkey, self.mkv, self.vlc, self.order,
+                    self.detect):   # saved as you go
             var.trace_add("write", lambda *a: self.save())
 
     def refresh_status(self):
@@ -3405,6 +4302,21 @@ class SettingsDialog:
             found = di.find_makemkvcon()
             self.mkv_note.config(text=("Found automatically: %s" % found) if found else
                                  "Not found. Install MakeMKV, or browse to makemkvcon.")
+
+    def refresh_vlc(self):
+        from . import menus
+        p = self.vlc.get().strip()
+        if p:
+            self.vlc_note.config(text="Using this folder" if menus.find_vlc(p) == p else "VLC not found in this folder")
+        else:
+            found = menus.find_vlc()
+            self.vlc_note.config(text=("Found automatically: %s" % found) if found else
+                                 "Not found. Install VLC to read DVD menus, or browse to its folder.")
+
+    def browse_vlc(self):
+        p = filedialog.askdirectory(title="Find VLC's folder", parent=self.top)
+        if p:
+            self.vlc.set(os.path.normpath(p))
 
     def browse(self):
         p = filedialog.askopenfilename(title="Find makemkvcon", parent=self.top)
@@ -3474,6 +4386,8 @@ class SettingsDialog:
         st["tmdb_key"] = self.key.get().strip()
         st["gemini_key"] = self.gkey.get().strip()
         st["makemkv"] = self.mkv.get().strip()
+        st["vlc"] = self.vlc.get().strip()
+        st["menu_detect"] = bool(self.detect.get())
         st["episode_order"] = self.order.get()
         save_settings(st)
 
@@ -3482,7 +4396,8 @@ class SettingsDialog:
         if self.app.data_ui is self:     # keep the download going; report to the status line
             self.app.data_ui = None
         self.top.destroy()
-        if self.app.rep and not self.app.busy:   # MakeMKV may have just been set: refresh Rip
+        if self.app.rep and not self.app.busy:   # MakeMKV or Detect titles may have just been set: refresh Rip
+            self.app._build_rip_menu()
             self.app.show_plan_summary()
 
 
@@ -3499,6 +4414,22 @@ def _log_uncaught(kind):
     return hook
 
 
+def dpi_aware():
+    """Windows: tell it the app draws at the screen's own resolution, so it stops stretching the
+    window (which blurs every letter on a screen scaled past 100%). Before the first window.
+    System-aware, not per-monitor: Tk 8.6 doesn't redraw for a monitor of another scale."""
+    if os.name != "nt":
+        return
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)          # PROCESS_SYSTEM_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()           # Windows 7 / 8
+        except Exception:
+            pass
+
+
 def main():
     try:
         di.setup_logging()
@@ -3508,7 +4439,14 @@ def main():
     sys.excepthook = _log_uncaught("main")
     threading.excepthook = lambda a: di.logger.error("uncaught error in a background thread",
                                                      exc_info=(a.exc_type, a.exc_value, a.exc_traceback))
+    dpi_aware()
     root = tk.Tk()
+    # unseen until it's built at its proper size: tinting the title bar needs the window to exist,
+    # and it would otherwise show at Tk's small default size, then jump to the real one
+    try:
+        root.attributes("-alpha", 0.0)
+    except tk.TclError:
+        pass
 
     def tk_error(exc, val, tb):               # errors in button handlers etc.
         di.logger.error("error in the app", exc_info=(exc, val, tb))
@@ -3516,6 +4454,11 @@ def main():
                              % (exc.__name__, val))
     root.report_callback_exception = tk_error
     App(root)
+    root.update_idletasks()
+    try:
+        root.attributes("-alpha", 1.0)
+    except tk.TclError:
+        pass
     root.mainloop()
     di.logger.info("Disc Detective closed")
 

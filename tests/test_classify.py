@@ -88,6 +88,32 @@ def test_dvd_decoy_titles():
     assert roles["Title 17"] == roles["Title 20"] == "duplicate"
 
 
+def test_dvd_decoys_that_run_in_order_through_half_the_film():
+    """The Sorcerer's Apprentice: besides scrambled decoys, a set of titles that run their cells
+    in order but through half the video the film needs (3.4 Mbps for 109 minutes, copied in
+    several title sets). The real film is the one in order through all of it."""
+    import random
+    big = [(i * 100000, i * 100000 + 99999) for i in range(20)]
+    small = [(i * 50000, i * 50000 + 49999) for i in range(20)]
+    rnd = random.Random(7)
+
+    def title(i, vts, cells, dur=6540.2):
+        return {"id": "Title %d" % i, "group": "VTS %d" % vts, "duration": dur, "chapters": 23,
+                "segments": tuple((vts,) + c for c in cells), "audio": [{"lang": "en", "kind": ""}] * 3,
+                "subs": [], "video": "NTSC 16:9"}
+    ts = [title(4, 2, small), title(5, 2, small), title(10, 4, small)]           # half the video, in order
+    for i in range(13, 20):
+        order = big[:]
+        rnd.shuffle(order)
+        ts.append(title(i, 5 + i, order, 6400 + 20 * i))                         # scrambled
+    ts.append(title(35, 10, big))                                                  # the film
+    kind, ob = classify(ts, "DVD")
+    roles = {t["id"]: t["role"] for t in ts}
+    assert ob["picked"] == "Title 35" and ob["sure"] and roles["Title 35"] == "feature"
+    assert roles["Title 4"] == roles["Title 10"] == "decoy"
+    assert roles["Title 5"] == "decoy"                  # a copy of a decoy (Title 4's video) is one too
+
+
 def test_ordinary_movie_is_not_called_protected():
     t = lambda i, d, ch: {"id": "Title %d" % i, "group": "VTS 1", "duration": d, "chapters": ch,
                          "segments": ((1, i * 10, i * 10 + 9),), "audio": [], "subs": [], "video": ""}
@@ -282,6 +308,44 @@ def test_a_long_title_of_still_frames_is_not_the_film():
     t = [dict(film, role="feature"), dict(game, role="feature")]
     core.discdb_roles(t, {"titles": [{"source": "01", "item": {"type": "MainMovie", "title": "The Sword in the Stone"}}]})
     assert t[0]["discdb_title"] == "The Sword in the Stone" and t[1]["role"] != "feature"
+
+
+def test_extras_that_end_in_a_stub_cell_of_their_own():
+    """Enchanted: each extra ends with a tiny cell of its own (a still before the menu), so the
+    same video twice, or a play-all of short deleted scenes, still shows for what it is."""
+    big = lambda i: (i * 100000, i * 100000 + 30000)
+    stub = lambda i: (900000 + i * 200, 900000 + i * 200 + 186)
+    ts = [T(1, 1, (1, 47, 0), 21, [big(1)]),
+          T(2, 2, (0, 2, 29), 2, [big(2), stub(2)]),                     # deleted scenes: one long
+          T(3, 2, (0, 1, 28), 2, [big(3), stub(3)]),                     # and two too short to list
+          T(4, 2, (0, 0, 57), 2, [big(4), stub(4)]),
+          T(5, 2, (0, 4, 35), 4, [big(2), big(3), big(4), stub(5)]),    # their play-all
+          T(6, 2, (0, 4, 35), 4, [big(2), big(3), big(4), stub(6)]),    # and again
+          T(7, 3, (0, 3, 34), 2, [big(7), stub(7)]),                     # a music video, twice
+          T(8, 3, (0, 3, 34), 2, [big(7), stub(8)])]
+    classify(ts, "DVD")
+    role = {t["id"]: (t["role"], t["note"]) for t in ts}
+    assert role["Title 5"] == ("play-all", "plays Title 2, Title 3, Title 4")
+    assert role["Title 6"] == ("duplicate", "same video as Title 5")
+    assert role["Title 7"][0] == "extra" and role["Title 8"] == ("duplicate", "same video as Title 7")
+    assert role["Title 2"][0] == "extra" and role["Title 3"][0] == "junk"
+
+
+def test_discdb_extras_too_short_for_the_scan():
+    """Muppets from Space: outtakes of 10-40 seconds the scan sets aside as junk, that TheDiscDB
+    names, are extras; an ad among them still becomes a promo by its name; unnamed short clips
+    stay junk."""
+    t = lambda i, d, role: {"id": "Title %d" % i, "duration": d, "role": role, "note": ""}
+    titles = [t(1, 5291, "feature"), t(2, 13, "junk"), t(4, 14, "junk"), t(24, 61, "junk"), t(28, 30, "junk")]
+    hit = {"titles": [{"source": "01", "item": {"type": "MainMovie", "title": "Muppets from Space"}},
+                      {"source": "04", "item": {"type": "Extra", "title": "Outtake: Total Recoil"}},
+                      {"source": "24", "item": {"type": "Trailer", "title": "Teaser Trailer"}},
+                      {"source": "28", "item": {"type": "Trailer", "title": "Previews (Columbia)"}}]}
+    core.discdb_roles(titles, hit)
+    core.discdb_promos(titles, hit)
+    role = {x["id"]: x["role"] for x in titles}
+    assert role == {"Title 1": "feature", "Title 2": "junk", "Title 4": "extra", "Title 24": "extra",
+                    "Title 28": "promo"}
 
 
 def test_discdb_main_movie_that_we_called_a_duplicate():

@@ -1016,6 +1016,19 @@ def meta_title(name):
     return t                     # "" when it named only the format
 
 
+def interactual_name(root):
+    """The film's name from InterActual Player's disc.id, the DVD-ROM software on many 2001-2006
+    Columbia TriStar, Universal and Fox DVDs ("[InterActual] ... name=Spiderman 2002 disc 1"),
+    or None. The volume label of those discs often says nothing (DVD_VIDEO)."""
+    path = find_child(root, "disc.id")
+    try:
+        text = read_file(path).decode("latin-1") if path else ""
+    except OSError:
+        return None
+    m = re.search(r"^\s*name\s*=\s*(.+?)\s*$", text, re.M | re.I) if "[interactual]" in text.lower() else None
+    return meta_title(m.group(1)) or None if m else None
+
+
 def parse_bluray(bdmv):
     titles = []
     pl_dir = find_child(bdmv, "PLAYLIST")
@@ -1121,6 +1134,20 @@ def parse_bluray(bdmv):
 # 3c. classification
 # --------------------------------------------------------------------------
 
+# a DVD cell this small (sectors: under 1 MB) is a stub, not video worth comparing: Enchanted
+# ends each extra with a cell of its own (~187 sectors, a still before the menu), so two titles
+# playing the same video, or a play-all and its parts, would otherwise never match
+STUB_SECTORS = 512
+PART_MIN = 10           # a junk title this long (seconds) can still be a play-all's part
+
+
+def content_cells(segments):
+    """A title's segments without the DVD stub cells (all of them, if that's all there is)."""
+    real = tuple(s for s in segments if not (len(s) == 3 and isinstance(s[1], int)
+                                             and s[2] - s[1] < STUB_SECTORS))
+    return real or tuple(segments)
+
+
 def classify(titles, fmt):
     """Label each title: junk / duplicate / play-all / version / feature / episode / extra."""
     for t in titles:
@@ -1130,36 +1157,37 @@ def classify(titles, fmt):
         elif t["duration"] < JUNK_MAX:
             t["role"] = "junk"
     real = [t for t in titles if t["role"] is None and t["segments"]]
+    content = {t["id"]: content_cells(t["segments"]) for t in titles if t.get("segments")}
 
     # exact duplicates: identical underlying video segments
     first_by_sig = {}
     for t in real:
-        sig = t["segments"]
+        sig = content[t["id"]]
         if sig in first_by_sig:
             t["role"], t["note"] = "duplicate", "same video as %s" % first_by_sig[sig]["id"]
         else:
             first_by_sig[sig] = t
     uniq = [t for t in real if t["role"] is None]
 
-    # play-all: segments are the concatenation of 2+ other titles' segments
+    # play-all: segments are the concatenation of 2+ other titles' segments. Its parts may be
+    # short enough to count as junk on their own (Enchanted's deleted scenes: 43-88 seconds)
     seg_owner = {}
-    for t in uniq:
-        if len(t["segments"]) >= 1:
-            seg_owner.setdefault(t["segments"][0], []).append(t)
+    for t in uniq + [x for x in titles if x["role"] == "junk" and x["duration"] >= PART_MIN and x.get("segments")]:
+        seg_owner.setdefault(content[t["id"]][0], []).append(t)
     for t in sorted(uniq, key=lambda x: -x["duration"]):
-        parts, pos, segs = [], 0, t["segments"]
+        parts, pos, segs = [], 0, content[t["id"]]
         while pos < len(segs):
             match = None
             for cand in seg_owner.get(segs[pos], []):
                 if cand is t or cand["role"] == "play-all":
                     continue
-                n = len(cand["segments"])
-                if segs[pos:pos + n] == cand["segments"] and (match is None or n > len(match["segments"])):
+                n = len(content[cand["id"]])
+                if segs[pos:pos + n] == content[cand["id"]] and (match is None or n > len(content[match["id"]])):
                     match = cand
             if not match:
                 break
             parts.append(match)
-            pos += len(match["segments"])
+            pos += len(content[match["id"]])
         if pos == len(segs) and len(parts) >= 2:
             t["role"] = "play-all"
             t["note"] = "plays " + ", ".join(p["id"] for p in parts)
@@ -1358,6 +1386,12 @@ def classify(titles, fmt):
     obfuscated = fmt == "Blu-ray" and len(features) >= 6
     if fmt == "DVD" and kind == "movie":
         obfuscated = dvd_decoys(features) or obfuscated
+        if obfuscated:                        # a copy of a decoy is a decoy too
+            role = {t["id"]: t["role"] for t in titles}
+            for t in titles:
+                m = re.match(r"same video as (.+)$", t.get("note") or "")
+                if t["role"] == "duplicate" and m and role.get(m.group(1)) == "decoy":
+                    t["role"], t["note"] = "decoy", "decoy title (copy protection)"
     return kind, obfuscated
 
 
@@ -1433,6 +1467,14 @@ def dvd_decoys(features):
     num = lambda t: [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", t["id"])]
     top = max(_in_order(t) for t in features)
     group = sorted((t for t in features if _in_order(t) >= top - 1e-9), key=num)   # the most in-order
+    # in order, but short of video: another kind of decoy. The Sorcerer's Apprentice has 24
+    # titles that run their cells in order through only half the film's sectors (3.4 Mbps for
+    # 109 minutes) and one, the real one, through all of it (6.5 Mbps, like the scrambled decoys)
+    sectors = lambda t: sum(s[2] - s[1] + 1 for s in t.get("segments") or ()
+                            if len(s) == 3 and isinstance(s[1], int))
+    most = max(sectors(t) for t in group)
+    if most:
+        group = [t for t in group if sectors(t) >= 0.98 * most]
     same_film = max(t["duration"] for t in group) - min(t["duration"] for t in group) <= 1.0
     sure = top >= 0.9 and same_film and len(group) < len(features)
     best = group[0]
@@ -1746,9 +1788,14 @@ def extract_cover(root, fmt, outdir, bd_meta=None):
         return None
     best = max(thumbs, key=os.path.getsize)
     out = os.path.join(outdir, "cover" + os.path.splitext(best)[1].lower())
-    if os.path.exists(out):
-        os.chmod(out, stat.S_IWRITE | stat.S_IREAD)
-    shutil.copyfile(best, out)
+    try:                                  # a picture is a nicety: a disc that won't read it, or a
+        os.makedirs(outdir, exist_ok=True)  # temp folder gone meanwhile, never fails the scan
+        if os.path.exists(out):
+            os.chmod(out, stat.S_IWRITE | stat.S_IREAD)
+        shutil.copyfile(best, out)
+    except OSError as exc:
+        logger.warning("cover art: couldn't copy %s: %s", best, exc)
+        return {"found": best, "image": None, "note": "couldn't read the disc's picture"}
     return {"found": best, "image": out, "note": ""}
 
 
@@ -2005,6 +2052,31 @@ def imdb_open(imdb_dir, allow_download=True, force=False, log=print):
     return sqlite3.connect(db_path)
 
 
+# a word is a word when a title this well known has it (OCR's misreadings mostly aren't)
+WORD_VOTES = 1000
+
+
+def title_words(con):
+    """is_word(w): whether a well-known title has the word, the IMDb index as a dictionary.
+    None without the index (or FTS5): then nothing can be checked."""
+    if con is None:
+        return None
+    seen = {}
+
+    def is_word(w):
+        w = w.lower()
+        if w not in seen:
+            seen[w] = con.execute("SELECT 1 FROM titles_fts f JOIN ratings r ON r.id = f.rowid "
+                                  "WHERE titles_fts MATCH ? AND r.votes >= ? LIMIT 1",
+                                  ('"%s"' % w.replace('"', ''), WORD_VOTES)).fetchone() is not None
+        return seen[w]
+    try:
+        is_word("the")
+    except Exception:
+        return None
+    return is_word
+
+
 def _fts_query(q, prefix_last):
     toks = re.findall(r"[a-z0-9]+", q.lower())
     toks = [t for t in toks if t not in ("the", "a", "an", "of", "and", "in")] or toks
@@ -2043,6 +2115,12 @@ def imdb_search(con, query, truncated, types, limit=40):
     return list(rows.values())
 
 
+# what a run-together label word may have skipped between its pieces: any words (labels are cut
+# to fit: MENGOATS = The Men Who Stare at Goats); a well-known title having the pieces in that
+# order is the check, and runtime and the rest still rank the candidates
+RUNON_GAP = r"(?: [a-z0-9]+)*?"
+
+
 def split_runon(con, query):
     """HARRYPOTTER3 -> "Harry Potter 3": a label word no title contains, split into words that
     appear together, in that order, in a well-known title. None when nothing needs splitting."""
@@ -2057,8 +2135,9 @@ def split_runon(con, query):
     spelled = {}
 
     def has_loosely(words):
-        """The words in a known title, in order, with a small word the label dropped between
-        them or an apostrophe it lost (ITSWONDERFULLIFE = It's a Wonderful Life)."""
+        """The words in a known title, in order, with words the label dropped between them or an
+        apostrophe it lost (ITSWONDERFULLIFE = It's a Wonderful Life; FATHERBRIDE = Father of
+        the Bride; MENGOATS = The Men Who Stare at Goats)."""
         long = [x for x in words if len(x) >= 4] or words
         try:
             rows = con.execute("SELECT t.title, COALESCE(r.votes, 0) FROM titles_fts f JOIN titles t ON t.id = f.rowid "
@@ -2066,8 +2145,9 @@ def split_runon(con, query):
                                (" AND ".join('"%s"' % x for x in long),)).fetchall()
         except Exception:
             return 0
-        gap = r"(?: (?:a|an|the|of|and|to|in))?"
-        pat = re.compile(r"(?:^| )" + (gap + " ").join(map(re.escape, words)) + r"(?: |$)")
+        gap = RUNON_GAP
+        # (a piece may carry a possessive "s" in the title: KINGSPEECH = The King's Speech)
+        pat = re.compile(r"(?:^| )" + (gap + " ").join(re.escape(w) + "s?" for w in words) + r"(?: |$)")
         for title, votes in rows:
             orig = re.findall(r"[A-Za-z0-9'\u2019]+", title)
             plain = " ".join(re.sub(r"['\u2019]", "", x).lower() for x in orig)
@@ -2165,14 +2245,21 @@ def imdb_candidates(con, queries, kind, facts):
         words = lambda x: re.findall(r"[a-z0-9]+", x.lower().replace("&", "and"))
         bw = words(base)
         pool = imdb_search(con, base, True, IMDB_MOVIE_TYPES, limit=60)
-        # A title that carries the number ("Pocahontas 2: Journey to a New World", "Rocky II")
-        # beats counting look-alikes by year (several unrelated "Pocahontas" films came out in 1995).
+        # A title that carries the number ("Pocahontas 2: Journey to a New World", "Rocky II",
+        # "Father of the Bride Part II", "Kill Bill: Vol. 2") beats counting look-alikes by year
+        # (several unrelated "Pocahontas" films came out in 1995; counting "Father of the Bride"
+        # films makes #2 the 1991 remake of the 1950 film).
         marks = {str(n), {v: k for k, v in ROMAN.items()}.get(n, "").lower()} - {""}
-        numbered = [r for r in pool if words(r[2])[:len(bw)] == bw and len(words(r[2])) > len(bw)
-                    and words(r[2])[len(bw)] in marks]
+
+        def carries_number(title):
+            rest = words(title)[len(bw):] if words(title)[:len(bw)] == bw else []
+            if rest[:1] and rest[0] in SEQUEL_WORDS:
+                rest = rest[1:]
+            return bool(rest) and rest[0] in marks
+        numbered = [r for r in pool if carries_number(r[2])]
         if numbered:
             pick = max(numbered, key=lambda r: r[6])
-            why = ["titled \"%s %s\u2026\"" % (base, n)]
+            why = ["sequel %d by its title, \"%s\"" % (n, pick[2])]
             score = 50 + 25
         else:
             family = [r for r in pool if words(r[2])[:len(bw)] == bw and r[3] and r[6] >= 100]
@@ -2255,6 +2342,7 @@ def imdb_candidates(con, queries, kind, facts):
 
 
 ROMAN = {"II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7, "VIII": 8, "IX": 9}
+SEQUEL_WORDS = {"part", "chapter", "vol", "volume", "episode", "book"}    # "Part II", "Chapter 2"
 
 
 def _title_num(t):
@@ -2369,6 +2457,12 @@ def _one_word(title):
     """A one-word title (leading article dropped) in upper case, else '' (for TZN = TarZaN)."""
     t = re.sub(r"^(the|a|an)\s+", "", (title or "").strip(), flags=re.I)
     return t.upper() if re.fullmatch(r"[A-Za-z]+", t) else ""
+
+
+def _first_word(title):
+    """A title's first word (leading article dropped), letters only, in upper case."""
+    w = re.findall(r"[A-Za-z']+", re.sub(r"^(the|a|an)\s+", "", (title or "").strip(), flags=re.I))
+    return w[0].replace("'", "").upper() if w else ""
 
 
 def numbered_fit(pick, family, minutes, words=()):
@@ -2566,6 +2660,12 @@ def imdb_initials_numbered(con, label, facts):
              "votes": votes}]
 
 
+# Disney's DVD label code: the film's letters, then "0N" and "N" + a letter + a number (0NNW1,
+# 0NNF1), sometimes written with separators (SRC-0N-NW1.1_DES = The SoRCerer's Apprentice).
+# The letters before it are the film's (initials, or the consonants of its first word)
+DISNEY_CODE = re.compile(r"^([A-Za-z]{2,4})[\s_.\-]*[0O]N[\s_.\-]*N[A-Za-z][\s_.\-]*\d", re.I)
+
+
 def imdb_initials(con, label, facts):
     """Last resort for code-like labels (BCS0NNW1): studios often start them with the title's
     initials (B C = The Black Cauldron). Sometimes the code skips the first word (NGE0NNW1 =
@@ -2581,8 +2681,10 @@ def imdb_initials(con, label, facts):
     minutes = facts.get("feature_minutes")
     if not run or not re.search(r"\d", raw) or not minutes:
         return []
-    # only real codes: a short letter run, no word breaks (SISTER_ACT2 is words, not initials)
-    if len(run.group(0)) > 4 or re.search(r"[\s_.\-]", label or ""):
+    # only real codes: a short letter run, no word breaks (SISTER_ACT2 is words, not initials);
+    # Disney's code is one whatever its separators
+    disney = DISNEY_CODE.match((label or "").strip())
+    if not disney and (len(run.group(0)) > 4 or re.search(r"[\s_.\-]", label or "")):
         return []
     master_year = int(facts["mastered"][:4]) if facts.get("mastered") else 9999
     rows = con.execute(
@@ -2628,9 +2730,15 @@ def imdb_initials(con, label, facts):
             # Or just its syllables' first letters, in order, ending anywhere (RKM0NNF1 = RocKetMan).
             skel = re.compile("^" + ".*".join(want) + "$")
             hits = [r for r in rows if _one_word(r[2]) and skel.match(_one_word(r[2]))]
+            loose = re.compile("^" + ".*".join(want))
             if not hits:
-                loose = re.compile("^" + ".*".join(want))
                 hits = [r for r in rows if _one_word(r[2]) and loose.match(_one_word(r[2]))]
+                if disney:
+                    # Disney's code can spell out a longer title's first word the same way
+                    # (SRC-0N-NW1: The SoRCerer's Apprentice); those compete with the loose
+                    # one-word fits (SCaRecrow) by how well known they are. A one-word title that
+                    # fits exactly still wins outright (TZN is Tarzan, not Tarzan Escapes)
+                    hits += [r for r in rows if not _one_word(r[2]) and loose.match(_first_word(r[2]))]
             out += scored(hits, want, 2)
         if tiers[0] or tiers[1]:
             for tier, hits in tiers.items():
@@ -2767,10 +2875,18 @@ def _download(url, dest, timeout=15):
 
 def _art_entry(art_dir, key, src, source, what, box, credit=None, ref=None):
     """Convert src into the cache as <key>.png (+ sidecar json). None if it can't be shown.
-    ref: where the picture is in its source ("TMDb ID #11943"), shown under it."""
+    ref: where the picture is in its source ("TMDb ID #11943"), shown under it. A download made
+    for it (<key>_dl.jpg) goes once it's converted: the .png is what's kept."""
     png = os.path.join(art_dir, key + ".png")
-    if not to_png(src, png, box):
-        return None
+    try:
+        if not to_png(src, png, box):
+            return None
+    finally:
+        if os.path.basename(src) == key + "_dl.jpg":
+            try:
+                os.remove(src)
+            except OSError:
+                pass
     entry = {"image": png, "source": source, "what": what}
     if credit:
         entry["credit"] = credit
@@ -4057,7 +4173,7 @@ def tvmaze_season_guess(orders, season, disc, lengths, name_order="aired", fmt=N
     while first < len(seq) and sum(units[:first]) + 0.5 < before:
         first += 1
     if known:
-        notes.append("the earlier discs of this set in your library hold %d episodes" % before)
+        notes.append("the earlier discs of this set in your case files hold %d episodes" % before)
     elif first + len(lengths) > len(seq) or (disc and disc > 1 and this_disc < per_disc
                                              and first + len(lengths) >= len(seq) - 1):
         last = max(0, len(seq) - len(lengths))
@@ -4176,9 +4292,10 @@ AD_RE = re.compile(r"\b(advert\w*|previews|commercials|sneak peeks|coming soon|a
 
 
 def discdb_promos(titles, hit):
-    """Titles TheDiscDB files as a Trailer (or Other) that are really ads for other releases:
-    "Advertisement for other CBS DVDs", "Previews (...)", "Commercials", "Also available from".
-    Made promos, which aren't ripped unless ticked. Returns the titles changed."""
+    """Titles TheDiscDB files as a Trailer that are really ads for other releases: "Advertisement
+    for other CBS DVDs", "Previews (...)", "Commercials", "Also available from"; and whatever it
+    files as Other (logos, warnings, disclaimers: not extras). Made promos, which aren't ripped
+    unless ticked. Returns the titles changed."""
     items = {str(x.get("source") or "").lower(): x.get("item") or {} for x in (hit or {}).get("titles") or []}
     changed = []
     for t in titles:
@@ -4188,9 +4305,13 @@ def discdb_promos(titles, hit):
         if m:
             keys += ["%02d" % int(m.group(1)), m.group(1)]
         it = next((items[k] for k in keys if items.get(k)), {})
-        if it.get("type") in ("Trailer", "Other") and AD_RE.search(it.get("title") or "") \
-                and t.get("role") not in ("junk", "loop", "segment"):
+        if t.get("role") in ("junk", "loop", "segment", "promo"):
+            continue
+        if it.get("type") == "Trailer" and AD_RE.search(it.get("title") or ""):
             t["role"], t["note"] = "promo", "TheDiscDB: %s \"%s\", which looks like an ad" % (it["type"], it["title"])
+            changed.append(t)
+        elif it.get("type") == "Other":
+            t["role"], t["note"] = "promo", "TheDiscDB: Other" + (" \"%s\"" % it["title"] if it.get("title") else "")
             changed.append(t)
     return changed
 
@@ -4212,12 +4333,26 @@ def discdb_roles(titles, hit):
             ks.append(clips.lower() + ".m2ts")       # playlist of one clip
         return ks
 
+    changed = []
+
+    def named_extra(t, it):
+        """A title TheDiscDB names as an extra (an outtake, a teaser...) that the scan set aside as
+        too short to matter: it's an extra (Muppets from Space: outtakes of 10-40 seconds). An ad
+        among them still becomes a promo, by its name (discdb_promos, after this). Other (a logo,
+        a warning) isn't an extra: it stays set aside."""
+        if it and it.get("type") not in (None, "", "MainMovie", "Episode", "Other") and t["role"] == "junk":
+            changed.append((t["id"], t["role"], "extra"))
+            t["role"], t["note"] = "extra", "TheDiscDB: %s" % (it.get("title") or it.get("type"))
+            return True
+        return False
+
     if not mains:
         # a series disc: the titles TheDiscDB lists as episodes are the episodes, whatever their
         # length (SHERLOCK_THE_ABOMINABLE_BRIDE: one 93-minute special, S00E09)
-        changed = []
         for t in titles:
             it = next((items[k] for k in keys(t) if items.get(k)), None)
+            if named_extra(t, it):
+                continue
             if it and it.get("type") == "Episode" and t["role"] != "episode":
                 changed.append((t["id"], t["role"], "episode"))
                 t["role"], t["discdb_title"] = "episode", it.get("title")
@@ -4231,7 +4366,6 @@ def discdb_roles(titles, hit):
     main_len = [t["duration"] for t in titles if any(k in mains for k in keys(t)) and t.get("duration")]
     if not main_len:
         return []
-    changed = []
     for t in titles:
         ks = keys(t)
         listed = next((items[k] for k in ks if items.get(k)), None)     # entries TheDiscDB named
@@ -4261,6 +4395,8 @@ def discdb_roles(titles, hit):
                 for x in titles:                                       # other copies point at the named one
                     if x is not t and x.get("note") == "same video as %s" % twin["id"]:
                         x["note"] = "same video as %s" % t["id"]
+            continue
+        if named_extra(t, listed):
             continue
         if t["role"] != "feature":
             continue
@@ -4367,6 +4503,10 @@ def identify(root, args):
         if fmt == "DVD":
             s = parse_dvd(base)
             rep["provider"] = s["provider"] or None
+            name = interactual_name(root)        # (searched like a Blu-ray's metadata title)
+            if name:
+                bd_meta = {"names": [name], "toc": [], "thumbnails": []}
+                rep["bd_meta"] = {"names": [name], "toc": []}
         else:
             s = parse_bluray(base)
             bd_meta = s["meta"]
@@ -4933,10 +5073,10 @@ def apply_collection(cand, titles):
 def best_guess(rep):
     """Name the most likely title and which signal produced it (confirmed or not)."""
     if rep.get("personal_hit"):
-        return strip_tags(rep["personal_hit"]["truth"]), "your library"
+        return strip_tags(rep["personal_hit"]["truth"]), "your case files"
     c = rep.get("candidates") or []
     if rep.get("bonus_of") and c:                # a bonus disc named after its set's film disc
-        return "%s (%s)" % (c[0]["name"], c[0]["year"]), "your library (the set's film disc)"
+        return "%s (%s)" % (c[0]["name"], c[0]["year"]), "your case files (the set's film disc)"
     if c and c[0].get("kind") == "collection" and c[0].get("source") == "TheDiscDB":
         return "%s: %s" % (c[0]["name"], ", ".join("%s (%s)" % (i["name"], i["year"] or "?") for i in c[0]["items"])), \
             "TheDiscDB"                          # a box-set disc: its films, not the one it's filed under
@@ -5040,7 +5180,7 @@ status_hook = None   # front ends show progress messages here (the app's status 
 # The steps of an investigation. The log gets what is actually done; the app's status line gets
 # the detective's version of it (each tied to the step, so the story follows the work).
 STEPS = {
-    "prints": ("fingerprint: looking the disc up in your library and TheDiscDB", "Dusting for fingerprints"),
+    "prints": ("fingerprint: looking the disc up in your case files and TheDiscDB", "Dusting for fingerprints"),
     "scene": ("reading the disc's structure (playlists / title sets)", "Securing the scene"),
     "clues": ("reading the volume label, disc metadata and cover art", "Searching for clues"),
     "old cases": ("checking discs of the same set you've confirmed", "Comparing notes with old cases"),
@@ -5133,7 +5273,7 @@ def log_details(rep):
     if hit:
         d("TheDiscDB: %s (%s) %s", hit.get("title"), hit.get("year"), hit.get("release") or "")
     if rep.get("personal_hit"):
-        d("your library: %s", rep["personal_hit"].get("truth"))
+        d("your case files: %s", rep["personal_hit"].get("truth"))
     for c in (rep.get("candidates") or [])[:5]:
         d("  candidate %-45s %-6s %6s  %s", "%s (%s)" % (c.get("name"), c.get("year") or "?"), c.get("source") or "",
           c.get("score"), c.get("why") or "")
@@ -5188,7 +5328,7 @@ def is_probable(c):
 
 def status(rep, key):
     if rep.get("personal_hit"):
-        return "identified (your library)"
+        return "identified (your case files)"
     if rep["discdb"]["hit"]:
         return "identified (TheDiscDB)"
     c = rep.get("candidates") or []
@@ -5249,7 +5389,15 @@ DISCDB_ITEM_TYPES = ("MainMovie", "Episode", "Extra", "Featurette", "DeletedScen
 # Disc Detective's own: an ad for something else ("coming soon to DVD", other releases'
 # previews). Not ripped unless ticked; TheDiscDB files these as trailers, so packets say Trailer.
 LABEL_TYPES = DISCDB_ITEM_TYPES + ("Promo",)
-LABEL_ROLES = {"MainMovie": "feature", "Episode": "episode", "Promo": "promo"}       # the rest: extras
+# Other (logos, warnings) goes with the promos: not an extra, so not ripped unless ticked
+LABEL_ROLES = {"MainMovie": "feature", "Episode": "episode", "Promo": "promo", "Other": "promo"}  # the rest: extras
+
+
+def label_role(kind, scan_role=None):
+    """What a title labelled kind is to the rip. An extra the scan read as a play-all of other
+    titles ("Deleted Scenes - Play All") stays a play-all: its scenes are ripped on their own."""
+    role = LABEL_ROLES.get(kind, "extra")
+    return "play-all" if role == "extra" and scan_role == "play-all" else role
 
 
 def labelled_episodes(labels):
@@ -5280,8 +5428,8 @@ def labels_over_guess(rep):
 
 
 def apply_labels(titles, labels):
-    """Your labels decide what a title is: MainMovie the film, Episode an episode, Promo an ad,
-    anything else an extra. The scan's reading is kept as "scan_role", so clearing a label puts
+    """Your labels decide what a title is: MainMovie the film, Episode an episode, Promo (or Other)
+    an ad, anything else an extra (a play-all stays one: label_role). The scan's reading is kept as "scan_role", so clearing a label puts
     it back. A title you labelled that the scan had as a copy of another ("same video as Title
     4") becomes the one that counts, and the other becomes its copy. Returns the titles changed."""
     by_id = {t["id"]: t for t in titles}
@@ -5293,7 +5441,7 @@ def apply_labels(titles, labels):
         t = by_id.get(tid)
         if not t or not my.get("type"):
             continue
-        role = LABEL_ROLES.get(my["type"], "extra")
+        role = label_role(my["type"], t["role"])
         if t["role"] == "duplicate":
             m = re.search(r"same video as (.+?)\s*$", t.get("note") or "")
             twin = by_id.get(m.group(1)) if m else None
@@ -5303,7 +5451,7 @@ def apply_labels(titles, labels):
                 changed.append(twin)
         if t["role"] != role:
             t["scan_role"], t["scan_note"] = t["role"], t.get("note")
-            t["role"], t["note"] = role, "your label: %s" % my["type"]
+            t["role"], t["note"] = role, my.get("note") or "your label: %s" % my["type"]
             changed.append(t)
     return changed
 
@@ -5686,7 +5834,7 @@ def submission_candidates(con, index=None, online=False):
 def list_submission_candidates(con, index=None, online=False):
     rows = submission_candidates(con, index, online)
     if not rows:
-        print("Every identified disc in your library is in TheDiscDB already (or nothing's identified yet).")
+        print("Every identified disc in your case files is in TheDiscDB already (or nothing's identified yet).")
         return rows
     print("%-8s  %-7s  %-26s  %-36s  %-8s  %s" % ("hash", "format", "label", "title", "status", "MakeMKV log"))
     print("-" * 110)
@@ -5964,7 +6112,10 @@ def run_makemkv(drive="disc:0"):
         step("lab")
     else:                                # the command line: say plainly what's happening
         log("running %s -r info %s (MakeMKV reads the disc; this can take a minute) ..." % (exe, drive))
-    out = subprocess.run([exe, "-r", "--cache=1", "info", drive], capture_output=True, text=True,
+    if re.fullmatch(r"[A-Za-z]:[\\/]?", drive):
+        drive = "dev:%s" % drive[:2].upper()            # a drive letter: MakeMKV's own name for it
+    # --noscan: MakeMKV opens only this drive, not every drive in the machine
+    out = subprocess.run([exe, "-r", "--noscan", "--cache=1", "info", drive], capture_output=True, text=True,
                          encoding="utf-8", errors="replace", timeout=900, **NO_CONSOLE)
     if "TINFO:" not in out.stdout:
         raise SystemExit("MakeMKV returned no titles (is the disc in %s?)" % drive)
@@ -6177,7 +6328,7 @@ def print_report(rep):
     p("Fingerprint   %s  (%d stream files)" % (rep["content_hash"], rep["stream_files"]))
     if rep.get("personal_hit"):
         ph = rep["personal_hit"]
-        p("Your library  HIT: %s%s" % (ph["truth"], ("  (%s)" % ph["notes"]) if ph.get("notes") else ""))
+        p("Case files    HIT: %s%s" % (ph["truth"], ("  (%s)" % ph["notes"]) if ph.get("notes") else ""))
     db = rep["discdb"]
     if db["hit"]:
         h = db["hit"]
@@ -6298,9 +6449,9 @@ def print_report(rep):
     if rep.get("recorded"):
         ev = (" with %d evidence files" % rep["evidence_stored"]) if rep.get("evidence_stored") else ""
         if rep.get("personal_hit"):
-            p("Updated in your library%s (%s)" % (ev, rep.get("library_path")))
+            p("Updated in your case files%s (%s)" % (ev, rep.get("library_path")))
         else:
-            p("Recorded in your library%s (%s)" % (ev, rep.get("library_path")))
+            p("Recorded in your case files%s (%s)" % (ev, rep.get("library_path")))
             p("Once you know what it is: --set-truth %s \"Title (Year)\"  or  \"Show S1 D2\"" % rep["content_hash"][:8])
     p("")
 
@@ -6333,7 +6484,8 @@ def make_parser():
     ap.add_argument("--commit", help="TheDiscDB/data commit recorded in the index (--build-discdb-index)")
     ap.add_argument("--packet", metavar="HASH", help="build a TheDiscDB submission packet for a disc in the library")
     ap.add_argument("--makemkv-log", metavar="FILE", help="saved 'makemkvcon -r info disc:0' output for --packet")
-    ap.add_argument("--makemkv-drive", default="disc:0", help="drive for MakeMKV when no log is given (default disc:0)")
+    ap.add_argument("--makemkv-drive", default="disc:0",
+                    help="drive for MakeMKV when no log is given: a letter (E:) or MakeMKV's disc:N (default disc:0)")
     ap.add_argument("--packet-dir", metavar="DIR", help="where to write the packet (default thediscdb_<hash>)")
     ap.add_argument("--discdb-repo", default=env("DISCDB"),
                     help="local clone of github.com/TheDiscDb/data: offline lookup and posters "

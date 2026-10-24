@@ -37,6 +37,14 @@ def test_run_together_label_words(imdb):
     assert core.split_runon(imdb, "Itswonderfullife Dom") == "It's a Wonderful Life Dom"
     c = core.imdb_candidates(imdb, [("Itswonderfullife", False)], "movie", {"mastered": "2007-09", "feature_minutes": 131})
     assert core.is_probable(c) and c[0]["name"] == "It's a Wonderful Life"
+    # two small words dropped (FATHERBRIDE_US: "of the")
+    assert core.split_runon(imdb, "Fatherbride") == "Father of the Bride"
+    c = core.imdb_candidates(imdb, [("Fatherbride", False)], "movie", {"mastered": "2005-04", "feature_minutes": 105})
+    assert (c[0]["name"], c[0]["year"]) == ("Father of the Bride", 1991)
+    # any words dropped between, as long as a known title has the rest in that order (a label cut to fit)
+    assert core.split_runon(imdb, "Mengoats") == "Men Who Stare at Goats"
+    assert core.split_runon(imdb, "Bonusdisc") is None
+    assert core.split_runon(imdb, "Kingspeech") == "King's Speech"            # "king" in "King's"
 
 
 def test_a_film_number_alone_is_a_guess(imdb):
@@ -207,6 +215,17 @@ def test_one_word_titles_are_coded_by_their_consonants(imdb):
     assert c[0]["name"] == "RocketMan" and "Repli-Kate" in [x["name"] for x in c]
 
 
+def test_disneys_code_with_separators_and_a_longer_title(imdb):
+    """SRC-0N-NW1.1_DES: Disney's code (0N NW1) written with separators is still a code, and its
+    letters can spell out a longer title's first word: The SoRCerer's Apprentice, far better known
+    than Scarecrow, which has the letters in one word."""
+    c = core.imdb_initials(imdb, "SRC-0N-NW1.1_DES", {"mastered": "2010-10", "feature_minutes": 109})
+    assert (c[0]["name"], c[0]["year"]) == ("The Sorcerer's Apprentice", 2010) and core.adopt_guess(c) is c[0]
+    assert "Scarecrow" in [x["name"] for x in c]
+    # not Disney's code: words with separators aren't initials
+    assert core.imdb_initials(imdb, "SRC-DISC-1", {"mastered": "2010-10", "feature_minutes": 109}) == []
+
+
 def test_initials_also_list_the_alternatives(imdb):
     c = core.imdb_initials(imdb, "BC2", {"mastered": "2010-05", "feature_minutes": 79})
     names = [x["name"] for x in c]
@@ -219,6 +238,14 @@ def test_numbered_sequel_title_beats_counting_by_year(imdb):
     c = core.imdb_candidates(imdb, [("Pocahontas Ii", False)], "movie", {"feature_minutes": 73, "mastered": "2012-06"})
     assert c[0]["name"] == "Pocahontas 2: Journey to a New World" and core.is_probable(c)
     assert core.parse_label("Pocahontas_II_USA_DES").get("short_query") is None   # II isn't a code
+
+
+def test_sequel_numbered_after_part(imdb):
+    """FATHER_OF_THE_BRIDE_2: counting by year makes #2 the 1991 remake (of the 1950 film), and
+    it runs about as long; the sequel is titled "Part II"."""
+    c = core.imdb_candidates(imdb, [("Father Of The Bride 2", False)], "movie",
+                             {"feature_minutes": 106, "mastered": "2000-03"})
+    assert (c[0]["name"], c[0]["year"]) == ("Father of the Bride Part II", 1995) and core.is_probable(c)
 
 
 def test_the_far_better_known_namesake_wins(imdb):

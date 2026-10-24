@@ -64,6 +64,13 @@ def build_imdb(d):
     add("movie", "Pocahontas", 1995, 81, 220681)
     add("movie", "Pocahontas: The Legend", 1995, 102, 900)
     add("video", "Pocahontas 2: Journey to a New World", 1998, 73, 19608)
+    # a sequel whose number comes after "Part" (FATHER_OF_THE_BRIDE_2), and a remake: counting
+    # by year makes film #2 the remake
+    add("movie", "Father of the Bride", 1950, 92, 30000)
+    add("movie", "Father of the Bride", 1991, 105, 94900)
+    add("movie", "Father of the Bride Part II", 1995, 106, 60000)
+    add("movie", "The Men Who Stare at Goats", 2009, 94, 150000)     # MENGOATS: words dropped between
+    add("movie", "The King's Speech", 2010, 118, 700000)              # KINGSPEECH: a possessive "s"
     add("movie", "Robin Hood: Prince of Thieves", 1991, 143, 224828)
     add("movie", "Robin Hood: Prince of Thieves", 2009, 142, 621)        # an obscure namesake
     add("video", "An American Tail: The Treasure of Manhattan Island", 1998, 83, 4000)
@@ -120,6 +127,8 @@ def build_imdb(d):
     add("movie", "It's a Wonderful Life", 1946, 130, 561600)  # ITSWONDERFULLIFE: lost "a" and apostrophe
     add("movie", "RocketMan", 1997, 95, 11315)               # RKM = RocKetMan, ending elsewhere
     add("movie", "Repli-Kate", 2002, 96, 5559)               # R K initials
+    add("movie", "The Sorcerer's Apprentice", 2010, 109, 178266)   # SRC-0N-NW1: SoRCerer's, a first word
+    add("movie", "Scarecrow", 1973, 112, 22408)              # S..R..C in one word, but less known
     add("movie", "Rurouni Kenshin: The Movie", 1997, 90, 3100)
     add("movie", "Hercules", 2014, 98, 160000)
     add("movie", "Hercules", 1958, 107, 9000)

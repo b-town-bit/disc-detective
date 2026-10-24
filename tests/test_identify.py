@@ -48,7 +48,7 @@ def test_your_library_remembers(tmp_path, imdb_dir):
     core.set_field(con, rep["content_hash"][:8], "truth", "Gone in 60 Seconds (2000)")
     con.close()
     rep2, _ = run(disc, tmp_path, imdb_dir=imdb_dir, offline=True)
-    assert rep2["status"] == "identified (your library)"
+    assert rep2["status"] == "identified (your case files)"
     assert rep2["best_guess"] == "Gone in 60 Seconds (2000)"
     assert core.is_probable(rep2["candidates"]) and rep2["candidates"][0]["year"] == 2000
 
@@ -180,7 +180,7 @@ def test_confirmed_collection_rebuilds_from_its_ids(tmp_path, imdb_dir):
     assert truth.startswith("Wallace & Gromit Collection {films:00001.mpls=tt")
     core.set_truth(args.db, rep["content_hash"], truth)
     rep2, _ = run(disc, tmp_path, imdb_dir=imdb_dir, offline=True, label="WALLACE_AND_GROMIT")
-    assert rep2["status"] == "identified (your library)" and rep2["kind"] == "collection"
+    assert rep2["status"] == "identified (your case files)" and rep2["kind"] == "collection"
     assert rep2["candidates"][0]["why"].startswith("your answer")
     assert [(i["title_id"], i["imdb_id"]) for i in rep2["candidates"][0]["items"]] == films
     assert rep2["best_guess"] == "Wallace & Gromit Collection"
@@ -242,7 +242,7 @@ def test_a_bonus_disc_is_extras_named_after_its_film_disc(tmp_path, imdb_dir):
     assert not [t for t in rep2["titles"] if t["role"] in ("feature", "episode", "version")]
     assert rep2["bonus_of"].startswith("Gone in 60 Seconds (2000) {imdb-tt")
     assert rep2["best_guess"] == "Gone in 60 Seconds (2000)"
-    assert rep2["identified_by"] == "your library (the set's film disc)"
+    assert rep2["identified_by"] == "your case files (the set's film disc)"
     # with no film disc in the library: still extras, searched under the title without "Bonus"
     rep3, _ = run(bonus, tmp_path, imdb_dir=imdb_dir, offline=True, label="GONE_IN_60_SECONDS_BONUS",
                   db=str(tmp_path / "empty.sqlite"))
@@ -269,3 +269,17 @@ def test_shorts_can_run_newest_first(imdb):
     c = core.imdb_collection(imdb, [("Wallace And Gromit", False)], titles, {"mastered": "2010-01"})
     assert [i["year"] for i in c["items"]] == [2008, 1995, 1993, 1989]
     assert "newest first" in c["why"]
+
+
+def test_interactual_disc_id_names_the_film(tmp_path):
+    """Spider-Man (2002), disc 1: volume label DVD_VIDEO, but InterActual Player's disc.id (its
+    DVD-ROM software) names the film. Any other disc.id, or none, says nothing."""
+    (tmp_path / "disc.id").write_bytes(b"[InterActual]\r\nid=100000150000180000018\r\nver=1.00.02.0731\r\n"
+                                       b"name=Spiderman 2002 disc 1\r\nowner=Coulumbia Tri Star Home Video\r\n")
+    assert core.interactual_name(str(tmp_path)) == "Spiderman 2002 disc 1"
+    lp = core.parse_label(core.interactual_name(str(tmp_path)))
+    assert (lp["query"], lp["year"], lp["disc"]) == ("Spiderman", 2002, 1)
+    (tmp_path / "disc.id").write_bytes(b"name=Something Else\r\n")
+    assert core.interactual_name(str(tmp_path)) is None
+    (tmp_path / "disc.id").unlink()
+    assert core.interactual_name(str(tmp_path)) is None

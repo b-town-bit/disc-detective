@@ -156,5 +156,5 @@ def test_earlier_discs_in_the_library_say_where_this_one_starts(tmp_path):
     g = core.tvmaze_season_guess({"aired": [{"season": 1, "number": i, "name": n, "runtime": 90} for i, n in
                                             enumerate(["A Study in Pink", "The Blind Banker", "The Great Game"], 1)],
                                   "dvd": None}, 1, 2, [5364], before=2)
-    assert g["guess"] == ["S01E03 The Great Game"] and "your library" in g["note"]
+    assert g["guess"] == ["S01E03 The Great Game"] and "your case files" in g["note"]
     con.close()

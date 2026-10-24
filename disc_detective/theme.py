@@ -7,6 +7,7 @@ this process only: nothing is installed on the computer. "Detective Serif" is Pl
 Display, cut down to Latin and renamed as its licence asks of modified versions."""
 import os
 import sys
+import time
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk
@@ -105,6 +106,56 @@ _IMAGES = []          # Tk drops images that nothing references
 _ROUND_STYLES = {}
 ROUND = True          # rounded corners drawn with Pillow; off (square borders) without it
 
+# ---- high-DPI screens ----
+# With the app DPI-aware (Windows stops stretching it, so text is sharp), Tk draws pixels as
+# pixels: fonts follow the screen (they're in points) but spacing given in pixels would shrink.
+# SCALE is the screen's size over 96 DPI (1.5 at 150%); distances the app gives are scaled by it
+# in one place, Tk's option handling. A size worked out from real pixels (a window's width) is
+# marked real() so it isn't scaled twice.
+SCALE = 1.0
+SCALED_OPTIONS = {"padx", "pady", "ipadx", "ipady", "padding", "wraplength", "length", "minsize", "pad"}
+
+
+class real(int):
+    """A distance already in screen pixels (from winfo_width and the like): left as it is."""
+
+
+def px(n):
+    """A distance in the design's pixels (96 DPI) as screen pixels."""
+    return real(round(n * SCALE)) if SCALE != 1.0 else n
+
+
+def _scaled(v):
+    if isinstance(v, real) or isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return px(v)
+    if isinstance(v, (tuple, list)):
+        return type(v)(_scaled(x) for x in v)
+    if isinstance(v, str) and v.replace(" ", "").isdigit():
+        return " ".join(str(px(int(x))) for x in v.split())
+    return v
+
+
+_PATCHED = False
+
+
+def _install_scaling():
+    """Scale the distance options of every widget, pack, grid and place call (once per process)."""
+    global _PATCHED
+    if _PATCHED:
+        return
+    original = tk.Misc._options
+
+    def _options(self, cnf, kw=None):
+        if SCALE != 1.0:
+            cnf = tk._cnfmerge((cnf, kw)) if kw else tk._cnfmerge(cnf)
+            cnf = {k: (_scaled(v) if k.rstrip("_") in SCALED_OPTIONS else v) for k, v in cnf.items()}
+            return original(self, cnf)
+        return original(self, cnf, kw)
+    tk.Misc._options = _options
+    _PATCHED = True
+
 
 def _rounded(w, h, r, fill, border=None, bw=1, shadow=0, outer=None, corners="all"):
     """A PhotoImage of a rounded rectangle, anti-aliased (drawn at 4x and shrunk): fill and a
@@ -159,14 +210,16 @@ def _check_img(checked, disabled=False, size=14):
     import base64
     import io
     from PIL import Image, ImageDraw
-    k = 4
-    S = size * k
+    size = px(size)
+    k = 4 * size / 14.0                   # the drawing is laid out for 14px; scaled with it
+    S = int(size * 4)
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     edge = INK_SUBTLE if disabled else (BRASS_700 if checked else BRASS_400)
     fill = (VELLUM_200 if disabled else BRASS_600) if checked else CARD
     d.rounded_rectangle((0, 0, S - 1, S - 1), 3 * k, fill=edge)
     d.rounded_rectangle((k, k, S - 1 - k, S - 1 - k), 2 * k, fill=fill)
+    k = int(round(k))
     if checked:
         d.line([(S * 0.27, S * 0.52), (S * 0.43, S * 0.68), (S * 0.74, S * 0.34)], fill=VELLUM_50 if not disabled else INK_SUBTLE,
                width=int(1.8 * k), joint="curve")
@@ -188,7 +241,7 @@ def checkbox_style(st):
         ("Tick.indicator", {"side": "left", "sticky": ""}),
         ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [
             ("Checkbutton.label", {"sticky": "nswe"})]})]})])
-    st.configure("TCheckbutton", padding=(0, 2), indicatormargin=0)
+    st.configure("TCheckbutton", padding=_scaled((0, 2)), indicatormargin=0)
     st.map("TCheckbutton", background=[("active", VELLUM_100)])
 
 
@@ -200,13 +253,14 @@ def round_frame_style(bg, border=None, radius=6, shadow=0, outer=PARCHMENT):
         return _ROUND_STYLES[key]
     st = ttk.Style()
     n = "R%d" % len(_ROUND_STYLES)
+    radius, shadow = px(radius), px(shadow)  # drawn at the screen's size
     size = 2 * (radius + shadow) + 240     # a big middle: the stretch tiles it, and each tile is a draw
     img = _rounded(size, size, radius, bg, border, shadow=shadow)
     edge = radius + shadow + 2
     st.element_create(n + ".bg", "image", img, border=edge, sticky="nsew", width=2 * edge, height=2 * edge)
     st.layout(n + ".TFrame", [(n + ".bg", {"sticky": "nsew"})])
     st.configure(n + ".TFrame", background=outer)
-    _ROUND_STYLES[key] = (n + ".TFrame", shadow + (1 if border else 0) + max(2, radius // 3))
+    _ROUND_STYLES[key] = (n + ".TFrame", real(shadow + (1 if border else 0) + max(2, radius // 3)))
     return _ROUND_STYLES[key]
 
 
@@ -215,6 +269,8 @@ def round_button(name, bg, fg, border, active, pressed, disabled_bg, disabled_fg
     """A ttk button style drawn from rounded images, one per state. `outer`: the colour it sits
     on, which shows past the rounded corners."""
     st = ttk.Style()
+    radius = px(radius)
+    padding = _scaled(padding)
     size = 2 * radius + 120          # (as for the frames: fewer tiles to draw)
     imgs = [_rounded(size, size, radius, c, b, corners=corners) for c, b in
             ((bg, border), (active, border), (pressed, border), (disabled_bg, disabled_border or disabled_bg))]
@@ -230,9 +286,17 @@ def round_button(name, bg, fg, border, active, pressed, disabled_bg, disabled_fg
 
 def setup(root):
     """Fonts, then every ttk style the app and its dialogs use."""
+    global SCALE
     _IMAGES.clear()                  # images and styles belong to one Tk: a new one starts afresh
     _ROUND_STYLES.clear()
     _ICONS.clear()
+    try:
+        SCALE = round(max(1.0, float(root.tk.call("tk", "scaling")) / (96 / 72)), 2)
+    except (tk.TclError, ValueError):
+        SCALE = 1.0
+    if SCALE < 1.05:
+        SCALE = 1.0
+    _install_scaling()
     load_fonts(root)
     st = ttk.Style(root)
     st.theme_use("clam")
@@ -252,34 +316,34 @@ def setup(root):
     st.map("TCheckbutton", background=[("active", VELLUM_100)], indicatorcolor=[("selected", BRASS_600), ("!selected", CARD)])
     st.configure("TRadiobutton", background=VELLUM_100, foreground=INK)
     st.map("TRadiobutton", background=[("active", VELLUM_100)], indicatorcolor=[("selected", BRASS_600), ("!selected", CARD)])
-    st.configure("TEntry", fieldbackground=CARD, bordercolor=BRASS_400, lightcolor=CARD, darkcolor=CARD, padding=3)
+    st.configure("TEntry", fieldbackground=CARD, bordercolor=BRASS_400, lightcolor=CARD, darkcolor=CARD, padding=_scaled(3))
     st.map("TEntry", bordercolor=[("focus", BRASS_600)], lightcolor=[("focus", BRASS_200)])
     st.configure("TScrollbar", background=BRASS_300, troughcolor=VELLUM_200, bordercolor=VELLUM_200,
-                 arrowcolor=BRASS_700, lightcolor=BRASS_300, darkcolor=BRASS_300)
+                 arrowcolor=BRASS_700, lightcolor=BRASS_300, darkcolor=BRASS_300, arrowsize=px(14))
     st.configure("Horizontal.TProgressbar", background=BRASS_600, troughcolor=VELLUM_300, bordercolor=BRASS_400,
                  lightcolor=BRASS_600, darkcolor=BRASS_600, thickness=6)
     st.configure("TNotebook", background=VELLUM_100, bordercolor=BRASS_300, lightcolor=VELLUM_100,
-                 darkcolor=VELLUM_100, tabmargins=(0, 4, 0, 0))   # room above for the selected tab to grow
+                 darkcolor=VELLUM_100, tabmargins=_scaled((0, 4, 0, 0)))   # room above for the selected tab to grow
     st.configure("TNotebook.Tab", background=VELLUM_200, foreground=INK_MUTED, bordercolor=BRASS_300,
-                 lightcolor=VELLUM_200, darkcolor=VELLUM_200, padding=(14, 5), font=(MONO, 9, "bold"))
+                 lightcolor=VELLUM_200, darkcolor=VELLUM_200, padding=_scaled((14, 5)), font=(MONO, 9, "bold"))
     st.map("TNotebook.Tab", background=[("selected", VELLUM_100), ("active", VELLUM_50)],
            foreground=[("selected", BRASS_800), ("active", INK)],
            lightcolor=[("selected", VELLUM_100)],
-           padding=[("selected", (14, 5))],          # clam shrinks the selected tab; keep it the same size
-           expand=[("selected", (0, 4, 0, 0))])     # then grow it upwards only, so no tab edge moves sideways
+           padding=[("selected", _scaled((14, 5)))],          # clam shrinks the selected tab; keep it the same size
+           expand=[("selected", _scaled((0, 4, 0, 0)))])     # then grow it upwards only, so no tab edge moves sideways
     st.configure("TCombobox", fieldbackground=CARD, background=VELLUM_100, bordercolor=BRASS_400,
-                 lightcolor=CARD, darkcolor=CARD, arrowcolor=BRASS_700, padding=2)
+                 lightcolor=CARD, darkcolor=CARD, arrowcolor=BRASS_700, padding=_scaled(2), arrowsize=px(12))
     st.map("TCombobox", fieldbackground=[("readonly", CARD)], background=[("active", VELLUM_200)],
            selectbackground=[("readonly", CARD)], selectforeground=[("readonly", INK)],
            bordercolor=[("focus", BRASS_600)])
     st.configure("Treeview", background=CARD, fieldbackground=CARD, foreground=INK, bordercolor=BRASS_400,
                  lightcolor=CARD, darkcolor=CARD)
     st.map("Treeview", background=[("selected", BRASS_200)], foreground=[("selected", INK)])
-    st.configure("Picks.Treeview", rowheight=66)
+    st.configure("Picks.Treeview", rowheight=px(66))
 
     def button(name, bg, fg, border, active, font, padding, pressed=None):
         st.configure(name, background=bg, foreground=fg, bordercolor=border, lightcolor=bg, darkcolor=bg,
-                     font=font, padding=padding, focusthickness=0, focuscolor=bg, relief="solid", borderwidth=1)
+                     font=font, padding=_scaled(padding), focusthickness=0, focuscolor=bg, relief="solid", borderwidth=1)
         st.map(name, background=[("disabled", VELLUM_200), ("pressed", pressed or active), ("active", active)],
                foreground=[("disabled", INK_SUBTLE)], lightcolor=[("active", active)], darkcolor=[("active", active)],
                bordercolor=[("disabled", BRASS_300)])
@@ -318,6 +382,8 @@ def setup(root):
         button("Pill.TButton", "#fffdf8", PRUSSIAN_700, BRASS_400, "#ffffff", (MONO, 9, "bold"), (10, 4))
 
     def label(name, bg=VELLUM_100, fg=INK, font=base, **kw):
+        if "padding" in kw:
+            kw["padding"] = _scaled(kw["padding"])
         st.configure(name, background=bg, foreground=fg, font=font, **kw)
     # dialogs (shared names the dialogs already use)
     label("Plan.TLabel", font=(SERIF, 11, "bold"))
@@ -380,7 +446,7 @@ def frame(parent, bg, border=None, pad=0, thick=1, radius=6, shadow=0, outer=PAR
     (it shows past the rounded corners); pad is the room inside, past the border."""
     if ROUND and radius:
         style, edge = round_frame_style(bg, border, radius, shadow, outer)
-        return ttk.Frame(parent, style=style, padding=edge + pad)
+        return ttk.Frame(parent, style=style, padding=real(edge + px(pad)))
     return tk.Frame(parent, background=bg, highlightthickness=thick if border else 0,
                     highlightbackground=border or bg, highlightcolor=border or bg, padx=pad, pady=pad)
 
@@ -391,6 +457,7 @@ def rule(parent, colour=BRASS_300):
 
 def dot(parent, bg, colour, size=8):
     """A small round status light."""
+    size = px(size)
     c = tk.Canvas(parent, width=size, height=size, background=bg, highlightthickness=0, bd=0)
     c.create_oval(0, 0, size - 1, size - 1, fill=colour, outline=colour)
     return c
@@ -398,6 +465,7 @@ def dot(parent, bg, colour, size=8):
 
 def dot_image(colour, bg, size=8):
     """A small round light as an image (for a button), anti-aliased where Pillow is there."""
+    size = px(size)
     if ROUND:
         return _rounded(size, size, size / 2, colour, outer=bg)
     img = tk.PhotoImage(width=size, height=size)
@@ -407,11 +475,47 @@ def dot_image(colour, bg, size=8):
 
 
 def set_dot(c, colour):
+    """Light a dot in one colour (a pulse on it stops)."""
+    stop_pulse(c)
     c.itemconfigure(1, fill=colour, outline=colour)
+
+
+def _blend(a, b, t):
+    """The colour t of the way from a to b ("#rrggbb")."""
+    ca, cb = [int(a[i:i + 2], 16) for i in (1, 3, 5)], [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(ca, cb))
+
+
+def pulse_dot(c, colour, toward, period=1600, step=50):
+    """Breathe a dot between colour and toward (its background, say): something's under way.
+    Runs until set_dot (or stop_pulse) lights it plainly again."""
+    import math
+    if getattr(c, "_pulse", None) and c._pulse_colours == (colour, toward):
+        return                                   # already breathing so
+    stop_pulse(c)
+    c._pulse_colours = (colour, toward)
+    t0 = time.time()
+
+    def tick():
+        if not c.winfo_exists():
+            return
+        t = (1 - math.cos(2 * math.pi * ((time.time() - t0) * 1000 % period) / period)) / 2 * 0.75
+        shade = _blend(colour, toward, t)
+        c.itemconfigure(1, fill=shade, outline=shade)
+        c._pulse = c.after(step, tick)
+    tick()
+
+
+def stop_pulse(c):
+    job = getattr(c, "_pulse", None)
+    if job:
+        c.after_cancel(job)
+    c._pulse = None
 
 
 def shield(parent, bg, size=16):
     """A small shield with a check in it (the "verified" stamp); set_shield turns it plain."""
+    size = px(size)
     w, h = size - 2, size
     c = tk.Canvas(parent, width=w, height=h, background=bg, highlightthickness=0, bd=0)
     c.create_polygon(w / 2, 1, w - 1.5, 3, w - 1.5, h * 0.52, w / 2, h - 1, 1.5, h * 0.52, 1.5, 3,
@@ -430,17 +534,55 @@ ICON_DIR = os.path.join(HERE, "icons")
 _ICONS = {}
 
 
+def _png_photo(path, size):
+    """An image file as a PhotoImage resized (Pillow) to `size` px square, or None."""
+    import base64
+    import io
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            im = im.convert("RGBA").resize((size, size), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+        return tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
+    except Exception:
+        return None
+
+
+def scaled_photo(path):
+    """A picture file (a poster, box art) at the screen's size: the file's pixels are the
+    design's, so on a high-DPI screen it's enlarged by SCALE (Pillow), else shown as it is."""
+    if SCALE != 1.0:
+        import base64
+        import io
+        try:
+            from PIL import Image
+            with Image.open(path) as im:
+                im = im.convert("RGBA")
+                im = im.resize((round(im.width * SCALE), round(im.height * SCALE)), Image.LANCZOS)
+            buf = io.BytesIO()
+            im.save(buf, "PNG")
+            return tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
+        except Exception:
+            pass
+    return tk.PhotoImage(file=path)
+
+
 def icon(name):
     """A small icon (PNG; Tk 8.6 reads PNG and GIF itself): the @2x one on a high-DPI screen."""
     if name in _ICONS:
         return _ICONS[name]
     img = None
     try:
-        hidpi = float(tk._default_root.tk.call("tk", "scaling")) > 1.7 if tk._default_root else False
-        for f in ((name + "@2x.png") if hidpi else None, name + ".png"):
-            if f and os.path.exists(os.path.join(ICON_DIR, f)):
-                img = tk.PhotoImage(file=os.path.join(ICON_DIR, f))
-                break
+        big = os.path.join(ICON_DIR, name + "@2x.png")
+        if SCALE != 1.0 and os.path.exists(big):
+            # a high-DPI screen: the double-size icon, brought to the screen's size (14px x SCALE)
+            img = _png_photo(big, px(14))
+        if img is None:
+            for f in ((name + "@2x.png") if SCALE >= 1.9 else None, name + ".png"):
+                if f and os.path.exists(os.path.join(ICON_DIR, f)):
+                    img = tk.PhotoImage(file=os.path.join(ICON_DIR, f))
+                    break
     except (tk.TclError, ValueError):
         img = None
     _ICONS[name] = img
@@ -454,22 +596,23 @@ def _mark(kind):
         return _ICONS[key]
     import base64
     import io
+    n = px(12)
     try:
         from PIL import Image, ImageDraw
-        k, S = 4, 12 * 4
+        k, S = 4, n * 4
         img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
         if kind == "tick":
-            d.line([(S * 0.18, S * 0.52), (S * 0.4, S * 0.74), (S * 0.82, S * 0.28)], fill=BRASS_700, width=int(1.8 * k),
-                   joint="curve")
+            d.line([(S * 0.18, S * 0.52), (S * 0.4, S * 0.74), (S * 0.82, S * 0.28)], fill=BRASS_700,
+                   width=int(1.8 * k * n / 12), joint="curve")
         elif kind == "dot":
             d.ellipse((S * 0.3, S * 0.3, S * 0.7, S * 0.7), fill=BRASS_700)
-        img = img.resize((12, 12), Image.LANCZOS)
+        img = img.resize((n, n), Image.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, "PNG")
         ph = tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
     except Exception:
-        ph = tk.PhotoImage(width=12, height=12)
+        ph = tk.PhotoImage(width=n, height=n)
         if kind != "blank":
             ph.put(BRASS_700, to=(4, 4, 8, 8))
     _ICONS[key] = ph
@@ -535,7 +678,7 @@ class Tooltip:
         box = tk.Frame(tip, bg=BRASS_600, padx=1, pady=1)
         box.pack()
         tk.Label(box, text=text, bg=VELLUM_50, fg=INK, font=(MONO, 9), padx=6, pady=3,
-                 justify="left", wraplength=max(300, w.winfo_screenwidth() // 2)).pack()
+                 justify="left", wraplength=real(max(px(300), w.winfo_screenwidth() // 2))).pack()
         tip.update_idletasks()
         x = w.winfo_rootx()
         y = w.winfo_rooty() + w.winfo_height() + 4
