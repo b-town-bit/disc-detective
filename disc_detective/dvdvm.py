@@ -131,6 +131,7 @@ class Player:
         self.cell = None                                  # the cell playing (None: its program's first)
         self.resume = None                                # where LinkRSM returns to (after a CallSS)
         self.count = 0
+        self.intro = 0.0                                  # seconds of menu played since the press
 
     def copy(self):
         p = Player(self.disc)
@@ -428,11 +429,22 @@ class Engine:
             played.append({"title": title, "chapter": chapter, "seconds": seconds})
             return self._play_out(p, pg, through, played)
         if self.buttons(p):                   # a menu that waits for the viewer
-            out = {"menu": (domain, pgcn, pgn), "player": p}
-            if played:
-                out["played"] = played
-            return out
+            return self._waits(p, played)
         return self._play_out(p, pg, through, played)
+
+    def _waits(self, p, played):
+        """The outcome for a menu that waits for the viewer, with its highlighted button, as a
+        player picks it (libdvdnav): the page's forced one, else the one SPRM 8 holds if the page
+        has it, else button 1."""
+        btns = self.buttons(p)
+        n = next((b["n"] for b in btns if b.get("forced")), None) or p.sprm[8] >> 10
+        if not any(b["n"] == n for b in btns):
+            n = 1
+        p.sprm[8] = n << 10
+        out = {"menu": (p.domain, p.pgcn, p.pgn), "player": p, "button": n, "intro": p.intro}
+        if played:
+            out["played"] = played
+        return out
 
     def _play_out(self, p, pg, through, played):
         """A PGC played to its end from its current program: each cell's command, then the post
@@ -443,15 +455,14 @@ class Engine:
         for n in range(first, len(cells) + 1):
             cell = cells[n - 1]
             p.cell = n
+            if n != first:                    # the cell before has played (a menu's intro, say)
+                p.intro += cells[n - 2].get("seconds") or 0
             if n != first and n in starts and not isinstance(p.domain, tuple):
                 # a menu's next program: if it has buttons, the disc waits there for the viewer
                 # (The Sorcerer's Apprentice: Tinker Bell, then the FastPlay chooser, one page)
                 p.pgn = starts.index(n) + 1
                 if self.buttons(p):
-                    out = {"menu": (p.domain, p.pgcn, p.pgn), "player": p}
-                    if played:
-                        out["played"] = played
-                    return out
+                    return self._waits(p, played)
             if cell.get("still") == 255 and not isinstance(p.domain, tuple):
                 return {"stopped": "a still picture with no buttons, waiting", "player": p}
             if cell.get("cmd") and cell["cmd"] <= len(pg["cell_cmds"]):
@@ -621,7 +632,7 @@ def _explore(engine, max_menus):
     if "menu" not in out:
         return answer(out), found, []
     # where the Menu key leads from the first page (back to it: a way past its intro animation)
-    menu = engine.follow(p.copy(), {"op": "vtsm", "menu": 3, "call": False}, through=False).get("menu")
+    menu = engine.follow(p.copy(), {"op": "vtsm", "menu": 3, "call": False}, through=False)
     queue, seen, menus = [p], {p.key()}, [out["menu"]]
     while queue and len(seen) < max_menus:
         p = queue.pop(0)
@@ -638,10 +649,14 @@ def _explore(engine, max_menus):
                 if a["goes_to"] not in menus:
                     menus.append(a["goes_to"])
     began = {"goes_to": menus[0]}
+    if out0.get("button"):
+        began["select"] = out0["button"]
     if out0.get("menu_key"):
         began["menu_key"] = True
-    if menu:
-        began["menu_goes_to"] = menu
+    if menu.get("menu"):
+        began["menu_goes_to"] = menu["menu"]
+        if menu.get("button"):
+            began["menu_select"] = menu["button"]
     return began, found, menus
 
 
@@ -658,5 +673,11 @@ def answer(out):
         return {"plays": main["title"], "chapter": main["chapter"],
                 "before": [x["title"] for x in out["played"][:out["played"].index(main)]]}
     if "menu" in out:
-        return {"stays": True} if out.get("stays") else {"goes_to": out["menu"]}
+        if out.get("stays"):
+            return {"stays": True}
+        a = {"goes_to": out["menu"]}
+        if out.get("button"):
+            a["select"] = out["button"]         # the button highlighted there (crawl: no need to look)
+            a["intro"] = round(out.get("intro") or 0, 1)   # seconds of menu before its buttons come on
+        return a
     return {"stops": out.get("stopped", "")}

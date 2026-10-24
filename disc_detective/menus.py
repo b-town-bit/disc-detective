@@ -64,9 +64,10 @@ def _pgc(ifo, off):
     if cell_off:
         for i in range(ncells):
             q = off + cell_off + 24 * i
-            # still: 255 waits for the viewer (a menu), else seconds; cmd: a cell command to run after
+            # still: 255 waits for the viewer (a menu), else seconds; cmd: a cell command to run after;
+            # seconds: how long it plays (a menu's intro before its buttons, for one)
             p["cells"].append({"first": _u32(ifo, q + 8), "last": _u32(ifo, q + 20),
-                               "still": ifo[q + 2], "cmd": ifo[q + 3]})
+                               "still": ifo[q + 2], "cmd": ifo[q + 3], "seconds": dvd_time(ifo, q + 4)})
     return p
 
 
@@ -116,6 +117,7 @@ def _nav_buttons(s):
     """The buttons in one navigation packet (a 2048-byte sector)."""
     pci = s[0x2D:]
     hli = 0x60
+    forced = pci[hli + 20]                      # the button the page selects as it comes on (0: none)
     out = []
     for i in range(pci[hli + 17]):
         b = pci[hli + 46 + 18 * i: hli + 46 + 18 * (i + 1)]
@@ -125,6 +127,8 @@ def _nav_buttons(s):
                     "auto": bool((b[3] >> 6) & 3), "up": b[6] & 0x3F, "down": b[7] & 0x3F,
                     "left": b[8] & 0x3F, "right": b[9] & 0x3F, "cmd": command(b[10:18]),
                     "raw": b[10:18].hex()})
+        if forced == i + 1:
+            out[-1]["forced"] = True
     return out
 
 
@@ -202,7 +206,7 @@ def dvd_structure(root):
                          if vob else [] for i, a in enumerate(starts)]
                 pages.append({"pgc": n, "type": typ, "entry": entry, "cells": p["cells"],
                               "buttons": next((b for b in progs if b), []), "program_buttons": progs,
-                              "pre": [command(c) for c in p["pre"]]})
+                              "program_cells": starts, "pre": [command(c) for c in p["pre"]]})
         finally:
             if vob:
                 vob.close()
@@ -748,6 +752,7 @@ def probe(drive, vlc_dir, out_dir, log=print, runs=PROBE_RUNS, menu_wait=15):
 SEEN = 30                                   # pixels of highlight that count as seeing it
 HINT_WAIT = 75                              # seconds to find the page the disc's program starts on
 NEAR = 24                                   # pixels round a page's buttons where a stray highlight would show
+TITLE_WAIT = 180                            # seconds a title may play before the page a button leads to
 
 
 class Lost(Exception):
@@ -759,6 +764,30 @@ def _pages(structure):
     for vts, pages in structure["vtsm"].items():
         out.update({(int(vts), p["pgc"]): p for p in pages})
     return out
+
+
+def _waits_for_viewer(pages, st):
+    """Whether a page (its program st) holds still until a button is pressed (a cell held for
+    good: still 255), rather than playing on, maybe to something else when it ends."""
+    p = pages.get(st[:2]) or {}
+    starts = p.get("program_cells") or [1]
+    cells = p.get("cells") or []
+    if not 0 < st[2] <= len(starts):
+        return any(c.get("still") == 255 for c in cells)
+    end = starts[st[2]] - 1 if st[2] < len(starts) else len(cells)
+    return any(c.get("still") == 255 for c in cells[starts[st[2] - 1] - 1:end])
+
+
+def _lead_in(pages, st):
+    """Seconds a page plays before the program whose buttons st is (its intro), as the disc says:
+    keys pressed while its buttons are coming on can move the highlight half a round trip."""
+    p = pages.get(st[:2]) or {}
+    starts = p.get("program_cells") or [1]
+    progs = p.get("program_buttons") or [p.get("buttons") or []]
+    # up to the first program with buttons (Enchanted's main menu has them from its first: no wait)
+    k = next((i for i in range(1, min(st[2], len(starts)) + 1) if i <= len(progs) and progs[i - 1]), st[2])
+    first = starts[k - 1] if 0 < k <= len(starts) else 1
+    return sum(c.get("seconds") or 0 for c in (p.get("cells") or [])[:first - 1])
 
 
 def _state_buttons(pages, st):
@@ -984,6 +1013,11 @@ class _Crawler:
         self.expect = 0                         # pages the tour expects to read (for "2 of 6")
         self.menu_key = False                   # the disc plays its film by itself: Menu, after opening
         self.menu_skip = False                  # Menu, once in the menus: past the first page's intro
+        # the disc's program's word on the highlighted button: where it opens, and after each
+        # button that leads to a page ({(state, button): button there}); and how often it was right
+        self.start_select, self.selects, self.placed = None, {}, [0, 0, 0]   # (right, wrong, moved by us)
+        self.intros = {}                        # {(state, button): seconds of menu before its buttons come on}
+        self.states = []                        # every page with buttons to tell apart (crawl)
         from concurrent.futures import ThreadPoolExecutor
         self.pool = ThreadPoolExecutor(max_workers=4)
 
@@ -1011,7 +1045,97 @@ class _Crawler:
         if self.menu_skip:                      # past the page's intro animation (crawl)
             self.v.press("popup")
             time.sleep(2)
+        if self.start_select:                   # (Menu lands past the page's intro)
+            return self.arrive(start, self.start_select, wait=0 if self.menu_skip else _lead_in(self.pages, start))
         return self.find([start], timeout=HINT_WAIT)
+
+    def arrive(self, st, sel, timeout=HINT_WAIT, wait=0):
+        """On page st with button sel highlighted, as the disc's program says: (st, sel), once a
+        round trip from sel shows its buttons answer (a page's buttons may come on late; and it
+        checks the program was right), twice over. Else, the usual way (find), and the miss
+        counted: how often the program places the highlight right is what this tries out.
+        wait: seconds of the page's intro first (the disc's program says), no keys while its
+        buttons come on: keys then can move the highlight half a round trip."""
+        by = {b["n"]: b for b in _state_buttons(self.pages, st)}
+        trips = [(k, back) for k, back in self.ROUND_TRIPS if sel in by and by[sel][k] in by and
+                 by[sel][k] != sel and by[by[sel][k]][back] == sel and not by[by[sel][k]]["auto"]]
+        if not trips:
+            return self.find([st], timeout=timeout)
+        time.sleep(wait + 1)
+        t0, i, playing = time.time(), 0, None
+        while time.time() - t0 < timeout:
+            if self.v.state()["title"] != 0:
+                # a title before the page (Muppets from Space: its outtakes' intro, the first time):
+                # the page's time starts once the menus are back; a film, though, isn't waited out
+                playing = playing or time.time()
+                if time.time() - playing > TITLE_WAIT:
+                    break
+                time.sleep(1)
+                t0 = time.time()
+                continue
+            key, back = trips[i % len(trips)]
+            i += 1
+            res, a, b = self._round_trip([st], key, back, weak=True)
+            scores = {(n, m): sc for sc, s, n, m in res}
+            m = by[sel][key]
+            if scores.get((sel, m), -1) < SEEN:
+                moved = self._moved(st, sel, res, key, back, a, b, ours=wait > 0)
+                if moved:
+                    return st, moved
+            if scores.get((sel, m), -1) >= SEEN:
+                again, _, _ = self._round_trip([st], key, back, weak=True)
+                if dict(((n, m2), sc) for sc, s, n, m2 in again).get((sel, m), -1) >= SEEN:
+                    # a round trip that fits from the other button too (two leading to each other:
+                    # FastPlay | Main Menu) doesn't say which: the one lit before the press does
+                    if scores.get((m, sel), -1) >= SEEN and self._lit(st, a, b, m, sel):
+                        self.placed[1] += 1
+                        self.log("  the highlight is on button %d of %s, not %d as the disc's program said"
+                                 % (m, st, sel))
+                        self._read(st, a, b, m)
+                        return st, m
+                    self.placed[0] += 1
+                    self._read(st, a, b, sel)
+                    return st, sel
+            time.sleep(0.3)
+        self.placed[1] += 1
+        self.log("  the highlight isn't where the disc's program said (%s, button %d): looking" % (st, sel))
+        try:
+            return self.find([st], timeout=20)
+        except Lost:
+            if not self.states:
+                raise
+        # not the page the program said at all (Muppets from Space: after its outtakes' intro, the
+        # disc goes elsewhere than our run of its program does): which page is it?
+        found = self.find(self.states, timeout=30)
+        self.log("  it's %s instead" % (found[0],))
+        return found
+
+    def _moved(self, st, sel, res, key, back, a, b, ours=True):
+        """The button the highlight is really on, when a round trip on page st fits from another
+        one than sel, and again; else None. ours: the page had an intro, so keys pressed as its
+        buttons came on may have moved it half a round trip (else the disc's program was wrong)."""
+        other = next(((n, m) for sc, s, n, m in res if sc >= SEEN and n != sel), None)
+        if not other:
+            return None
+        again, _, _ = self._round_trip([st], key, back, weak=True)
+        n, m = other
+        if dict(((x, y), sc) for sc, s, x, y in again).get((n, m), -1) < SEEN:
+            return None
+        if any(sc >= SEEN and (x, y) == (m, n) for sc, s, x, y in res) and self._lit(st, a, b, m, n):
+            n = m                                   # (a fit both ways: the one lit before the press)
+        if n == sel:                                # (where the program said, after all)
+            self.placed[0] += 1
+            self._read(st, a, b, n)
+            return n
+        if ours:
+            self.placed[2] += 1
+            self.log("  the highlight moved to button %d of %s (from %d: keys pressed as its buttons came on)"
+                     % (n, st, sel))
+        else:
+            self.placed[1] += 1
+            self.log("  the highlight is on button %d of %s, not %d as the disc's program said" % (n, st, sel))
+        self._read(st, a, b, n)
+        return n
 
     def menu_call(self):
         """Press Menu (the remote's), for a disc that plays its film by itself: its menus
@@ -1071,6 +1195,8 @@ class _Crawler:
         # specks out, two ways: lightly (a highlight that recolours thin lettering survives) and
         # heavily (the solid icon a highlight often is survives; scenery's thin glints don't)
         masks = [went.filter(ImageFilter.MinFilter(k)).filter(ImageFilter.MaxFilter(k)) for k in (3, 7)]
+        if weak:                                # (one page looked for: unfiltered too, for a highlight
+            masks.append(went)                  # that's a thin line: The Sorcerer's Apprentice's underline)
         best = {}
         for st in candidates:
             by = {b["n"]: b for b in _state_buttons(self.pages, st)}
@@ -1263,6 +1389,11 @@ class _Crawler:
         self.log("  questioning page %s of title set %s (%d of %d)" % (st[1], st[0], len(self.reading),
                                                                          max(len(self.reading), self.expect)))
 
+    def word_now(self, st, n):
+        """A button's words if they've been read already, else "" (without waiting for them)."""
+        f = self.reading.get(st, {}).get(n)
+        return f.result() if f is not None and f.done() else ""
+
     def words(self, st):
         """A page's buttons' words, {button: text} ({} for a page not read), once they're read."""
         if st not in self.texts and st in self.reading:
@@ -1293,7 +1424,14 @@ class _Crawler:
             nxt = _goes(self.pages, st, {b["n"]: b for b in _state_buttons(self.pages, st)}[n], self.learned)
             self.v.press("activate")
             time.sleep(1)
-            st, sel = self.find([nxt], timeout=HINT_WAIT)   # (a page's buttons may come on late)
+            expect = self.selects.get((state, n)) if self.learned.get((state, n)) == nxt else None
+            if expect:                          # the disc's program says where the highlight is
+                st, sel = self.arrive(nxt, expect, wait=self.intros.get((state, n), 0))
+                if st != nxt:                   # it led elsewhere this time: carry on from there. (Not
+                    return st, sel              # learned: the first press can differ from the next, as
+                                                # Muppets from Space plays its outtakes' intro just once)
+            else:
+                st, sel = self.find([nxt], timeout=HINT_WAIT)   # (a page's buttons may come on late)
         return st, sel
 
     def watch(self, lengths, limit=120):
@@ -1344,6 +1482,7 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
     states = [(d, pgc, k) for (d, pgc), p in pages.items()
               for k, btns in enumerate(p.get("program_buttons") or [p["buttons"]], 1) if len(btns) >= 2]
     c = _Crawler(vlc_dir, dvd_mrl(drive), pages, out_dir, log)
+    c.states = states
     t0 = time.time()
     # The disc's own program, run without playing it (dvdvm): most buttons answered, and every
     # page a button leads to, before VLC presses anything; and where the disc starts, which VLC
@@ -1368,6 +1507,8 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
             # When the disc's program says Menu leads back to that page, past the animation to its
             # buttons (a later program of the page), Menu is pressed there, as a viewer would
             c.menu_skip = not c.menu_key and hint[2] > 1 and tuple(began.get("menu_goes_to") or ()) == hint
+            # the button the disc's program says is highlighted there (after Menu, if pressed)
+            c.start_select = began.get("menu_select" if c.menu_skip else "select")
             try:
                 start, sel = c.at_start(hint)
             except Lost:
@@ -1385,13 +1526,18 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
     if engine:
         if began.get("goes_to") and tuple(began["goes_to"]) != start:
             log("  the disc's program starts on %s, VLC on %s" % (began.get("goes_to"), start))
-        same = lambda a: {k: v for k, v in a.items() if k != "before"}   # (a clip first or not: the same)
+        # (a clip first or not: the same; so is the button highlighted on arrival, kept apart)
+        same = lambda a: {k: v for k, v in a.items() if k not in ("before", "select", "intro")}
         for (d, pgc, prog, n), answers in engine.items():
             s, a = (d, pgc, prog), answers[0]
             if any(same(x) != same(a) for x in answers) or "unsure" in a:
                 continue
             if "goes_to" in a and a["goes_to"] != s:
                 c.learned[(s, n)] = tuple(a["goes_to"])
+                there = {x.get("select") for x in answers}
+                if len(there) == 1 and None not in there:   # (the same whatever the route: trusted)
+                    c.selects[(s, n)] = there.pop()
+                c.intros[(s, n)] = max(x.get("intro") or 0 for x in answers)
             elif "plays" in a:
                 known[(s, n)] = {"plays": {"title": a["plays"], "chapter": a["chapter"] or 1}, "engine": True}
             else:
@@ -1407,9 +1553,14 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
             return "scenes"
         if engine and not plays_beyond(s):
             return "nothing plays from there"
-        # (Main Menu on the page the disc opens on leads into the menus, not back: a FastPlay chooser)
-        words = [c.words(x).get(n, "") for x, n in routes[s]
-                 if not (x == start and _main_menu_text(c.words(x).get(n, "")))]
+        # (Main Menu on the page the disc opens on leads into the menus, not back: a FastPlay chooser).
+        # On a page that plays on, words still being read don't hold VLC up: it can time out while
+        # they're read (The Sorcerer's Apprentice's FastPlay chooser takes FastPlay after 12 s), and
+        # unread, they skip nothing. A page that waits for the viewer waits for them (Muppets from
+        # Space's "Talent Files": its pages of cast bios, passed by)
+        words = [c.words(x).get(n, "") if _waits_for_viewer(pages, x) else c.word_now(x, n)
+                 for x, n in routes[s]]
+        words = [w for (x, _), w in zip(routes[s], words) if not (x == start and _main_menu_text(w))]
         return next(("via \"%s\"" % w for w in words if _skip_text(w)), None)
 
     def plays_beyond(s):
@@ -1451,6 +1602,14 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
                 here = _routes(pages, st, c.learned, known)
                 reach = [s for s in todo if s in here]
                 try:
+                    if not reach and st == start:
+                        # not even from the start: no way there after all (a button the program said
+                        # leads to them leads elsewhere, as pressing it showed): left unread
+                        for s in todo:
+                            tries[s] = 2
+                        log("  no way to %d page%s after all (a button leads elsewhere than the disc's "
+                            "program said): passed by" % (len(todo), "" if len(todo) == 1 else "s"))
+                        continue
                     if not reach:               # a dead end: start over
                         c.close()
                         c.open()
@@ -1485,6 +1644,9 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
         session = None
         routes = _routes(pages, start, c.learned, known)
         log("read %d of %d pages (%.1f minutes)" % (len(c.reading), len(routes), (time.time() - t0) / 60))
+        if sum(c.placed[:2]):
+            log("  the disc's program placed the highlight right %d of %d times%s" % (
+                c.placed[0], sum(c.placed[:2]), " (and %d moved by our keys)" % c.placed[2] if c.placed[2] else ""))
         # the presses: only what the disc doesn't say, on pages read, and not passed by
         for s in routes:
             for b in _state_buttons(pages, s):

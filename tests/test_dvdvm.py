@@ -101,5 +101,30 @@ def test_a_menu_waits_where_its_buttons_come_on():
     btn = lambda n: {"n": n, "raw": "3002000000010000", "rect": [0, 0, 1, 1], "auto": False, "up": n, "down": n,
                      "left": 1, "right": 2, "cmd": {}}
     disc.buttons = {("vmgm", 1): [[], [btn(1), btn(2)]]}
+    page = disc.menus["vmgm"][1][2]
+    page["cells"] = [dict(page["cells"][0], seconds=5.6), dict(page["cells"][1], seconds=12.4)]
     p, out = dvdvm.Engine(disc).start()
     assert out["menu"] == ("vmgm", 1, 2) and "menu_key" not in out
+    assert out["intro"] == 5.6                # Tinker Bell plays before the chooser's buttons come on
+
+
+def test_the_button_highlighted_on_arrival():
+    """Where a page's highlight starts (what the crawl trusts instead of looking): the page's
+    forced button; else the one SPRM 8 holds (the button pressed, or a link's), if the page has
+    it; else button 1."""
+    disc = dvdvm.Disc.__new__(dvdvm.Disc)
+    disc.titles, disc.ptt, disc.title_pgcs, disc.first_play = [], {}, {}, None
+    disc.menus = {"vmgm": {1: ("title", True, pgc()), 2: ("", False, pgc()), 3: ("", False, pgc())}}
+    btn = lambda n, raw, **kw: dict({"n": n, "raw": raw, "rect": [0, 0, 1, 1], "auto": False, "up": n,
+                                     "down": n, "left": n, "right": n, "cmd": {}}, **kw)
+    disc.buttons = {("vmgm", 1): [[btn(1, "2004000000000002"), btn(2, "2004000000000003"),
+                                   btn(3, "2004000000000002")]],
+                    ("vmgm", 2): [[btn(1, "2001000000000001"), btn(2, "2001000000000001"),
+                                   btn(3, "2001000000000001")]],
+                    ("vmgm", 3): [[btn(1, "2001000000000001"), btn(2, "2001000000000001", forced=True)]]}
+    eng = dvdvm.Engine(disc)
+    p, out = eng.start()
+    assert out["button"] == 1
+    assert dvdvm.answer(eng.press(p, 2)) == {"goes_to": ("vmgm", 3, 1), "select": 2, "intro": 0}    # forced
+    assert dvdvm.answer(eng.press(p, 1)) == {"goes_to": ("vmgm", 2, 1), "select": 1, "intro": 0}    # SPRM 8 kept
+    assert dvdvm.answer(eng.press(p, 3)) == {"goes_to": ("vmgm", 2, 1), "select": 3, "intro": 0}    # (the one pressed)
