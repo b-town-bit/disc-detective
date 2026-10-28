@@ -128,3 +128,67 @@ def test_the_button_highlighted_on_arrival():
     assert dvdvm.answer(eng.press(p, 2)) == {"goes_to": ("vmgm", 3, 1), "select": 2, "intro": 0}    # forced
     assert dvdvm.answer(eng.press(p, 1)) == {"goes_to": ("vmgm", 2, 1), "select": 1, "intro": 0}    # SPRM 8 kept
     assert dvdvm.answer(eng.press(p, 3)) == {"goes_to": ("vmgm", 2, 1), "select": 3, "intro": 0}    # (the one pressed)
+
+
+def test_a_page_too_brief_to_use_plays_on():
+    """WALL-E's start: a VMG page of 0.4 s, no still, 36 specks of buttons (a trap for programs
+    that press them); a player passes it: its post commands play the warning (title 1), then the
+    root menu waits. A held page, or one that comes back to itself, still waits."""
+    disc = dvdvm.Disc.__new__(dvdvm.Disc)
+    disc.titles = [{"title": 1, "vts": 1, "ttn": 1}, {"title": 2, "vts": 1, "ttn": 2}]
+    disc.first_play = None                                                   # (the title menu: the trap)
+    trap = pgc(post=["3002000000010000"])                                    # then: JumpTT 1
+    trap["cells"] = [dict(trap["cells"][0], seconds=0.4)]
+    disc.title_pgcs = {1: {1: pgc(12, post=["3008000000830000"]), 2: pgc(6000)}}    # warning, then root menu
+    disc.ptt = {1: {1: [(1, 1)], 2: [(2, 1)]}}
+    root = pgc()
+    root["cells"] = [dict(root["cells"][0], seconds=20.0)]
+    disc.menus = {"vmgm": {1: ("title", True, trap)}, 1: {1: ("root", True, root)}}
+    btn = lambda n, raw: {"n": n, "raw": raw, "rect": [0, 0, 10, 7], "auto": False, "up": n, "down": n,
+                          "left": n, "right": n, "cmd": {}}
+    disc.buttons = {("vmgm", 1): [[btn(n, "3002000000020000") for n in range(1, 37)]],   # each: the film
+                    (1, 1): [[btn(1, "3002000000020000")]]}
+    eng = dvdvm.Engine(disc)
+    p, out = eng.start()
+    assert out["menu"] == (1, 1, 1) and [x["title"] for x in out["played"]] == [1]
+    # held by a still, the same page waits (a still menu)
+    trap["cells"] = [dict(trap["cells"][0], still=255)]
+    assert eng.start()[1]["menu"] == ("vmgm", 1, 1)
+    # brief but coming back to itself (a short loop): it's the page
+    trap["cells"] = [dict(trap["cells"][0], still=0)]
+    trap["post"] = [bytes.fromhex("2004000000000001")]                       # LinkPGCN 1: itself
+    assert eng.start()[1]["menu"] == ("vmgm", 1, 1)
+
+
+def test_a_set_that_compares_a_register_first():
+    """WALL-E's commentary switch: "GPRM2 = 333 if GPRM1 == 1" (a set with a compare: the
+    register compared is 4 bits, GPRM1, not GPRM0 with the next byte's bits)."""
+    p = dvdvm.Player(None)
+    cmd = bytes.fromhex("71a00102014d0001")
+    p.gprm[1] = 1
+    p.execute(cmd)
+    assert p.gprm[2] == 333
+    p.gprm[1], p.gprm[2] = 0, 111
+    p.execute(cmd)
+    assert p.gprm[2] == 111
+
+
+def test_the_titles_that_play_on_after_a_buttons_title():
+    """The Sorcerer's Apprentice's Sneak Peeks: its button plays one, and each jumps to the next
+    when it ends, the last back to the menu. The answer: the first, and those after it."""
+    disc = dvdvm.Disc.__new__(dvdvm.Disc)
+    disc.titles = [{"title": t, "vts": 1, "ttn": t} for t in (1, 2, 3, 4)]
+    disc.first_play = None
+    jump = lambda t: "30020000000%d0000" % t
+    disc.title_pgcs = {1: {1: pgc(6000), 2: pgc(70, post=[jump(3)]), 3: pgc(80, post=[jump(4)]),
+                           4: pgc(90, post=["3008000000830000"])}}            # (then: the root menu)
+    disc.ptt = {1: {t: [(t, 1)] for t in (1, 2, 3, 4)}}
+    disc.menus = {"vmgm": {2: ("title", True, pgc(post=["3006000000420000"]))}, 1: {1: ("root", True, pgc())}}
+    btn = lambda n, raw: {"n": n, "raw": raw, "rect": [0, 0, 1, 1], "auto": False, "up": 0, "down": 0,
+                          "left": 0, "right": 0, "cmd": {}}
+    disc.buttons = {(1, 1): [[btn(1, jump(2)), btn(2, jump(1))]]}
+    eng = dvdvm.Engine(disc)
+    p = dvdvm.Player(disc)
+    p.domain, p.pgcn, p.pgn = 1, 1, 1
+    assert dvdvm.answer(eng.press(p, 1)) == {"plays": 2, "chapter": 1, "before": [], "after": [3, 4]}
+    assert dvdvm.answer(eng.press(p, 2)) == {"plays": 1, "chapter": 1, "before": []}    # the film: on its own

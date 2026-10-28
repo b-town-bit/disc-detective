@@ -435,6 +435,7 @@ def setup(root):
     label("PillSep.TLabel", bg="#fffdf8", fg=BRASS_400, font=(MONO, 9))
     label("FootStatus.TLabel", bg=VELLUM_300, fg=INK, font=(MONO, 9, "bold"))
     label("BarStatus.TLabel", bg=VELLUM_200, fg=INK, font=(MONO, 9))
+    label("BarPct.TLabel", bg=VELLUM_200, fg=BRASS_700, font=(MONO, 9, "bold"))
     label("FootLink.TLabel", bg=VELLUM_300, fg=INK, font=(MONO, 8))
     label("FootSep.TLabel", bg=VELLUM_300, fg=BRASS_400, font=(MONO, 8))
     return st
@@ -566,6 +567,166 @@ def scaled_photo(path):
         except Exception:
             pass
     return tk.PhotoImage(file=path)
+
+
+GAUGE_DARK, GAUGE_BRIGHT = "#6b430c", "#f0c24e"     # the fill: dark brass, warming to gold at its head
+
+
+def _photo(img):
+    import base64
+    import io
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
+
+
+class Gauge(tk.Canvas):
+    """A progress bar in the study's brass: a rounded trough, its fill dark at the start and
+    bright at its head; "indeterminate", a bright run slides along it. Takes what the app asks
+    of a ttk.Progressbar (configure value / mode / maximum, start, stop)."""
+
+    def __init__(self, parent, bg, height=10, length=200, mode="determinate", maximum=100, value=0, follow=None):
+        """follow: called with fraction() (None while indeterminate) whenever that changes (a
+        percentage beside the bar, say)."""
+        self._h = px(height)
+        super().__init__(parent, height=self._h, width=px(length), background=bg, highlightthickness=0, bd=0)
+        self._bg, self._mode, self._max, self._value = bg, mode, float(maximum), float(value)
+        self._follow, self._told = follow, object()
+        self._job = None
+        self._pos = 0.0
+        self._imgs = {}
+        self._trough = self.create_image(0, 0, anchor="nw")
+        self._fill = self.create_image(0, 0, anchor="nw")
+        self.bind("<Configure>", lambda e: self._draw())
+
+    # ---- ttk.Progressbar's calls ----
+    def configure(self, cnf=None, **kw):
+        kw = dict(cnf or {}, **kw)
+        if "mode" in kw:
+            self._mode = kw.pop("mode")
+        if "maximum" in kw:
+            self._max = float(kw.pop("maximum")) or 1.0
+        if "value" in kw:
+            self._value = float(kw.pop("value"))
+        if kw:
+            super().configure(**kw)
+        self._draw()
+        if self._follow and self.fraction() != self._told:
+            self._told = self.fraction()
+            self._follow(self._told)
+    config = configure
+
+    def cget(self, key):
+        return {"mode": self._mode, "maximum": self._max, "value": self._value}.get(key) if key in (
+            "mode", "maximum", "value") else super().cget(key)
+
+    def fraction(self):
+        return max(0.0, min(1.0, self._value / self._max)) if self._mode == "determinate" else None
+
+    SWEEP = 2.5           # seconds for the indeterminate run to cross the trough
+
+    def start(self, interval=12):
+        """Set the run sliding (interval: ttk's, ignored: it moves by the clock, SWEEP a pass)."""
+        self.stop()
+        t0 = time.time() - self._pos * self.SWEEP
+
+        def tick():
+            self._pos = ((time.time() - t0) / self.SWEEP) % 1.0
+            self._draw()
+            self._job = self.after(20, tick)
+        tick()
+
+    def stop(self):
+        if self._job:
+            self.after_cancel(self._job)
+            self._job = None
+
+    # ---- drawing ----
+    def _img(self, key, make):
+        if key not in self._imgs:
+            if len(self._imgs) > 40:              # (widths come and go as the window resizes)
+                self._imgs.clear()
+            self._imgs[key] = _photo(make())
+        return self._imgs[key]
+
+    def _pill_mask(self, w, h):
+        """A pill's shape (anti-aliased ends) as an L-mode mask."""
+        from PIL import Image, ImageDraw
+        k = 4
+        end = Image.new("L", (h * k, h * k), 0)
+        ImageDraw.Draw(end).ellipse((0, 0, h * k - 1, h * k - 1), fill=255)
+        end = end.resize((h, h), Image.LANCZOS)
+        mask = Image.new("L", (w, h), 255)
+        r = h // 2
+        mask.paste(end.crop((0, 0, r, h)), (0, 0))
+        mask.paste(end.crop((h - r, 0, h, h)), (w - r, 0))
+        return mask
+
+    def _make_trough(self, w, h):
+        from PIL import Image
+        img = Image.new("RGBA", (w, h), self._bg)
+        edge = Image.new("RGBA", (w, h), BRASS_300)
+        img.paste(edge, (0, 0), self._pill_mask(w, h))
+        inner = Image.new("RGBA", (w - 2, h - 2), VELLUM_300)
+        img.paste(inner, (1, 1), self._pill_mask(w - 2, h - 2))
+        return img
+
+    def _make_fill(self, w, h):
+        """The fill, w wide: dark brass to gold along it, a soft sheen across its top half."""
+        from PIL import Image, ImageOps
+        ramp = Image.linear_gradient("L").rotate(90, expand=True)         # dark at the left, bright at the right
+        if ramp.getpixel((0, 128)) > ramp.getpixel((255, 128)):
+            ramp = ramp.transpose(Image.FLIP_LEFT_RIGHT)
+        body = ImageOps.colorize(ramp.resize((w, h)), GAUGE_DARK, GAUGE_BRIGHT).convert("RGBA")
+        sheen = Image.linear_gradient("L").resize((w, h)).point(lambda v: max(0, 70 - v))   # top: lighter
+        body = Image.composite(Image.new("RGBA", (w, h), "#fff6dc"), body, sheen)
+        out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        out.paste(body, (0, 0), self._pill_mask(w, h))
+        return out
+
+    def _draw(self):
+        w, h = self.winfo_width(), self._h
+        if w < h * 2:
+            return
+        self.itemconfigure(self._trough, image=self._img(("trough", w, h), lambda: self._make_trough(w, h)))
+        inset, fh = 2, h - 4
+        room = w - 2 * inset
+        if self._mode == "determinate":
+            fw = round(room * self.fraction())
+            x = inset
+        else:                                     # a run a quarter as long, sliding through and round:
+            run = max(fh * 2, room // 4)          # it grows out of the left end, shrinks into the right
+            start = inset - run + round((room + run) * self._pos)
+            x = max(inset, start)
+            fw = min(start + run, inset + room) - x
+        if fw < fh:                               # too short to be a pill: nothing yet
+            self.itemconfigure(self._fill, state="hidden")
+            return
+        img = self._img(("fill", fw, fh), lambda: self._make_fill(fw, fh))
+        self.itemconfigure(self._fill, image=img, state="normal")
+        self.coords(self._fill, x, inset)
+
+
+ART_DIR = os.path.join(HERE, "art")
+
+
+def watermark(name, height, bg=PARCHMENT):
+    """The desk's faint corner art ("right": the magnifier) `height` screen pixels tall, laid on the desk's colour (Tk has no see-through widgets: a label of it over the
+    bare parchment looks the same). None without Pillow, or the file."""
+    import base64
+    import io
+    try:
+        from PIL import Image
+        with Image.open(os.path.join(ART_DIR, "watermark_%s.png" % name)) as im:
+            im = im.convert("RGBA")
+            im = im.resize((max(1, round(im.width * height / im.height)), max(1, height)), Image.LANCZOS)
+        out = Image.new("RGBA", im.size, bg)
+        out.alpha_composite(im)
+        buf = io.BytesIO()
+        out.convert("RGB").save(buf, "PNG")
+        return tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
+    except Exception:
+        return None
 
 
 def icon(name):

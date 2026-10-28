@@ -25,7 +25,7 @@ disc-detective-app = "disc_detective.app:main"
 packages = ["disc_detective"]
 
 [tool.setuptools.package-data]
-disc_detective = ["icon.png", "fonts/*.ttf", "fonts/*.txt", "icons/*.png"]
+disc_detective = ["icon.png", "fonts/*.ttf", "fonts/*.txt", "icons/*.png", "art/*.png"]
 
 [tool.setuptools.dynamic]
 version = { attr = "disc_detective.core.VERSION" }

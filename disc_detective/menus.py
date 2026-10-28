@@ -232,6 +232,23 @@ MENU_VOCAB = {"play", "movie", "film", "main", "menu", "special", "features", "f
               "making", "of", "deleted", "outtakes", "music", "video", "commentary", "interview", "interviews",
               "documentary", "featurette", "gallery", "talent", "files", "cast", "crew", "previews", "credits",
               "story", "production", "back", "next", "on", "off"}
+# the words extras are named with, beyond a menu's own: film-making's, and the kinds of extras
+# (a film title rarely has them: The Iron Giant's "Storyboards and Animatics" read as junk)
+EXTRAS_VOCAB = MENU_VOCAB | {
+    "storyboard", "storyboards", "animatic", "animatics", "animation", "animator", "animators", "sketch",
+    "sketches", "sketchbook", "concept", "art", "artwork", "design", "designs", "costume", "costumes",
+    "visual", "effects", "vfx", "sfx", "stunt", "stunts", "rehearsal", "rehearsals", "screen", "test", "tests",
+    "camera", "previs", "previz", "pre-visualization", "layout", "lighting", "modeling", "rendering",
+    "featurettes", "commentaries", "outtake", "blooper", "bloopers", "gag", "reel", "extended", "alternate",
+    "alternative", "ending", "endings", "opening", "sequence", "sequences", "montage", "galleries", "photo",
+    "photos", "stills", "documentaries", "retrospective", "filmmaker", "filmmakers", "filmmaking",
+    "director", "director's", "directors", "producer", "producers", "composer", "score", "soundtrack",
+    "videos", "teasers", "spot", "spots", "tv", "promo", "promos", "easter", "egg", "eggs", "sneak", "peek",
+    "peeks", "premiere", "junket", "press", "kit", "voice", "voices", "recording", "session", "sessions",
+    "screenplay", "script", "trivia", "factoids", "pop-up", "karaoke", "sing-along", "singalong",
+    "read-along", "game", "games", "quiz", "vintage", "original", "introduction", "intro", "featuring",
+    "performed", "q&a", "panel", "comic-con", "tour", "webisode", "webisodes", "short", "shorts",
+}
 WELL_READ = 14              # a reading this good (or with a menu word) needs no tilted second look
 SHORT_WORDS = {"a", "i", "of", "to", "in", "on", "an", "at", "my", "me", "is", "it", "we", "up", "be", "by", "or",
                "no", "so", "do", "go", "oh", "tv", "dvd", "the", "and"}
@@ -338,6 +355,85 @@ def button_words(image, rect, others=(), frame_size=(720, 480)):
     return got if _score(got) > max(_score(text), 5) else text
 
 
+PLATE_GRID = 3          # px: plates are found on a grid this coarse
+PLATE_REACH = 40        # px: a plate this near a button, and nearer it than any other, is its label
+PLATE_WORDS = 10        # _score a plate's reading needs (and 3 more than the button's own) to stand
+
+
+def plates(image, frame_size=(720, 480)):
+    """The plain plates names are printed on (Spider-Man's Trailers: white panels, a pointer for a
+    button at each one's edge): light or dark areas, joined across the letters on them (gaps a
+    stroke wide; a plate's frame is wider), a name's size. Boxes in the disc's coordinates."""
+    from PIL import Image, ImageFilter
+    grey = image.convert("L").resize(frame_size)
+    out = []
+    for keep in (lambda v: 255 if v > 200 else 0, lambda v: 255 if v < 45 else 0):
+        m = grey.point(keep).filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.MinFilter(7))
+        g = PLATE_GRID
+        small = m.resize((m.width // g, m.height // g), Image.BOX).point(lambda x: 255 if x > 200 else 0)
+        w, h = small.size
+        px = small.load()
+        seen = set()
+        for y in range(h):
+            for x in range(w):
+                if not px[x, y] or (x, y) in seen:
+                    continue
+                todo, n = [(x, y)], 0
+                seen.add((x, y))
+                x0 = x1 = x
+                y0 = y1 = y
+                while todo:
+                    a, b = todo.pop()
+                    n += 1
+                    x0, x1, y0, y1 = min(x0, a), max(x1, a), min(y0, b), max(y1, b)
+                    for q in ((a + 1, b), (a - 1, b), (a, b + 1), (a, b - 1)):
+                        if 0 <= q[0] < w and 0 <= q[1] < h and q not in seen and px[q]:
+                            seen.add(q)
+                            todo.append(q)
+                bw, bh = (x1 - x0 + 1) * g, (y1 - y0 + 1) * g
+                if 40 <= bw <= 300 and 15 <= bh <= 120 and n * g * g > 0.5 * bw * bh:
+                    out.append([x0 * g, y0 * g, (x1 + 1) * g, (y1 + 1) * g])
+    return out
+
+
+def _gap(r, q):
+    dx = max(0, max(r[0], q[0]) - min(r[2], q[2]))
+    dy = max(0, max(r[1], q[1]) - min(r[3], q[3]))
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def plate_words(image, rects, frame_size=(720, 480), only=None):
+    """{button index: what the plate nearest it says}, for buttons with a plate of their own: one
+    within PLATE_REACH, nearer them than any other button. A button whose rectangle is a pointer
+    or a lamp by its name reads the whole name this way (button_words's cell reaches only halfway
+    to the next button)."""
+    found = plates(image, frame_size)
+    out = {}
+    for i, r in enumerate(rects):
+        if only is not None and i not in only:
+            continue
+        mine = [k for k in found if _gap(r, k) < PLATE_REACH and
+                min(range(len(rects)), key=lambda j: _gap(rects[j], k)) == i]
+        if mine:
+            out[i] = button_text(image, min(mine, key=lambda k: _gap(r, k)), frame_size, pad=0)
+    return out
+
+
+def _plate_or(reading, plate):
+    """A button's reading, or its plate's when that reads as words, clearly better (Spider-Man's
+    "iene": "STUART LITTLE"). Not words for junk: across the saved discs, only three changed."""
+    if plate and _score(plate) >= PLATE_WORDS and _score(plate) >= _score(reading) + 3:
+        return plate
+    return reading
+
+
+def _better_reading(moved, still, rect, others=()):
+    """The selected button's words, from the frame its highlight had moved off and the one it
+    hadn't, whichever reads better: the highlight may not have moved yet (Spider-Man 3's
+    "Coming to Blu-ray", white on yellow when lit, read as "Conihg to Biutvay")."""
+    return max((button_words(moved, rect, others), button_words(still, rect, others)), key=_score)
+
+
 def page_text(image, rects, frame_size=(720, 480)):
     """The words on a menu picture outside its buttons (a page's heading: "Sneak Peeks" over
     the ads, in plainer lettering than the button that led there), or "". The buttons are
@@ -419,6 +515,7 @@ def _no_console():
 
 VLC_DIRS = [r"C:\Program Files\VideoLAN\VLC", r"C:\Program Files (x86)\VideoLAN\VLC",
             "/Applications/VLC.app/Contents/MacOS/lib", "/usr/lib/x86_64-linux-gnu", "/usr/lib"]
+ADJUST_ENABLE, ADJUST_CONTRAST, ADJUST_BRIGHTNESS = 0, 1, 2     # libvlc_video_adjust_option_t
 NAV = {"activate": 0, "up": 1, "down": 2, "left": 3, "right": 4, "popup": 5}
 
 
@@ -429,6 +526,25 @@ def find_vlc(setting=None):
         if d and os.path.isdir(d) and any(os.path.exists(os.path.join(d, n)) for n in names):
             return d
     return None
+
+
+def vlc_player(folder):
+    """VLC's player program, for the folder holding its library (find_vlc), or None."""
+    for f in ("vlc.exe", "VLC", os.path.join("..", "VLC"), "vlc"):
+        p = os.path.normpath(os.path.join(folder, f))
+        if os.path.isfile(p):
+            return p
+    return shutil.which("vlc")
+
+
+def watch_title(folder, source, title):
+    """Plays one title of a DVD (a drive or a folder) in VLC, in a window of its own: to see
+    what it is. False if there's no VLC player to open."""
+    exe = vlc_player(folder) if folder else None
+    if not exe:
+        return False
+    subprocess.Popen([exe, dvd_mrl(source) + "#%d" % title], close_fds=True)
+    return True
 
 
 class _Title(ctypes.Structure):
@@ -462,6 +578,11 @@ class Vlc:
         L.libvlc_media_player_get_time.argtypes = [ctypes.c_void_p]
         L.libvlc_media_player_navigate.argtypes = [ctypes.c_void_p, ctypes.c_uint]
         L.libvlc_media_player_set_title.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        L.libvlc_video_get_spu.argtypes = [ctypes.c_void_p]
+        L.libvlc_video_set_spu.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        L.libvlc_video_set_adjust_int.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int]
+        L.libvlc_video_set_adjust_float.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_float]
+        self.is_dark = False
         L.libvlc_media_player_get_full_title_descriptions.argtypes = [
             ctypes.c_void_p, ctypes.POINTER(ctypes.POINTER(ctypes.POINTER(_Title)))]
         L.libvlc_title_descriptions_release.argtypes = [ctypes.POINTER(ctypes.POINTER(_Title)), ctypes.c_uint]
@@ -510,11 +631,36 @@ class Vlc:
         L.libvlc_media_player_play(self.mp)
 
     def frame(self):
-        """The latest frame as a PIL image (720x480; the disc's own button coordinates)."""
+        """The latest frame as a PIL image (720x480; the disc's own button coordinates); marked
+        dark (info) when taken with the video darkened (dark())."""
         from PIL import Image
         with self.lock:
             raw = bytes(self.buf)
-        return Image.frombuffer("RGBA", (self.W, self.H), raw, "raw", "BGRA", 0, 1).convert("RGB")
+        img = Image.frombuffer("RGBA", (self.W, self.H), raw, "raw", "BGRA", 0, 1).convert("RGB")
+        if self.is_dark:
+            img.info["dark"] = True
+        return img
+
+    def settle(self, n=3, limit=1.5):
+        """Wait for n more frames to be drawn (a change made just now in them); whether they were."""
+        start, t0 = self.frames, time.time()
+        while self.frames < start + n and time.time() - t0 < limit:
+            time.sleep(0.02)
+        return self.frames >= start + n
+
+    def dark(self, on):
+        """The video darkened to black (VLC's adjust filter: brightness and contrast 0), or back.
+        VLC draws the subpicture after its filters, so a menu's highlight stays as it is, over
+        nothing: no moving scenery behind it (WALL-E's sweeping lights). Takes effect at once."""
+        if on == self.is_dark:
+            return
+        L = self.lib
+        if on:
+            L.libvlc_video_set_adjust_float(self.mp, ADJUST_CONTRAST, 0.0)
+            L.libvlc_video_set_adjust_float(self.mp, ADJUST_BRIGHTNESS, 0.0)
+        L.libvlc_video_set_adjust_int(self.mp, ADJUST_ENABLE, 1 if on else 0)
+        self.settle()
+        self.is_dark = on
 
     def state(self):
         L = self.lib
@@ -537,6 +683,24 @@ class Vlc:
 
     def press(self, key):
         self.lib.libvlc_media_player_navigate(self.mp, NAV[key])
+
+    def menu(self):
+        """VLC's DVD Menu (its menu title): the disc's menu, from a title playing."""
+        self.lib.libvlc_media_player_set_title(self.mp, 0)
+
+    def bare_frame(self):
+        """A frame without the subpicture over the video (a menu's highlight, and whatever else
+        the disc draws there), or None. Turned back on after, the subpicture shows again only
+        once the disc sends it again: a page's start, or its loop's (WALL-E's: 23 s)."""
+        L = self.lib
+        spu = L.libvlc_video_get_spu(self.mp)
+        if spu < 0:
+            return None
+        L.libvlc_video_set_spu(self.mp, -1)
+        try:
+            return self.frame() if self.settle() else None      # (a few frames drawn without it)
+        finally:
+            L.libvlc_video_set_spu(self.mp, spu)
 
     def burst(self, n=5, gap=0.08):
         """A few frames in quick succession."""
@@ -597,6 +761,38 @@ def end_session():
     if _session_dir:
         shutil.rmtree(_session_dir, ignore_errors=True)
         _session_dir = None
+
+
+# a disc's menu data (dvd_structure) never changes: read once, kept by fingerprint in your data
+# folder, and read back for the next stakeout (WALL-E's 443 pages: two minutes off the drive).
+# Bumped whenever dvd_structure gives more or other than before: older copies are read again
+STRUCTURE_VERSION = 1
+
+
+def _structure_file(content_hash, home=None):
+    from .core import data_home
+    return os.path.join(home or data_home(), "menu_data", content_hash + ".json.gz")
+
+
+def saved_structure(content_hash, home=None):
+    """The disc's menu data as read before (save_structure), or None."""
+    import gzip
+    try:
+        with gzip.open(_structure_file(content_hash, home), "rt", encoding="utf-8") as fh:
+            kept = json.load(fh)
+    except (OSError, ValueError, EOFError):
+        return None
+    return kept.get("structure") if kept.get("version") == STRUCTURE_VERSION else None
+
+
+def save_structure(content_hash, structure, home=None):
+    import gzip
+    path = _structure_file(content_hash, home)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".part"
+    with gzip.open(tmp, "wt", encoding="utf-8") as fh:
+        json.dump({"version": STRUCTURE_VERSION, "structure": structure}, fh)
+    os.replace(tmp, path)
 
 
 def keep_disc_data(root, structure, out_dir):
@@ -753,6 +949,9 @@ SEEN = 30                                   # pixels of highlight that count as 
 HINT_WAIT = 75                              # seconds to find the page the disc's program starts on
 NEAR = 24                                   # pixels round a page's buttons where a stray highlight would show
 TITLE_WAIT = 180                            # seconds a title may play before the page a button leads to
+WORDED = 6                                  # _score of a button reading that's words (bare frames: words gone?)
+MENU_BACK_WAIT = 15                         # seconds to find the start page after DVD Menu (restart)
+FILM_LENGTH = 20 * 60                      # seconds: a title this long playing is a film, not waited out
 
 
 class Lost(Exception):
@@ -862,6 +1061,8 @@ SKIP_RE = re.compile(r"\b(set ?up|settings|options|languages?|audio|subtitles?|c
 
 
 # (a stray letter before it: OCR of the lettering's backdrop, "i play")
+PLAY_ALL_RE = re.compile(r"\bplay\s*a(?:\w?l\w*)?\b", re.I)    # (OCR's Play All: "Play Aly", "PLAY aul",
+                                                              # "play A"; not "Play Again", "Display")
 PLAY_RE = re.compile(r"^\W*([a-z]\W+)?(play|start|resume|watch)( the)?( movie| film| feature)?\W*$", re.I)
 
 
@@ -988,6 +1189,24 @@ def _count_in(mask, rects):
     return ImageChops.multiply(mask, area).histogram()[255]
 
 
+def _unseen(by):
+    """Whether no arrow key on a page can show the highlight moving: none leads anywhere, or only
+    to buttons too small for a highlight to be seen ({button: button} of the page)."""
+    area = lambda r: max(0, r[2] - r[0]) * max(0, r[3] - r[1])
+    to = {b[k] for b in by.values() for k in ("up", "down", "left", "right") if b[k] in by and b[k] != b["n"]}
+    return all(area(by[n]["rect"]) < SEEN for n in to)
+
+
+def _overlaps(r, q):
+    return min(r[2], q[2]) > max(r[0], q[0]) and min(r[3], q[3]) > max(r[1], q[1])
+
+
+def _count_beyond(mask, rect, others):
+    """How many white pixels a mask has inside a rectangle but outside some others."""
+    inside = [[max(rect[0], q[0]), max(rect[1], q[1]), min(rect[2], q[2]), min(rect[3], q[3])] for q in others]
+    return _count(mask, rect) - _count_in(mask, inside)
+
+
 def _count(mask, rect):
     """How many white pixels a mask has inside a rectangle."""
     x0, y0, x1, y1 = rect
@@ -1001,6 +1220,16 @@ def _clock(seconds):
     return "%d:%02d:%02d" % (s // 3600, s // 60 % 60, s % 60) if s >= 3600 else "%d:%02d" % (s // 60, s % 60)
 
 
+def _reachable(states, began, engine, reached):
+    """The pages VLC can be on, when the disc's program followed every button and wasn't unsure
+    of any: those it reaches (else None: any page with buttons). WALL-E: 228 pages, most of them
+    decoys; one fitted the main menu's highlight moving, and was taken for it."""
+    if not engine or any("unsure" in a for answers in engine.values() for a in answers):
+        return None
+    near = {tuple(x) for x in reached} | {tuple(began[k]) for k in ("goes_to", "menu_goes_to") if began.get(k)}
+    return [s for s in states if s in near]
+
+
 class _Crawler:
     def __init__(self, vlc_dir, mrl, pages, out_dir, log):
         self.vlc_dir, self.mrl, self.pages, self.out_dir, self.log = vlc_dir, mrl, pages, out_dir, log
@@ -1009,10 +1238,20 @@ class _Crawler:
         self.learned = {}                       # {(state, button): state}: links found by pressing
         self.texts = {}                         # {state: {button: text}}, read (see words())
         self.reading = {}                       # {state: {button: OCR under way}}: the pages visited
-        self.headings = {}                      # {state: OCR under way}: the words outside the buttons
+        self.headings = {}                      # {state: the words outside the buttons}, read
+        self.finished = {}                      # {state: its words, read every way it takes (_finish)}
+        self.spent = {}                         # {what: seconds}, for the log (timed())
+        self.overlay = {}                       # {state: whether its words are in its subpicture}
         self.expect = 0                         # pages the tour expects to read (for "2 of 6")
         self.menu_key = False                   # the disc plays its film by itself: Menu, after opening
         self.menu_skip = False                  # Menu, once in the menus: past the first page's intro
+        self.lengths = None                     # {VLC's title: seconds}
+        self.dark_ok, self.dark_missed = None, 0  # whether the highlight shows over the video darkened
+        if os.environ.get("DISC_DETECTIVE_NO_DARK"):  # (for comparing: checked as it is only)
+            self.dark_ok = False
+        self.menu_back = None                   # whether DVD Menu leads back to the start (restart)
+        self.film_first = False                 # VLC plays the film where the disc's program waits in a
+                                                # menu (WALL-E): its DVD Menu, once the film is on
         # the disc's program's word on the highlighted button: where it opens, and after each
         # button that leads to a page ({(state, button): button there}); and how often it was right
         self.start_select, self.selects, self.placed = None, {}, [0, 0, 0]   # (right, wrong, moved by us)
@@ -1020,6 +1259,7 @@ class _Crawler:
         self.states = []                        # every page with buttons to tell apart (crawl)
         from concurrent.futures import ThreadPoolExecutor
         self.pool = ThreadPoolExecutor(max_workers=4)
+        self.more = ThreadPoolExecutor(max_workers=2)     # (each page's readings, finished: _finish)
 
     def open(self):
         self.v = Vlc(self.vlc_dir, highlight=True)
@@ -1031,6 +1271,51 @@ class _Crawler:
             raise Lost("no picture from VLC")
         if self.menu_key:
             self.menu_call()
+        elif self.film_first:
+            self.await_title()
+            self.to_menus()
+
+    def feature_length(self, title):
+        """Whether VLC's title is a film's length (not a clip before a page)."""
+        if self.lengths is None:
+            self.lengths = {t["index"]: t["seconds"] for t in self.v.titles()}
+        return self.lengths.get(title, 0) >= FILM_LENGTH
+
+    def await_title(self, limit=150):
+        """Wait (up to limit seconds) for VLC to play one of the disc's titles (past its warnings)."""
+        t0 = time.time()
+        while self.v.state()["title"] == 0 and time.time() - t0 < limit:
+            time.sleep(0.25)
+
+    def to_menus(self):
+        """VLC's DVD Menu, from a title playing: the disc's menu for it (where the remote's Menu,
+        or a title's own ban on it, may do nothing: WALL-E's film)."""
+        self.v.menu()
+        time.sleep(4)
+
+    def restart(self, start, where=None):
+        """Back on the page the disc opens on, to start a route over: by VLC's DVD Menu, in
+        seconds, while that's found to lead there; else the disc opened again (its warnings and
+        all: WALL-E's take a minute and more). Only between pages: a fresh disc forgets the
+        settings presses made (a commentary switch), which a button's answer can depend on."""
+        if self.v is not None and self.menu_back is not False:
+            try:
+                self.v.menu()
+                time.sleep(2)
+                found = self.find([start], timeout=MENU_BACK_WAIT + _lead_in(self.pages, start))
+                if self.menu_back is None:
+                    self.log("  DVD Menu leads back to %s: starting over that way" % (start,))
+                self.menu_back = True
+                return found
+            except Lost:
+                # (it lands elsewhere: a disc that opens on its VMG menu. Not from another title
+                # set's pages, though: there DVD Menu leads to that one's (WALL-E's Home Theater))
+                if self.menu_back is None and (where is None or where[0] == start[0]):
+                    self.log("  DVD Menu doesn't lead back to %s: opening the disc again instead" % (start,))
+                    self.menu_back = False
+        self.close()
+        self.open()
+        return self.at_start(start)
 
     def await_menus(self, limit=90):
         """Wait (up to limit seconds) for VLC to be in the disc's menus, not one of its titles:
@@ -1057,6 +1342,15 @@ class _Crawler:
         wait: seconds of the page's intro first (the disc's program says), no keys while its
         buttons come on: keys then can move the highlight half a round trip."""
         by = {b["n"]: b for b in _state_buttons(self.pages, st)}
+        if sel in by and _unseen(by):
+            # no move there would show: the program's word, untested (WALL-E's Home Theater pages:
+            # Back and Next 4 pixels square). A wrong word shows at the next page's arrival
+            time.sleep(wait + 1)
+            if st not in self.reading:
+                self.log("  page %s of title set %s: its highlight is too small to see: taking the disc's "
+                         "program's word for it" % (st[1], st[0]))
+                self._read(st, self.v.frame(), None, None)
+            return st, sel
         trips = [(k, back) for k, back in self.ROUND_TRIPS if sel in by and by[sel][k] in by and
                  by[sel][k] != sel and by[by[sel][k]][back] == sel and not by[by[sel][k]]["auto"]]
         if not trips:
@@ -1064,11 +1358,12 @@ class _Crawler:
         time.sleep(wait + 1)
         t0, i, playing = time.time(), 0, None
         while time.time() - t0 < timeout:
-            if self.v.state()["title"] != 0:
+            now = self.v.state()["title"]
+            if now != 0:
                 # a title before the page (Muppets from Space: its outtakes' intro, the first time):
                 # the page's time starts once the menus are back; a film, though, isn't waited out
                 playing = playing or time.time()
-                if time.time() - playing > TITLE_WAIT:
+                if time.time() - playing > TITLE_WAIT or self.feature_length(now):
                     break
                 time.sleep(1)
                 t0 = time.time()
@@ -1097,6 +1392,8 @@ class _Crawler:
                     self._read(st, a, b, sel)
                     return st, sel
             time.sleep(0.3)
+        if playing and self.v.state()["title"] != 0:
+            raise Lost("VLC is playing a title, not in the menus")     # (no page to look round)
         self.placed[1] += 1
         self.log("  the highlight isn't where the disc's program said (%s, button %d): looking" % (st, sel))
         try:
@@ -1143,6 +1440,8 @@ class _Crawler:
         time.sleep(2)
         self.v.press("popup")
         time.sleep(4)
+        if self.v.state()["title"] != 0:        # (the press did nothing: VLC's DVD Menu instead)
+            self.to_menus()
 
     def close(self):
         if self.v:
@@ -1165,7 +1464,79 @@ class _Crawler:
         return any(b[key] in by and b[key] != n and by[b[key]][back] == n and not b["auto"]
                    and not by[b[key]]["auto"] for n, b in by.items() for key, back in self.ROUND_TRIPS)
 
+    # Highlight checks over the video darkened first (Vlc.dark): the highlight is the subpicture's,
+    # drawn after VLC's filters, so it shows over black with nothing moving behind it (WALL-E's
+    # main menu: a small dot over sweeping lights, not seen in 75 s of round trips). As it is,
+    # when the dark view shows nothing: a highlight in the video itself, or buttons not on yet.
+    DARK_MISSES = 3         # times the highlight showed as it is but not darkened: not for this disc
+    AS_IS_EVERY = 3         # once shown darkened: as it is too, every this many misses in a row
+
     def _round_trip(self, candidates, key, back, weak=False):
+        """_round_trip_as_is over the video darkened, else as it is (a round trip leaves the
+        highlight where it was: tried twice, no harm)."""
+        t0 = time.time()
+        try:
+            return self._round_trip_dark_first(candidates, key, back, weak)
+        finally:
+            self.timed("highlight checks", t0)
+
+    def _round_trip_dark_first(self, candidates, key, back, weak=False):
+        if self.v is not None and getattr(self, "dark_ok", None) is not False:
+            res = self._darkly(self._round_trip_as_is, candidates, key, back, weak)
+            if res[0] and res[0][0][0] >= SEEN:
+                if not self.dark_ok:
+                    self.log("  the highlight shows over the video darkened: looking for it that way")
+                    self.dark_ok = True
+                self.dark_streak = 0
+                return res
+            # shown darkened on this disc before: a miss is a page's buttons not on yet (an intro),
+            # as a rule; as it is only now and then, for a page whose highlight is in its video
+            # (each a round trip more: The Iron Giant's intros, 5 s a page later to their buttons)
+            self.dark_streak = getattr(self, "dark_streak", 0) + 1
+            if self.dark_ok and self.dark_streak % self.AS_IS_EVERY:
+                return res
+            self._as_is()
+            res = self._round_trip_as_is(candidates, key, back, weak)
+            if res[0] and res[0][0][0] >= SEEN and not self.dark_ok:
+                self.dark_missed += 1
+                if self.dark_missed >= self.DARK_MISSES:
+                    self.log("  the highlight doesn't show over the video darkened (drawn in the video): "
+                             "looking as before")
+                    self.dark_ok = False
+            return res
+        self._as_is()
+        return self._round_trip_as_is(candidates, key, back, weak)
+
+    def timed(self, what, t0):
+        """Add the seconds since t0 to what's been spent on what (the log's tally at the end)."""
+        spent = getattr(self, "spent", None)
+        if spent is not None:
+            spent[what] = spent.get(what, 0.0) + time.time() - t0
+
+    def _darkly(self, check, *args):
+        """check, over the video darkened; left darkened for the next (each switch waits for a
+        few frames: switched round each check, The Iron Giant's 13 pages took 20 s more). Back
+        as it is for what needs the picture: a page read (_read), a check as it is (_as_is)."""
+        if not self.v.is_dark:
+            t0 = time.time()
+            self.v.dark(True)
+            self.timed("darkening", t0)
+        return check(*args)
+
+    def _as_is(self):
+        """The video as it is again (if darkened)."""
+        if self.v is not None and getattr(self.v, "is_dark", False):
+            t0 = time.time()
+            self.v.dark(False)
+            self.timed("darkening", t0)
+
+    def _round_trip_as_is(self, candidates, key, back, weak=False):
+        spent = getattr(self, "spent", None)
+        if spent is not None:
+            spent["round trips"] = spent.get("round trips", 0) + 1
+        return self._round_trip_frames(candidates, key, back, weak)
+
+    def _round_trip_frames(self, candidates, key, back, weak=False):
         """Press an arrow key and its opposite: the highlight goes to a button and comes back.
         ([(score, state, was, there)] best first, a frame with was highlighted, one with there).
         What counts went one way and came back: different from the frames before and after in
@@ -1212,8 +1583,12 @@ class _Crawler:
                     m = b[key]
                     if m in by and m != n and by[m][back] == n and not by[m]["auto"]:
                         # both buttons changed; more than any other one did (a glint in the scenery
-                        # behind it); and little changed outside all the buttons
-                        rest = max([cnt[x] for x in by if x not in (n, m)] + [0])
+                        # behind it), outside these two (WALL-E's main menu: buttons 8 and 9 overlap
+                        # 3 and 4, and the dot moving between those changed them as much); and
+                        # little changed outside all the buttons
+                        rest = max([_count_beyond(mask, by[x]["rect"], (b["rect"], by[m]["rect"])) if
+                                    _overlaps(by[x]["rect"], b["rect"]) or _overlaps(by[x]["rect"], by[m]["rect"])
+                                    else cnt[x] for x in by if x not in (n, m)] + [0])
                         score = min(cnt[n], cnt[m]) - rest - outside
                         if weak:
                             # (looking for one page) or one of them, at half weight: a button can
@@ -1226,6 +1601,14 @@ class _Crawler:
         return out, a2, b2
 
     def _press(self, candidates, key, only=None):
+        """_press_as_is, over the video darkened once that's shown the highlight on this disc (a
+        press moves the highlight: not tried twice)."""
+        if self.v is not None and getattr(self, "dark_ok", None):
+            return self._darkly(self._press_as_is, candidates, key, only)
+        self._as_is()
+        return self._press_as_is(candidates, key, only)
+
+    def _press_as_is(self, candidates, key, only=None):
         """Press an arrow key; ([(score, state, was, now)] best first, frame before, frame after).
         only: (state, was) to score just that move. What counts is a step: pixels steady in a
         burst of frames before the press, steady in one after, and different between them (the
@@ -1376,33 +1759,131 @@ class _Crawler:
                    else "couldn't tell which menu VLC is on")
 
     def _read(self, st, f1, f2, was):
-        """OCR every button of a state, once, each from a frame where it isn't highlighted: in
-        the background, several at once, while VLC goes on to the next page (words() waits for
-        a page's when they're needed)."""
+        """Read a state's buttons and heading, once, in the background while VLC goes on to the
+        next page (words() waits for a page's when they're needed). From a frame without the
+        subpicture: no highlight over the words, and the page's picture too; the frame as it
+        is (and over black) only when its words turn out to be in the subpicture; and a plate's
+        words only for a button read poorly. (Each reading costs: The Iron Giant, every reading
+        every way, 0.8 minutes more over 13 pages, not a name changed.)"""
         if st in self.reading:
             return
+        dark = None
+        if f1.info.get("dark") or (self.v is not None and getattr(self.v, "is_dark", False)):
+            # (checked over the video darkened: that's the page's frame over black; its picture
+            # as it is to read)
+            if getattr(self.v, "is_dark", False):
+                dark = self.v.frame()
+            self._as_is()
+            f1, f2 = self.v.frame(), None
         f1.save(os.path.join(self.out_dir, "page_%s_%d_%d.png" % st))
-        rects = [b["rect"] for b in _state_buttons(self.pages, st)]
-        self.reading[st] = {b["n"]: self.pool.submit(button_words, f2 if b["n"] == was else f1, b["rect"], rects)
-                            for b in _state_buttons(self.pages, st)}
-        self.headings[st] = self.pool.submit(page_text, f1, [b["rect"] for b in _state_buttons(self.pages, st)])
+        btns = _state_buttons(self.pages, st)
+        rects = [b["rect"] for b in btns]
+        bare = None
+        t0 = time.time()
+        if self.v is not None:
+            bare = self.v.bare_frame()
+            if bare is not None and dark is None:   # (and the subpicture alone, over black, for later)
+                self.v.dark(True)
+                try:
+                    dark = self.v.frame()
+                finally:
+                    self.v.dark(False)
+        if bare is not None:
+            first = {b["n"]: self.pool.submit(button_words, bare, b["rect"], rects) for b in btns}
+            heading = self.pool.submit(page_text, bare, rects)
+            self.timed("page frames", t0)
+        else:                                   # (no subpicture to take away: as it is, the
+            first = {b["n"]: self.pool.submit(button_words, f1, b["rect"], rects)   # lit button
+                     if b["n"] != was or f2 is None             # from a frame it isn't lit in)
+                     else self.pool.submit(_better_reading, f2, f1, b["rect"], rects) for b in btns}
+            heading = self.pool.submit(page_text, f1, rects)
+        self.reading[st] = first
+        self.finished[st] = self.more.submit(self._finish, st, f1, f2, was, bare, dark, first, heading)
         self.log("  questioning page %s of title set %s (%d of %d)" % (st[1], st[0], len(self.reading),
                                                                          max(len(self.reading), self.expect)))
 
+    def _finish(self, st, f1, f2, was, bare, dark, first, heading):
+        """(In the background) A page's words, once its first readings are in: {"words": {button:
+        text}, "heading", "overlay": whether its words are in the subpicture}. Most of its buttons
+        read poorly without the subpicture: read as it is too, and its words are in the
+        subpicture if most of those that read as words then are gone without it (WALL-E's Bonus
+        Features: read a little worse, 175 to 169 by _score over its moving backdrop, isn't gone).
+        In the subpicture: read over black too, the better kept, and the page's picture as it is.
+        Then a plate's reading for each button still read poorly (_plate_or)."""
+        btns = _state_buttons(self.pages, st)
+        rects = [b["rect"] for b in btns]
+        words = {n: f.result() for n, f in first.items()}
+        head = heading.result()
+        overlay = False
+        if bare is not None:
+            if 2 * sum(1 for t in words.values() if _score(t) < WORDED) > len(words):
+                lit = {b["n"]: self.pool.submit(button_words, f1, b["rect"], rects) if b["n"] != was or f2 is None
+                       else self.pool.submit(_better_reading, f2, f1, b["rect"], rects) for b in btns}
+                lit = {n: f.result() for n, f in lit.items()}
+                worded = [n for n, t in lit.items() if _score(t) >= WORDED]
+                gone = [n for n in worded if _score(words.get(n, "")) <= 0]
+                overlay = bool(worded) and 2 * len(gone) > len(worded)
+                if overlay:
+                    self.log("  page %s of title set %s: its words are in the subpicture" % (st[1], st[0]))
+                    words = lit
+                    heads = [page_text(f1, rects), head]
+                    if dark is not None:        # (over black, no scenery behind them: the better)
+                        alone = {b["n"]: self.pool.submit(button_words, dark, b["rect"], rects) for b in btns}
+                        words = {n: max((t, alone[n].result()), key=_score) for n, t in lit.items()}
+                        heads.append(page_text(dark, rects))
+                    head = max(heads, key=_score)
+                else:
+                    # (a tie: without the subpicture, no highlight round the words: Spider-Man 2's
+                    # yellow pill read as brackets, "(Costume Design)")
+                    words = {n: max((t, lit.get(n, "")), key=_score) for n, t in words.items()}
+            if not overlay:
+                bare.save(os.path.join(self.out_dir, "page_%s_%d_%d.png" % st))
+        # (or a button too narrow to hold its name: a pointer beside it, its reading cut short,
+        # however wordy: Spider-Man's "STAN LEES MUTANTS:", 15 by _score)
+        weak = [i for i, b in enumerate(btns) if _score(words.get(b["n"], "")) < PLATE_WORDS
+                or b["rect"][2] - b["rect"][0] < TINY]
+        if weak:
+            got = plate_words(bare if bare is not None and not overlay else f1, rects, only=weak)
+            words = {n: _plate_or(t, got.get(next(i for i, b in enumerate(btns) if b["n"] == n)))
+                     for n, t in words.items()}
+        return {"words": words, "heading": head, "overlay": overlay}
+
     def word_now(self, st, n):
-        """A button's words if they've been read already, else "" (without waiting for them)."""
+        """A button's words if they've been read already, else "" (without waiting for them): as
+        finished, or its first reading meanwhile."""
+        if st in self.finished and self.finished[st].done():
+            return self.words(st).get(n, "")
         f = self.reading.get(st, {}).get(n)
         return f.result() if f is not None and f.done() else ""
 
+    def read(self, st):
+        """Whether a page's first readings are in (no waiting on OCR): enough to choose a route
+        by ("Languages", "Set Up"); the rest (_finish: plates, the frame as it is) need not hold
+        the tour up (The Iron Giant: 0.5 minutes over 13 pages, waiting on plates)."""
+        return st in self.reading and all(f.done() for f in self.reading[st].values())
+
+    def first_words(self, st):
+        """A page's buttons' first readings, waiting for them (not for the rest: read())."""
+        t0 = time.time()
+        got = {n: f.result() for n, f in self.reading.get(st, {}).items()}
+        self.timed("waiting for words", t0)
+        return got
+
     def words(self, st):
-        """A page's buttons' words, {button: text} ({} for a page not read), once they're read."""
-        if st not in self.texts and st in self.reading:
-            self.texts[st] = {n: f.result() for n, f in self.reading[st].items()}
+        """A page's buttons' words, {button: text} ({} for a page not read), once they're read
+        (_finish)."""
+        if st not in self.texts and st in self.finished:
+            t0 = time.time()
+            got = self.finished[st].result()
+            self.timed("waiting for words", t0)
+            self.texts[st], self.overlay[st] = got["words"], got["overlay"]
+            self.headings[st] = got["heading"]
         return self.texts.get(st, {})
 
     def heading(self, st):
         """A page's words outside its buttons (page_text), or "" for a page not read."""
-        return self.headings[st].result() if st in self.headings else ""
+        self.words(st)
+        return self.headings.get(st, "")
 
     def select(self, st, sel, n):
         """Move the highlight from button sel to n on a state."""
@@ -1491,14 +1972,20 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
     began, engine = {}, {}
     try:
         from . import dvdvm
-        began, engine, _ = dvdvm.explore(dvdvm.Engine(dvdvm.Disc(drive, structure)))
+        began, engine, reached = dvdvm.explore(dvdvm.Engine(dvdvm.Disc(drive, structure)))
+        near = _reachable(states, began, engine, reached)
+        if near is not None:
+            states = c.states = near
+            log("  looking only among the %d pages the disc's program reaches" % len(states))
     except Exception as e:                      # (a disc it can't read: VLC presses everything)
         log("  couldn't run the disc's program (%s): pressing instead" % e)
     c.menu_key = bool(began.get("menu_key"))
     if c.menu_key:
         log("  the disc plays its film by itself: pressing Menu to reach its menus")
     try:
+        log("  opening the disc in VLC")
         c.open()
+        log("  VLC is playing it (%.0f s): looking for the first menu" % (time.time() - t0))
         titles = c.v.titles()
         hint, start = tuple(began.get("goes_to") or ()), None
         if hint in states:
@@ -1513,6 +2000,17 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
                 start, sel = c.at_start(hint)
             except Lost:
                 log("  not on the page the disc's program starts on: looking around")
+        back = tuple(began.get("menu_goes_to") or ())
+        if start is None and not c.menu_key and back in states and c.v.state()["title"] != 0:
+            # VLC plays the film where the disc's program waits in a menu (WALL-E: libdvdnav's way
+            # past its protection skips the menu): VLC's DVD Menu, to the page Menu leads to
+            log("  VLC is playing the film instead: its DVD Menu")
+            c.to_menus()
+            c.film_first, c.menu_skip, c.start_select = True, False, began.get("menu_select")
+            try:
+                start, sel = c.at_start(back)
+            except Lost:
+                c.film_first = False
         if start is None:
             if c.menu_key:
                 c.menu_call()                   # (the disc ignored the first press: warnings)
@@ -1527,9 +2025,20 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
         if began.get("goes_to") and tuple(began["goes_to"]) != start:
             log("  the disc's program starts on %s, VLC on %s" % (began.get("goes_to"), start))
         # (a clip first or not: the same; so is the button highlighted on arrival, kept apart)
-        same = lambda a: {k: v for k, v in a.items() if k not in ("before", "select", "intro")}
+        same = lambda a: {k: v for k, v in a.items() if k not in ("before", "select", "intro", "after")}
         for (d, pgc, prog, n), answers in engine.items():
             s, a = (d, pgc, prog), answers[0]
+            if all("plays" in x for x in answers) and len({x["plays"] for x in answers}) > 1:
+                # a title or another by route (WALL-E's deleted scenes: their commentary versions
+                # with its switch on): the first route's, and the others as other versions
+                others, titles_seen = [], {a["plays"]}
+                for x in answers[1:]:
+                    if x["plays"] not in titles_seen:
+                        titles_seen.add(x["plays"])
+                        others.append({"title": x["plays"], "chapter": x["chapter"] or 1})
+                known[(s, n)] = {"plays": {"title": a["plays"], "chapter": a["chapter"] or 1}, "engine": True,
+                                 "others": others}
+                continue
             if any(same(x) != same(a) for x in answers) or "unsure" in a:
                 continue
             if "goes_to" in a and a["goes_to"] != s:
@@ -1540,6 +2049,8 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
                 c.intros[(s, n)] = max(x.get("intro") or 0 for x in answers)
             elif "plays" in a:
                 known[(s, n)] = {"plays": {"title": a["plays"], "chapter": a["chapter"] or 1}, "engine": True}
+                if a.get("after"):              # (and those that play on after it: a run of sneak peeks)
+                    known[(s, n)]["plays"]["after"] = a["after"]
             else:
                 known[(s, n)] = {"menus": True, "engine": True}
         answered = sum(1 for k in engine if (k[:3], k[3]) in known or (k[:3], k[3]) in c.learned)
@@ -1558,10 +2069,12 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
         # they're read (The Sorcerer's Apprentice's FastPlay chooser takes FastPlay after 12 s), and
         # unread, they skip nothing. A page that waits for the viewer waits for them (Muppets from
         # Space's "Talent Files": its pages of cast bios, passed by)
-        words = [c.words(x).get(n, "") if _waits_for_viewer(pages, x) else c.word_now(x, n)
+        words = [c.first_words(x).get(n, "") if _waits_for_viewer(pages, x) else c.word_now(x, n)
                  for x, n in routes[s]]
         words = [w for (x, _), w in zip(routes[s], words) if not (x == start and _main_menu_text(w))]
-        return next(("via \"%s\"" % w for w in words if _skip_text(w)), None)
+        # (not pages of ads: reading them is quick, and their pictures name the ads, posters often:
+        # Spider-Man 2's previews, Hitch among them. Pressing their buttons is another matter)
+        return next(("via \"%s\"" % w for w in words if _skip_text(w) and not _ad_text(w)), None)
 
     def plays_beyond(s):
         """Whether anything plays from s, or from a page past it (not back the way it came): a
@@ -1583,7 +2096,7 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
 
     def ready(s):
         """Whether the words of the buttons on the way to s have been read (no waiting on OCR)."""
-        return all(x in c.reading and c.reading[x][n].done() for x, n in routes[s] if n in c.reading.get(x, {}))
+        return all(c.read(x) for x, n in routes[s] if n in c.reading.get(x, {}))
 
     def tour(st, sel):
         """One session, page to page, reading each page there's a way to (and that matters).
@@ -1611,18 +2124,14 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
                             "program said): passed by" % (len(todo), "" if len(todo) == 1 else "s"))
                         continue
                     if not reach:               # a dead end: start over
-                        c.close()
-                        c.open()
-                        st, sel = c.at_start(start)
+                        st, sel = c.restart(start)
                         continue
                     goal = min(reach, key=lambda s: len(here[s]))
                     tries[goal] = tries.get(goal, 0) + 1
                     st, sel = c.follow(st, sel, here[goal])
                 except Lost as e:
                     log("  on the way to %s: %s, starting over" % (goal, e))
-                    c.close()
-                    c.open()
-                    st, sel = c.at_start(start)
+                    st, sel = c.restart(start, where=goal)
         finally:
             c.close()
 
@@ -1644,6 +2153,14 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
         session = None
         routes = _routes(pages, start, c.learned, known)
         log("read %d of %d pages (%.1f minutes)" % (len(c.reading), len(routes), (time.time() - t0) / 60))
+        sp = c.spent
+        log("  the time: highlight checks %.0f s (%d round trips%s; of it darkening %.0f s), pages' frames %.0f s, "
+            "waiting for words %.0f s; the rest, moving page to page and VLC opening %.0f s" % (
+                sp.get("highlight checks", 0), sp.get("round trips", 0),
+                ", darkened" if c.dark_ok else ", as it is" if c.dark_ok is False else "",
+                sp.get("darkening", 0), sp.get("page frames", 0),
+                sp.get("waiting for words", 0), time.time() - t0 - sp.get("highlight checks", 0)
+                - sp.get("page frames", 0) - sp.get("waiting for words", 0)))
         if sum(c.placed[:2]):
             log("  the disc's program placed the highlight right %d of %d times%s" % (
                 c.placed[0], sum(c.placed[:2]), " (and %d moved by our keys)" % c.placed[2] if c.placed[2] else ""))
@@ -1740,6 +2257,8 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
                     e["plays"] = dict(k["plays"], seconds=length.get(k["plays"]["title"]),
                                       **({"assumed": k["assumed"]} if k.get("assumed") else
                                          {"engine": True} if k.get("engine") else {"known": True}))
+                    if k.get("others"):
+                        e["plays"]["others"] = [dict(o, seconds=length.get(o["title"])) for o in k["others"]]
             elif (s, b["n"]) in pressed:
                 r = pressed[(s, b["n"])]
                 e.update(r)
@@ -1755,6 +2274,7 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
             page["buttons"].append(e)
         result.append(page)
     c.pool.shutdown(wait=False)
+    c.more.shutdown(wait=False)
     out = {"drive": drive, "titles": titles, "start": list(start), "minutes": round((time.time() - t0) / 60, 1),
            "pages": result, "chapters": {t["title"]: t["chapters"] for t in structure.get("titles", [])}}
     out["found"] = menu_titles(out)
@@ -1774,13 +2294,50 @@ SMALL_WORDS = {"a", "an", "and", "as", "at", "by", "for", "from", "in", "of", "o
 LISTED_RE = re.compile(r"[\s(\[]*\(?(\d{1,2}):(\d\d)\)?[\s)\]]*$")      # "(10:35)" after an extra's name
 
 
+ICON_DIGIT_RE = re.compile(r"^\W*(\d)\s+(?=\D)")
+
+
+def _icon_digits(texts):
+    """The digits OCR reads a menu's bullet icons as: a lone digit before a name, on three buttons
+    or more, the same digits again and again rather than counting up (The Iron Giant's: 3 and 6,
+    "3 Hogarth Hughes", "6 The Deer"). A name of its own with a number stays ("3 Blind Mice")."""
+    lead = [m.group(1) for m in map(ICON_DIGIT_RE.match, texts) if m]
+    if len(lead) < 3:
+        return set()
+    counts = {d: lead.count(d) for d in set(lead)}
+    return {d for d, n in counts.items() if n >= 2} if sum(n for n in counts.values() if n >= 2) * 2 > len(lead) else set()
+
+
+def _unicon(text, icons):
+    m = ICON_DIGIT_RE.match(text)
+    return text[m.end():] if m and m.group(1) in icons else text
+
+
 def nice_name(text):
     """A button's words as a name: menus shout in capitals (or whisper in lower case), names
     don't; and OCR's specks from the lettering's backdrop (an underscore, a lone bracket) go."""
     text = re.sub(r"[_|]+", " ", text)
+    # a list's number before the name ("4. J. Jonah Jameson", "2) Leaving..."); not a number
+    # that's part of it ("3 Blind Mice", "Stuart Little 2")
+    text = re.sub(r"^\s*\d{1,2}[.)]\s+", "", text)
     if text.count("(") != text.count(")"):
         text = text.replace("(", " ").replace(")", " ")
     text = re.sub(r"\s+", " ", text).strip(" ,.:;-'\"")
+    text = re.sub(r"^\d{1,2}[.)]\s+", "", text)    # (once more, past a speck before it)
+    # symbols at either end ("& Deleted Scenes", "...My Prince &", "Ghost Rider™."): not a "!" or
+    # "?" ending it ("Dumped!"), nor a bracket closing one in it ("Close Encounters (of the
+    # Third Kind)"); and a name all in brackets, out of them ("(Costume Design)")
+    while True:
+        was = text
+        if text.startswith("(") and text.endswith(")") and text.count("(") == 1:
+            text = text[1:-1]
+        text = re.sub(r"^[^\w(]+|^\((?!.*\))", "", text)
+        text = re.sub(r"[^\w!?)]+$", "", text)
+        if text.endswith(")") and "(" not in text:
+            text = text[:-1]
+        text = text.strip()
+        if text == was:
+            break
     if not (text.isupper() or text.islower()):
         return text
     words = text.lower().split(" ")
@@ -1793,6 +2350,7 @@ HEADING_KINDS = (("Music", r"\bmusic\s*videos?\b"), ("DeletedScene", r"\bdeleted
                  ("Featurette", r"\bfeaturettes?\b"), ("Interview", r"\binterviews?\b"),
                  ("Trailer", r"\btrailers?\b|\bspots\b"), ("Short", r"\bshort\s*films?\b|\bshorts\b"))
 HUB_RE = re.compile(r"\b(bonus|special)\s*(features?|materials?)\b|\bextras\b", re.I)
+MAIN_MENU_RE = re.compile(r"\bmain\s*menu\b", re.I)
 
 
 def heading_kind(heading):
@@ -1825,34 +2383,99 @@ def menu_titles(out):
         # the buttons pressed on the way, and this page's heading (not those of the pages passed
         # through: a main menu's words, its "Sneak Peeks" label among them, say nothing of its
         # Bonus Features page; The Sorcerer's Apprentice's labels sit beside its buttons)
-        via = " ".join([words.get((x, r["button"]), "") for x, r in zip(on_way, p["route"])] +
-                       [p.get("heading") or ""])
+        way = [words.get((x, r["button"]), "") for x, r in zip(on_way, p["route"])]
+        via = " ".join(way + [p.get("heading") or ""])
+        # what the page holds: its heading says, else the nearest button on the way that does (The
+        # Iron Giant's deleted scenes: no heading to read, a "Deleted Scenes" button, then "Next");
+        # up to a button back to a hub, which says nothing of the kinds it holds (WALL-E's Bonus
+        # Features page, reached back from its Deleted Scenes page: not deleted scenes)
+        kind = heading_kind(p.get("heading"))
+        for w in reversed(way):
+            if kind or HUB_RE.search(w) or MAIN_MENU_RE.search(w):
+                break
+            kind = heading_kind(w)
+        singles = {b["plays"]["title"] for b in p["buttons"] if b.get("plays")}
         for b in p["buttons"]:
             if b.get("plays"):
                 reel = bool(re.search(r"\btrailer", b["text"], re.I)) and \
                     chapters.get(b["plays"]["title"], 0) >= AD_REEL_CHAPTERS
-                plays.append(dict(b["plays"], text=b["text"], promo=_ad_text(via) or _ad_text(b["text"]) or reel,
-                                  kind=heading_kind(p.get("heading"))))
+                run = b["plays"].get("after") or []
+                # a run of titles from a page of buttons each playing its own: the page's Play All,
+                # whatever its lettering reads as (Enchanted's sneak peeks: "PLAY aul", "ore PLAY";
+                # its reels repeat the sneak peeks, copies the scan sets aside). Not a run from a
+                # page of other things (The Sorcerer's Apprentice's Sneak Peeks, by Play Movie)
+                whole = bool(run) and len(singles - {b["plays"]["title"]} - set(run)) >= 2
+                promo = _ad_text(via) or _ad_text(b["text"]) or reel
+                plays.append(dict(b["plays"], text=b["text"], promo=promo, kind=kind, via=via, play_all=whole))
+                # an ad button's run of titles: ads, all of them (The Sorcerer's Apprentice's Sneak
+                # Peeks: 66, then 70, 74, 78, 84, 88, 92, 94). Not another button's: FastPlay's sneak
+                # peeks and film are what their own buttons say; a Play All's, its own titles
+                if promo or whole:
+                    for t in run:
+                        plays.append({"title": t, "chapter": 1, "seconds": None, "text": b["text"], "promo": promo,
+                                      "kind": kind, "via": via, "after": True, "play_all": whole})
+                for o in b["plays"].get("others") or []:
+                    plays.append(dict(o, text=b["text"], promo=promo, kind=kind, via=via, other=True))
     if not plays:
         return {"feature": None, "extras": [], "promos": []}
+    icons = _icon_digits([x["text"] for x in plays if not x.get("after") and not x.get("other")])
     by = {}
     for x in plays:
         by.setdefault(x["title"], []).append(x)
     feature = max(by, key=lambda t: (len({x["chapter"] for x in by[t]}), by[t][0]["seconds"] or 0))
-    extras, promos = [], []
+    extras, promos, promo_names, play_alls = [], [], {}, []
     for t, xs in sorted(by.items()):
         if t == feature:
             continue
+        if all(x.get("play_all") for x in xs):  # only ever in a page's Play All: the scan says what it is
+            play_alls.append(t)
+            continue
         if any(x["promo"] for x in xs):
             promos.append(t)
+            promo_names[t] = promo_name(xs)
             continue
         text = max((x["text"] for x in xs), key=_wordy)
+        if PLAY_ALL_RE.search(text):            # a page's "Play All": its titles, one after another
+            play_alls.append(t)
+            continue
         m = LISTED_RE.search(text)
         listed = int(m.group(1)) * 60 + int(m.group(2)) if m else None
-        name = nice_name(LISTED_RE.sub("", text)) if _wordy(text) > 0 else ""
+        name = nice_name(_unicon(LISTED_RE.sub("", text), icons)) if _wordy(text) > 0 else ""
         kind = next((x["kind"] for x in xs if x.get("kind")), None)
-        extras.append({"title": t, "name": name, "seconds": xs[0]["seconds"], "listed": listed, "kind": kind})
-    return {"feature": feature, "extras": extras, "promos": promos}
+        other = all(x.get("other") for x in xs)     # (only by another route: a commentary version?)
+        if other and name:
+            name += " (another version)"
+        extras.append(dict({"title": t, "name": name, "seconds": xs[0]["seconds"], "listed": listed, "kind": kind},
+                           **({"other": True} if other else {})))
+    # the feature's own button, when it says more than Play ("Signature Edition": another cut of
+    # the film may be on the disc, and is named the same way)
+    # (from its start: a scene button's words name the scene)
+    ftext = max([x["text"] for x in by[feature] if x.get("chapter") in (1, None)] or [""], key=_wordy)
+    feature_name = nice_name(ftext) if _wordy(ftext) > 0 and not _play_text(ftext) and \
+        not PLAY_ALL_RE.search(ftext) else ""
+    return {"feature": feature, "feature_name": feature_name, "extras": extras, "promos": promos,
+            "promo_names": promo_names, "play_alls": play_alls}
+
+
+# what an ad is called, in words that say it's an ad (core.AD_RE knows them: a TheDiscDB name
+# like "Previews - Hitch" keeps it an ad for everyone's scans, not the film's own trailer)
+AD_NAMES = (("Sneak Peeks", r"\bsneak|\bpeeks?\b"), ("Coming Soon", r"\bcoming\s+(soon|attractions?)\b"),
+            ("Also Available", r"\bavailable\b"), ("Commercials", r"\bcommercials?\b"),
+            ("Advertisements", r"\badvert"), ("Previews", r"\bpreviews?\b|\btrailers?\b"))
+
+
+def promo_name(xs):
+    """A name for an ad from what the menus said (xs: its plays, each with the words that made it
+    an ad, "via", and its button's): the ad words first ("Previews"), then its button's own words
+    if they read as a name ("Previews - Hitch"; a poster button says nothing: "Previews")."""
+    said = " ".join([x.get("via") or "" for x in xs] + [x["text"] for x in xs])
+    lead = next((name for name, rx in AD_NAMES if re.search(rx, said, re.I)), "Previews")
+    text = max((x["text"] for x in xs), key=_wordy)
+    # its own words, unless they're only the ad words ("PREVIEWS"): an ad can say what it is
+    # ("Spider-Man: Friend or Foe Video Game Preview", Spider-Man 3)
+    rest = re.sub(r"\b(previews?|sneak|peeks?|coming|soon|trailers?|ads?|advertisements?)\b", " ", text, flags=re.I)
+    own = nice_name(text) if _wordy(text) > 0 and _wordy(rest) > 0 else ""
+    return "%s - %s" % (lead, own) if own else lead
 
 
 def readable(name, is_word):
@@ -1862,7 +2485,113 @@ def readable(name, is_word):
     words = re.findall(r"[^\W_]+", name)
     real = [w for w in words if not w.isdigit() and w.lower() not in SMALL_WORDS and is_word(w)]
     good = len(real) + sum(1 for w in words if w.isdigit() or w.lower() in SMALL_WORDS)
-    return any(len(w) >= 3 for w in real) and 3 * good >= 2 * len(words)
+    # and its longer words half real: scraps ("Rei Mec ai ay") don't carry a name on their own
+    # ("Rei Mec ai ay cummantie scien", Enchanted's OCR of an animated button)
+    longer = [w for w in words if len(w) >= 4 and not w.isdigit()]
+    return any(len(w) >= 3 for w in real) and 3 * good >= 2 * len(words) and \
+        2 * sum(1 for w in longer if w in real) >= len(longer)
+
+
+def unmarked(name, is_word):
+    """A name without the trademark signs OCR reads as a letter: "Spider-Manw" (™ read as w),
+    "Ghost Riderm" (® as m). A word that isn't one with its last w or m, and is without it."""
+    def fix(m):
+        w = m.group(0)
+        return w[:-1] if len(w) >= 4 and not is_word(w) and is_word(w[:-1]) else w
+    return re.sub(r"[A-Za-z]+[wmWM]\b", fix, name or "")
+
+
+def _letters_off(a, b, most):
+    """The edits (a letter changed, added or dropped) from a to b, or most + 1 if more."""
+    if abs(len(a) - len(b)) > most:
+        return most + 1
+    row = list(range(len(b) + 1))
+    for i, x in enumerate(a, 1):
+        prev, row[0] = row[0], i
+        for j, y in enumerate(b, 1):
+            prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (x != y))
+        if min(row) > most:
+            return most + 1
+    return row[-1]
+
+
+def _close(a, b, long=7):
+    """A misreading of b: a letter off; two when both are long words (long letters or more:
+    "ARIELS" isn't Daniels, "scien" isn't Scriven)."""
+    most = 2 if min(len(a), len(b)) >= long else 1
+    return _letters_off(a.lower(), b.lower(), most) <= most
+
+
+def _like(word, model):
+    """word in model's letter case: CAPITALS, Capitalised, or as the model has it."""
+    return model.upper() if word.isupper() and len(word) > 1 else model
+
+
+def credit_fix(text, people, is_word):
+    """A reading with this film's people's names put right where OCR missed a letter or two
+    ("Hagart Hughs": "Hogarth Hughes", The Iron Giant's): a run of words close to one name of
+    the film's credits, word by word, one of them no word at all; else a word that's no word, a
+    letter or two from exactly one word of their names. Only the film's own names, a few hundred:
+    a near miss there isn't chance (a whole dictionary's is: "Storyboards" read as "Storyboard")."""
+    names = []
+    for n in people:
+        for part in re.split(r"\s*/\s*", re.sub(r"\([^)]*\)", " ", n or "")):
+            ws = re.findall(r"[A-Za-z][A-Za-z'-]*", part)
+            if ws and ws not in names:
+                names.append(ws)
+    words = sorted({w for ws in names for w in ws if len(w) >= 3}, key=str.lower)
+    known = {w.lower() for w in words}
+    toks = list(re.finditer(r"[A-Za-z][A-Za-z'-]*", text))
+    unread = lambda w: w.lower() not in known and w.lower() not in EXTRAS_VOCAB and not (is_word and is_word(w))
+    out, i, fixes = [], 0, []
+    while i < len(toks):
+        done = False
+        for ws in sorted({tuple(n) for n in names if len(n) >= 2}, key=len, reverse=True):
+            run = toks[i:i + len(ws)]
+            # (a whole name, word for word, is surer than a word: two letters off from six)
+            fits = lambda n: all(t.group(0).lower() == w.lower() or _close(t.group(0), w, 6) for t, w in zip(run, n))
+            if len(run) == len(ws) and fits(ws) and any(unread(t.group(0)) for t in run):
+                same = [n for n in names if len(n) == len(ws) and fits(n)]
+                if len({tuple(x.lower() for x in n) for n in same}) == 1:
+                    fixes.append((run[0].start(), run[-1].end(), " ".join(_like(t.group(0), w) for t, w in zip(run, ws))))
+                    i += len(ws)
+                    done = True
+                    break
+        if done:
+            continue
+        w = toks[i].group(0)
+        if len(w) >= 4 and unread(w):
+            near = {x.lower(): x for x in words if _close(w, x)}
+            # (a short word, only beside another of the same name: "Jonan" by "Jameson" is Jonah,
+            # of J. Jonah Jameson; Spider-Man's "& Marve", by no one's name, isn't Marie)
+            by = {toks[j].group(0).lower() for j in (i - 1, i + 1) if 0 <= j < len(toks)}
+            if len(near) == 1 and (len(w) >= 6 or any(
+                    next(iter(near)) in {x.lower() for x in n} and by & {x.lower() for x in n} for n in names)):
+                fixes.append((toks[i].start(), toks[i].end(), _like(w, next(iter(near.values())))))
+        i += 1
+    for a, b, new in reversed(fixes):
+        text = text[:a] + new + text[b:]
+    return text
+
+
+def correct_names(found, people, is_word, title_fix=None):
+    """found (menu_titles()) with its names put right where they can be: an extra's against the
+    film's people (credit_fix); an ad's against the films it may advertise (title_fix: a known
+    title, closely, "Ghost Riderm." for Ghost Rider). What was read is kept ("read"), to show."""
+    if not found:
+        return found
+    extras = []
+    for e in found.get("extras") or []:
+        new = credit_fix(e["name"], people, is_word) if e.get("name") and people else e.get("name")
+        extras.append(dict(e, name=new, read=e["name"]) if new != e.get("name") else e)
+    promo_names, promo_read = {}, dict(found.get("promo_read") or {})
+    for t, n in (found.get("promo_names") or {}).items():
+        lead, _, own = n.partition(" - ")
+        fixed = title_fix(own) if own and title_fix else own
+        promo_names[t] = "%s - %s" % (lead, fixed) if fixed else n
+        if fixed != own:
+            promo_read[t] = own
+    return dict(found, extras=extras, promo_names=promo_names, promo_read=promo_read)
 
 
 def plain_names(found, is_word):
@@ -1870,9 +2599,17 @@ def plain_names(found, is_word):
     name. As found when there's no dictionary (is_word None)."""
     if not found or not is_word:
         return found
-    extras = [dict(e, name=e["name"] if e["name"] and readable(e["name"], is_word) else "")
-              for e in found.get("extras") or []]
-    return dict(found, extras=extras)
+    known = is_word
+    is_word = lambda w: w.lower() in EXTRAS_VOCAB or known(w)      # (and extras' own words)
+    extras = [dict(e, name=unmarked(e["name"], is_word)) for e in found.get("extras") or []]
+    extras = [dict(e, name=e["name"] if e["name"] and readable(e["name"], is_word) else "") for e in extras]
+    # an ad's own words, too: unreadable, it's just "Previews" (the ad words, always readable)
+    promo_names = {t: unmarked(n, is_word) for t, n in (found.get("promo_names") or {}).items()}
+    promo_names = {t: n if " - " not in n or readable(n.split(" - ", 1)[1], is_word) else n.split(" - ", 1)[0]
+                   for t, n in promo_names.items()}
+    fname = unmarked(found.get("feature_name") or "", is_word)
+    return dict(found, extras=extras, promo_names=promo_names,
+                feature_name=fname if fname and readable(fname, is_word) else "")
 
 
 def title_pictures(out, out_dir):
@@ -1889,8 +2626,15 @@ def title_pictures(out, out_dir):
             if not t:
                 continue
             score = _score(b.get("text") or "")
+            if _ad_text(b.get("text")):         # (a run of ads: the button that starts it, for each)
+                for t2 in b["plays"].get("after") or []:
+                    if t2 not in best:
+                        best[t2] = ((0, True, False, -b["n"]), {"image": os.path.join(out_dir, p["image"]),
+                                                                "rect": list(b["rect"]), "text": b.get("text") or ""})
             # (a scrap read off a logo counts for nothing: then the first button, Play before FastPlay)
-            rank = (score if score >= 6 else 0, b["plays"].get("chapter") == 1, -b["n"])
+            # (and one that says it's an ad over one saying nothing: The Sorcerer's Apprentice's title
+            # 66, FastPlay's first sneak peek too, but "Peeks" names it, "Ploy" doesn't)
+            rank = (score if score >= 6 else 0, _ad_text(b.get("text")), b["plays"].get("chapter") == 1, -b["n"])
             if t not in best or rank > best[t][0]:
                 best[t] = (rank, {"image": os.path.join(out_dir, p["image"]), "rect": list(b["rect"]),
                                   "text": b.get("text") or ""})
@@ -1910,25 +2654,55 @@ def detected_labels(found, titles, keep=()):
     (your labels, TheDiscDB's names) are left as they are, and so are titles the scan sets aside
     as copies or play-alls; one it sets aside as too short to matter ("junk") is added when the
     menus offer it (Muppets from Space's outtakes: 10-44 seconds each), but not made a Promo.
+    Of two titles the scan found the same video, the one the menus play is the one labelled (its
+    twin, then, the copy: Spider-Man 2's previews page plays title 17, the scan kept 10).
     {} when the menus said nothing (then nothing changes)."""
     if not found or not (found.get("feature") or found.get("extras")):
         return {}
     named = {"Title %d" % e["title"]: e["name"] for e in found.get("extras") or []}
     kinds = {"Title %d" % e["title"]: e.get("kind") for e in found.get("extras") or []}
+    others = {"Title %d" % e["title"] for e in found.get("extras") or [] if e.get("other")}
+    # (a name put right: as read, to show: correct_names)
+    read_as = {"Title %d" % e["title"]: e["read"] for e in found.get("extras") or [] if e.get("read")}
+    read_as.update({"Title %s" % t: r for t, r in (found.get("promo_read") or {}).items()})
+    said = lambda tid, note: note + (" (read as \"%s\")" % read_as[tid] if tid in read_as else "")
     feature = "Title %d" % found["feature"] if found.get("feature") else None
+    promos = {"Title %d" % n for n in found.get("promos") or []}
+    promo_names = {"Title %d" % int(n): name for n, name in (found.get("promo_names") or {}).items()}
+    played = lambda tid: tid in named or tid == feature or tid in promos
+    # the feature named by its button only beside another cut ("Signature Edition")
+    cuts = any(t["id"] in named and t.get("role") in ("feature", "version") for t in titles)
+    # a page's Play All: the scan says what it plays (left unlabelled, never an ad)
+    play_alls = {"Title %d" % n for n in found.get("play_alls") or []}
+    # copies the menus play, of titles they don't: labelled in their twin's place
+    twins = {}
+    for t in titles:
+        m = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t.get("role") == "duplicate" else None
+        if m and played(t["id"]) and not played(m.group(1)):
+            twins[t["id"]] = m.group(1)
     out = {}
     for t in titles:
         tid = t["id"]
-        offered = tid in named or tid == feature
-        if tid in keep or t.get("role") in COPY_ROLES or (t.get("role") in HIDDEN_ROLES and not offered):
+        offered = played(tid)
+        if tid in keep or tid in play_alls or tid in twins.values() or (t.get("role") in COPY_ROLES and tid not in twins) or \
+                (t.get("role") in HIDDEN_ROLES and not offered):
             continue
         if tid == feature:
-            out[tid] = {"type": "MainMovie", "title": None, "note": "the menus: the feature"}
+            out[tid] = {"type": "MainMovie", "title": (cuts and found.get("feature_name")) or None,
+                        "note": "the menus: the feature"}
+        elif tid in named and t.get("role") in ("feature", "version"):
+            # another cut of the film, offered beside it (The Iron Giant's "Signature Edition" and
+            # "Original Edition"): a main movie too, not an extra
+            out[tid] = {"type": "MainMovie", "title": named[tid] or None, "note": "the menus: another cut of the film"}
         elif tid in named:
             # its page's heading says ("MUSIC VIDEOS"); or the film's own trailer: TheDiscDB's
             # Trailer (ads were promos already, by AD_RE)
             kind = kinds.get(tid) or ("Trailer" if re.search(r"\btrailer\b", named[tid] or "", re.I) else "Extra")
-            out[tid] = {"type": kind, "title": named[tid] or None, "note": "the menus: an extra"}
+            out[tid] = {"type": kind, "title": named[tid] or None,
+                        "note": said(tid, "the menus: another version of an extra (a setting picks it): worth a look"
+                                     if tid in others else "the menus: an extra")}
+        elif tid in promos:
+            out[tid] = {"type": "Promo", "title": promo_names.get(tid), "note": said(tid, "the menus: an ad")}
         else:
             out[tid] = {"type": "Promo", "title": None, "note": "the menus: nothing plays it"}
     return out
@@ -1948,6 +2722,9 @@ def found_text(found):
         lines.append("Extra:    title %d  %s%s%s" % (e["title"], e["name"] or "(no name read)", kind, check))
     if found["promos"]:
         lines.append("Trailers: title%s %s" % ("s" if len(found["promos"]) > 1 else "", ", ".join(map(str, found["promos"]))))
+    if found.get("play_alls"):
+        lines.append("Play all: title%s %s" % ("s" if len(found["play_alls"]) > 1 else "",
+                                               ", ".join(map(str, found["play_alls"]))))
     return "\n".join(lines)
 
 
@@ -1979,6 +2756,10 @@ def crawl_text(out):
                     else "" if pl.get("known") else ", pressed")
                 if b.get("before"):
                     does += ", after title%s %s" % ("s" if len(b["before"]) > 1 else "", ", ".join(map(str, b["before"])))
+                for o in pl.get("others") or []:
+                    does += "; or title %d (%s), by another route" % (o["title"], _clock(o.get("seconds")))
+                if pl.get("after"):
+                    does += ", then title%s %s" % ("s" if len(pl["after"]) > 1 else "", ", ".join(map(str, pl["after"])))
             elif b.get("error"):
                 does = "?? " + b["error"]
             elif b.get("passed_by"):

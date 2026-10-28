@@ -1029,6 +1029,33 @@ def interactual_name(root):
     return meta_title(m.group(1)) or None if m else None
 
 
+DVD_FORMAT_WORDS = re.compile(r"\b(?:pan[\s&-]*(?:and[\s-]*)?scan|wide[\s-]*screen|full[\s-]*screen|"
+                              r"letter[\s-]*box(?:ed)?)\b", re.I)
+
+
+def dvd_text_name(vts_dir):
+    """The disc's name from the DVD text data in VIDEO_TS.IFO (TXTDT, which a DVD-Video's header
+    may point to: Spider-Man 2's says "Spider-Man 2 (Special Edition)", under a DVD_VIDEO volume
+    label), or None. Its items are separated by tabs after a 12-byte header and a language table."""
+    path = find_child(vts_dir, "VIDEO_TS.IFO")
+    try:
+        vmg = read_file(path) if path else b""
+    except OSError:
+        return None
+    if vmg[:12] != b"DVDVIDEO-VMG" or len(vmg) < 0xD8:
+        return None
+    sector = u32(vmg, 0xD4)
+    if not sector or sector * 2048 + 16 > len(vmg):
+        return None
+    block = vmg[sector * 2048 + 12: sector * 2048 + 4096]
+    for m in re.finditer(rb"[A-Za-z0-9][\x20-\x7e]{3,}", block):
+        # (the picture format isn't the name: Muppets from Space's says "MUPPETS PAN-SCAN")
+        name = meta_title(DVD_FORMAT_WORDS.sub(" ", m.group().decode("ascii")).strip())
+        if len(re.findall(r"[A-Za-z]", name)) >= 3:
+            return name
+    return None
+
+
 def parse_bluray(bdmv):
     titles = []
     pl_dir = find_child(bdmv, "PLAYLIST")
@@ -1661,6 +1688,13 @@ NOISE = {"DVD", "DVD9", "DVD5", "BD", "BLURAY", "BLU", "RAY", "UHD", "4K", "HD",
          "FILM", "TV", "VOL", "VOLUME", "PART", "DIGITAL", "COPY", "MAIN"}
 
 
+EDITION_RE = re.compile(
+    r"\b(?:\d+(?:ST|ND|RD|TH)\s+)?(?:SIGNATURE|ANNIVERSARY|ANNIV|ULTIMATE|DIAMOND|PLATINUM|GOLD|DEFINITIVE|"
+    r"DELUXE|LIMITED|COMMEMORATIVE|REMASTERED|RESTORED|DIRECTORS?|DIR|EXTENDED|UNRATED|UNCUT|THEATRICAL|"
+    r"FINAL|CRITERION|STEELBOOK|COLLECTORS?|SPECIAL|FAMILY|HOLIDAY|MILLENNIUM|CLASSIC)"
+    r"(?:\s+(?:ANNIVERSARY|ANNIV|COLLECTORS?|SPECIAL|DELUXE|LIMITED))*\s+(?:EDITION|ED|CUT|VERSION)\b")
+
+
 # Labels the authoring tool or the OS fills in when nobody named the disc: no title in them,
 # so nothing to search for (LOGICAL_VOLUME_ID searched as "Logical Id" finds junk).
 PLACEHOLDER_LABEL = re.compile(
@@ -1689,6 +1723,9 @@ def parse_label(label):
     if m and s[:m.start()].strip():
         info["bonus"] = True
         s = s[:m.start()] + " " + s[m.end():]
+    # IRON_GIANT_SIGNATURE_EDITION: an edition's name ("25th Anniversary", "Director's") goes with
+    # the word EDITION / CUT / VERSION after it (only there: "Ultimate", "Diamond" can be a title's)
+    s = EDITION_RE.sub(" ", s)
     # SEASON_TWO, SERIES_THREE: spelled-out numbers after a season word
     s = re.sub(r"\b(SEASON|SERIES)\s+(%s)\b" % "|".join(NUMBER_WORDS),
                lambda m: "%s %d" % (m.group(1), NUMBER_WORDS[m.group(2)]), s)
@@ -1929,6 +1966,14 @@ def update_data(args, which=("discdb", "imdb"), force=False, log=print):
         if con is not None:
             con.close()
         done["imdb"] = imdb_index_info(args.imdb_dir)
+    if "credits" in which:
+        # (refreshed with the IMDb index, a month old at most: 1.1 GB each time)
+        info = imdb_credits_info(args.imdb_dir)
+        index = imdb_index_info(args.imdb_dir)
+        stale = not info or not info["current"] or (index and index["built"] > info["built"])
+        if stale or force:
+            imdb_credits_build(args.imdb_dir, log=log)
+        done["credits"] = imdb_credits_info(args.imdb_dir)
     return done
 
 
@@ -2053,7 +2098,7 @@ def imdb_open(imdb_dir, allow_download=True, force=False, log=print):
 
 
 # a word is a word when a title this well known has it (OCR's misreadings mostly aren't)
-WORD_VOTES = 1000
+WORD_VOTES = 100          # words in titles with this many votes count as words (1000 left out "costume", "blooper")
 
 
 def title_words(con):
@@ -2075,6 +2120,175 @@ def title_words(con):
     except Exception:
         return None
     return is_word
+
+
+# The IMDb credits index (Settings: IMDb credits, off by default): who's in the well-known titles,
+# and as whom; to search a film by the names in its credits (frames of a disc's end credits read
+# by OCR), and words for reading menus. title.principals and name.basics (1.1 GB together) are
+# read as they download, never kept: only titles with CREDIT_VOTES votes or more, and these jobs
+IMDB_CREDITS_DB = "imdb_credits.sqlite"
+IMDB_CREDIT_FILES = ("title.principals.tsv.gz", "name.basics.tsv.gz")
+IMDB_CREDIT_JOBS = ("actor", "actress", "self", "director", "writer", "composer")
+IMDB_CREDITS_VERSION = 1
+CREDIT_VOTES = WORD_VOTES
+
+
+def _remote_tsv(name):
+    """An IMDb dataset's rows (lists of fields) as it downloads, decompressed on the way and not
+    kept; the header row skipped. Progress through the `progress` hook."""
+    import gzip
+    import io
+    req = urllib.request.Request(IMDB_BASE + name, headers={"User-Agent": USER_AGENT})
+    resp = urllib.request.urlopen(req, timeout=60)
+    total, seen = _int(resp.headers.get("Content-Length")), [0]
+    label = "IMDb " + name.split(".")[1]
+
+    class Counted(io.RawIOBase):
+        def readable(self):
+            return True
+
+        def readinto(self, b):
+            data = resp.read(len(b))
+            b[:len(data)] = data
+            seen[0] += len(data)
+            if progress:
+                progress(label, seen[0], total)
+            return len(data)
+    try:
+        with io.TextIOWrapper(gzip.GzipFile(fileobj=io.BufferedReader(Counted(), 1 << 20)),
+                              encoding="utf-8", newline="") as fh:
+            fh.readline()
+            for line in fh:
+                yield line.rstrip("\r\n").split("\t")
+    finally:
+        resp.close()
+
+
+def imdb_credits_build(imdb_dir, log=print):
+    """Build the IMDb credits index (IMDB_CREDITS_DB) from title.principals and name.basics, read
+    as they download: the people of the titles the IMDb index has CREDIT_VOTES votes for, with
+    full-text search on their names and the characters they play. Needs the IMDb index."""
+    import sqlite3
+    idx = imdb_open(imdb_dir, allow_download=False, log=log)
+    if idx is None:
+        raise RuntimeError("the IMDb index is needed first")
+    keep = {r[0] for r in idx.execute("SELECT t.id FROM titles t JOIN ratings r ON r.id = t.id "
+                                      "WHERE r.votes >= ?", (CREDIT_VOTES,))}
+    idx.close()
+    path = os.path.join(imdb_dir, IMDB_CREDITS_DB)
+    tmp = path + ".building"
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    con = sqlite3.connect(tmp)
+    con.executescript("""
+        PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;
+        CREATE TABLE credits (title INT, person INT, job TEXT, characters TEXT);
+        CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT);
+    """)
+    log("reading IMDb credits for %s titles (title.principals: about 790 MB, not kept) ..." % "{:,}".format(len(keep)))
+    people, batch = set(), []
+    for f in _remote_tsv(IMDB_CREDIT_FILES[0]):
+        # tconst, ordering, nconst, category, job, characters (a JSON list, or \N)
+        if len(f) < 6 or f[3] not in IMDB_CREDIT_JOBS:
+            continue
+        t = _int(f[0][2:])
+        if t not in keep:
+            continue
+        p = _int(f[2][2:])
+        try:
+            chars = " / ".join(json.loads(f[5])) if f[5] != "\\N" else None
+        except ValueError:
+            chars = None
+        batch.append((t, p, f[3], chars or None))
+        people.add(p)
+        if len(batch) >= 100000:
+            con.executemany("INSERT INTO credits VALUES (?,?,?,?)", batch)
+            batch = []
+    con.executemany("INSERT INTO credits VALUES (?,?,?,?)", batch)
+    log("reading IMDb names for %s people (name.basics: about 310 MB, not kept) ..." % "{:,}".format(len(people)))
+    batch = []
+    for f in _remote_tsv(IMDB_CREDIT_FILES[1]):
+        p = _int(f[0][2:]) if f and len(f) > 1 else None
+        if p in people:
+            batch.append((p, f[1]))
+            if len(batch) >= 100000:
+                con.executemany("INSERT OR IGNORE INTO people VALUES (?,?)", batch)
+                batch = []
+    con.executemany("INSERT OR IGNORE INTO people VALUES (?,?)", batch)
+    log("indexing IMDb credits ...")
+    con.executescript("""
+        CREATE INDEX ix_credits_title ON credits(title);
+        CREATE INDEX ix_credits_person ON credits(person);
+        CREATE VIRTUAL TABLE people_fts USING fts5(name, content='people', content_rowid='id');
+        INSERT INTO people_fts(people_fts) VALUES('rebuild');
+        CREATE VIRTUAL TABLE characters_fts USING fts5(characters, content='credits', content_rowid='rowid');
+        INSERT INTO characters_fts(characters_fts) VALUES('rebuild');
+    """)
+    con.execute("PRAGMA user_version = %d" % IMDB_CREDITS_VERSION)
+    con.commit()
+    con.close()
+    os.replace(tmp, path)
+    return imdb_credits_info(imdb_dir)
+
+
+def imdb_credits_open(imdb_dir):
+    """The IMDb credits index (imdb_credits_build), or None when it isn't built."""
+    import sqlite3
+    path = os.path.join(imdb_dir, IMDB_CREDITS_DB)
+    return sqlite3.connect(path) if os.path.exists(path) else None
+
+
+def imdb_credits_info(imdb_dir):
+    """For settings screens: is the IMDb credits index built, when, and how big."""
+    import sqlite3
+    path = os.path.join(imdb_dir, IMDB_CREDITS_DB)
+    if not os.path.exists(path):
+        return None
+    try:
+        con = sqlite3.connect(path)
+        people = con.execute("SELECT COUNT(*) FROM people").fetchone()[0]
+        version = con.execute("PRAGMA user_version").fetchone()[0]
+        con.close()
+    except sqlite3.Error:
+        return None
+    return {"built": _dt.datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d"), "people": people,
+            "current": version >= IMDB_CREDITS_VERSION, "path": path, "mb": os.path.getsize(path) // 2 ** 20}
+
+
+AD_TITLE_SIM = 0.80     # how close an ad's reading must be to a known film's title to become it
+
+
+def title_fix(con, text, year=None):
+    """An ad's reading put right as the film it names, when it's close to one known title and
+    something in it isn't a word ("Ghost Riderm.": Ghost Rider; "TTTLEMERMAID ARIEL'S'
+    BEGINNING": The Little Mermaid: Ariel's Beginning). Well-known films (1000 votes) up to
+    the disc's year; a near tie, or nothing close enough (0.80: at 0.75 "THe GHRONICLES OF
+    PRINCE" went to The Chronicles of Riddick), and it stays as read. The menus' sneak peeks
+    only: an extra named for its film ("The Making of ...") isn't the film."""
+    import difflib
+    if con is None or not text:
+        return text
+    is_word = title_words(con)
+    toks = re.findall(r"[a-z]+", text.lower())
+    words = [w for w in toks if len(w) >= 3 and is_word and is_word(w)]
+    if not words or all(is_word(w) for w in toks if len(w) >= 3):
+        return text
+    core = " ".join(w for w in toks if len(w) >= 3)
+    rows = con.execute("SELECT t.title FROM titles_fts f JOIN titles t ON t.id = f.rowid JOIN ratings r ON r.id = t.id "
+                       "WHERE titles_fts MATCH ? AND r.votes >= 1000 AND t.year <= ? AND t.type IN (%s) "
+                       "ORDER BY r.votes DESC LIMIT 400" % ",".join("'%s'" % k for k in IMDB_MOVIE_TYPES + IMDB_TV_TYPES),
+                       (" OR ".join('"%s"' % w for w in set(words)), (year or 2100) + 1)).fetchall()
+    plain = lambda t: " ".join(w for w in re.findall(r"[a-z0-9]+", t.lower()) if len(w) >= 3)
+    scored = sorted(((difflib.SequenceMatcher(None, core, plain(t)).ratio(), t) for (t,) in rows), reverse=True)
+    if scored and scored[0][0] >= AD_TITLE_SIM and (len(scored) < 2 or scored[0][0] - scored[1][0] > 0.03
+                                                   or scored[0][1] == scored[1][1]):
+        # (and what kind of clip it says it is: Muppets from Space's "Muppets Fromspace Teaser")
+        kinds = [w.capitalize() for w in toks if w in AD_CLIP_WORDS and w not in scored[0][1].lower()]
+        return " ".join([scored[0][1]] + kinds)
+    return text
+
+
+AD_CLIP_WORDS = ("teaser", "trailer", "spot", "featurette", "preview", "clip")
 
 
 def _fts_query(q, prefix_last):
@@ -3821,6 +4035,63 @@ def tmdb_get(key, path, **params):
         return json.load(r)
 
 
+def film_credits(con, imdb_id, key=None, imdb_dir=None, online=True, home=None):
+    """A film's people, [(person, character, job)], from your case files (con: library_open);
+    fetched once if they aren't there: from the IMDb credits index when you have it (Settings),
+    else from TMDB (with a key, online). [] for a film with none to be had."""
+    if not imdb_id:
+        return []
+    if con.execute("SELECT 1 FROM credits_fetched WHERE imdb_id=?", (imdb_id,)).fetchone() is None:
+        rows, source = None, None
+        if rows is None:
+            ic = imdb_credits_open(imdb_dir or default_imdb_dir())
+            if ic is not None:
+                try:
+                    rows = [tuple(r) for r in ic.execute(
+                        "SELECT p.name, c.characters, c.job FROM credits c JOIN people p ON p.id = c.person "
+                        "WHERE c.title = ?", (int(imdb_id[2:]),))] or None
+                    source = "imdb" if rows else None
+                finally:
+                    ic.close()
+        if rows is None and key and online:
+            try:
+                found = tmdb_get(key, "/find/%s" % imdb_id, external_source="imdb_id")
+                hit, kind = (found.get("movie_results") or [None])[0], "movie"
+                if hit is None:
+                    hit, kind = (found.get("tv_results") or [None])[0], "tv"
+                rows = []
+                if hit:
+                    got = tmdb_get(key, "/%s/%d/credits" % (kind, hit["id"]))
+                    rows = [(x.get("name"), x.get("character") or None, "actor") for x in got.get("cast") or []] + \
+                           [(x.get("name"), None, (x.get("job") or "").lower() or None) for x in got.get("crew") or []]
+                    rows = [r for r in rows if r[0]]
+                source = "tmdb"
+            except Exception as e:
+                logger.info("TMDB: no credits for %s (%s)", imdb_id, e)
+                rows = None
+        if rows is not None:
+            con.executemany("INSERT INTO credits VALUES (?,?,?,?,?)", [(imdb_id,) + tuple(r) + (source,) for r in rows])
+            con.execute("INSERT OR REPLACE INTO credits_fetched VALUES (?,?,?)",
+                        (imdb_id, source, _dt.datetime.now().isoformat(timespec="seconds")))
+            con.commit()
+    return [tuple(r) for r in con.execute("SELECT person, character, job FROM credits WHERE imdb_id=?", (imdb_id,))]
+
+
+def film_credit_words(imdb_id, key, online=True, home=None, db=None, imdb_dir=None):
+    """The words of a film's people (film_credits): its cast, the characters they play, its
+    crew. Menus name extras after them ("Hogarth Hughes", "Kent Mansley": The Iron Giant's
+    characters; "Brad Bird Trailer"), words no title has: with these they read as words, not
+    OCR's junk. set() without them."""
+    if not imdb_id:
+        return set()
+    con = library_open(db or default_library())
+    try:
+        rows = film_credits(con, imdb_id, key, imdb_dir, online, home)
+    finally:
+        con.close()
+    return {w for r in rows for n in r[:2] if n for w in re.findall(r"[^\W\d_]{2,}", n.lower())}
+
+
 def name_score(query, name, truncated):
     q, n = query.lower(), (name or "").lower()
     if not q or not n:
@@ -4503,7 +4774,9 @@ def identify(root, args):
         if fmt == "DVD":
             s = parse_dvd(base)
             rep["provider"] = s["provider"] or None
-            name = interactual_name(root)        # (searched like a Blu-ray's metadata title)
+            # the disc naming itself (searched like a Blu-ray's metadata title): InterActual's
+            # disc.id, or the DVD's own text data
+            name = interactual_name(root) or dvd_text_name(base)
             if name:
                 bd_meta = {"names": [name], "toc": [], "thumbnails": []}
                 rep["bd_meta"] = {"names": [name], "toc": []}
@@ -4950,6 +5223,13 @@ def identify(root, args):
                     "season": season if m["kind"] == "tv" else None,   # 0: specials
                     "disc": disc_no if m["kind"] == "tv" else None,
                     "films": len(m.get("items") or []) or None} if m else None
+    if m and not_the_film(rep, titles, m):
+        # the film's extras disc, named by you or TheDiscDB but not by its label (Speed Racer's
+        # DVD game disc, SRTMDGFF2_DES): nothing on it is the film
+        rep["extras_disc"] = True
+        rep["kind"] = "movie"
+        rep["facts"] = {k: v for k, v in (rep.get("facts") or {}).items()
+                        if k not in ("feature_minutes", "episode_minutes", "episode_count")}
     for c in rep["candidates"]:
         c.pop("_n", None)
     rep["status"] = status(rep, key)
@@ -4968,6 +5248,22 @@ def identify(root, args):
         rep["recorded"] = True
         rep["library_path"] = os.path.abspath(args.db)
     return rep
+
+
+EXTRAS_SHARE = 0.6        # a disc whose longest title is under this share of the film's length
+
+
+def not_the_film(rep, titles, m):
+    """Whether a disc matched to a film holds none of it: the scan found no film on it (no
+    feature, cut, episode or part: its kind unknown), and its longest title is well short of the
+    film's running time (90 minutes when IMDb doesn't say). A 47-minute special whose one title
+    is the special is the film, not its extras."""
+    if rep.get("extras_disc") or m.get("kind") != "movie" or rep.get("kind") not in ("unknown", None):
+        return False
+    if not titles or any(t.get("role") in ("feature", "version", "episode", "part") for t in titles):
+        return False
+    longest = max(t.get("duration") or 0 for t in titles) / 60
+    return longest < EXTRAS_SHARE * (m.get("runtime") or 90)
 
 
 NOT_A_FILM = re.compile(r"\b(maximum movie mode|picture[- ]in[- ]picture|play all|deleted scenes?|commentary|"
@@ -5380,7 +5676,13 @@ CREATE TABLE IF NOT EXISTS evidence (hash TEXT, path TEXT, data BLOB, PRIMARY KE
 CREATE TABLE IF NOT EXISTS labels (
     hash TEXT, title_id TEXT, type TEXT, title TEXT, season INT, episode INT, updated TEXT,
     PRIMARY KEY (hash, title_id));
+CREATE TABLE IF NOT EXISTS credits (imdb_id TEXT, person TEXT, character TEXT, job TEXT, source TEXT);
+CREATE INDEX IF NOT EXISTS ix_credits_film ON credits(imdb_id);
+CREATE TABLE IF NOT EXISTS credits_fetched (imdb_id TEXT PRIMARY KEY, source TEXT, fetched TEXT);
 """
+# credits: the people of the films your discs are (cast, the characters they play, crew), from
+# the IMDb credits index or TMDB, once a film's identified; credits_fetched: whose are in (even
+# none). Searchable later, and words for reading their menus ("Hogarth Hughes").
 # titles: rewritten at every scan of the disc (tracks: its video / audio / subtitle tracks, JSON).
 # labels: what you say a title is (TheDiscDB's types and names); kept across rescans, used by
 # submission packets and to find what TheDiscDB could label better.

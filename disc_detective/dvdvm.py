@@ -22,6 +22,7 @@ from .menus import SECTOR, _menu_pgcs, _pgc, _u16, _u32
 MAX_COMMANDS = 20000        # a runaway disc program (a loop): give up, unsure
 MAX_PGCS = 200
 LONG_TITLE = 20 * 60        # starting the disc, a title this long is its feature, playing by itself
+FLEETING = 2.0              # a menu page shorter than this, held by no still, can't be used: it plays on
 
 
 class Unsure(Exception):
@@ -167,7 +168,8 @@ class Player:
 
     def if3(self, cmd):
         op = bits(cmd, 54, 3)
-        return self.compare(op, self.reg(bits(cmd, 43, 8)), self.reg_or_data(cmd, bits(cmd, 55, 1), 15)) if op else True
+        # (a general register only: 4 bits; WALL-E's commentary switch, "if GPRM1 == 1")
+        return self.compare(op, self.gprm[bits(cmd, 43, 4)], self.reg_or_data(cmd, bits(cmd, 55, 1), 15)) if op else True
 
     def if4(self, cmd):
         op = bits(cmd, 54, 3)
@@ -376,9 +378,28 @@ class Engine:
             link = p.run([bytes.fromhex(b["raw"])])
             if not link:
                 return {"menu": (p.domain, p.pgcn, p.pgn), "player": p, "stays": True}
-            return self.follow(p, link, through=False)
+            out = self.follow(p, link, through=False)
         except Unsure as e:
             return {"unsure": str(e)}
+        if "title" in out and out.get("player") is not None:
+            out["after"] = self._after(out["player"], out["title"])
+        return out
+
+    def _after(self, p, first, limit=20):
+        """The titles that play on, one after another, after the one a button plays: up to a
+        menu, or a film (The Sorcerer's Apprentice's Sneak Peeks: 66, then 70 and 74; FastPlay:
+        those, then the film)."""
+        out, q = [], p.copy()
+        for _ in range(limit):
+            try:
+                res = self._play_out(q, self.pgc(q), False, [])
+            except (Unsure, RecursionError):
+                break
+            if "title" not in res or (res.get("seconds") or 0) >= LONG_TITLE or res["title"] in out + [first]:
+                break
+            out.append(res["title"])
+            q = res["player"]
+        return out
 
     def enter(self, p, domain, pgcn, pgn=1, through=False, played=None, pre=True):
         try:
@@ -428,9 +449,29 @@ class Engine:
                 return self._link(p, {"op": "vtsm", "menu": 3, "call": True}, through, played)
             played.append({"title": title, "chapter": chapter, "seconds": seconds})
             return self._play_out(p, pg, through, played)
-        if self.buttons(p):                   # a menu that waits for the viewer
+        if self.buttons(p) and not self._fleeting(pg):    # a menu that waits for the viewer
             return self._waits(p, played)
+        if self.buttons(p):
+            # a page gone before anyone could press it: it plays on (WALL-E's start: 0.4 s of 36
+            # specks of buttons, a trap; a player passes it, to the warnings and the menu)
+            q = p.copy()
+            try:
+                out = self._play_out(q, pg, through, list(played))
+            except (Unsure, RecursionError):
+                return self._waits(p, played)
+            if out.get("menu") == (p.domain, p.pgcn, p.pgn) or "stopped" in out:
+                return self._waits(p, played)     # (it comes back to itself, or ends: it's the page)
+            p.__dict__.update(q.__dict__)
+            out["player"] = p
+            return out
         return self._play_out(p, pg, through, played)
+
+    def _fleeting(self, pg):
+        """A menu page shown too briefly to use: no still picture held, its cells together under
+        FLEETING seconds (an animated menu loops for longer; a held page has a still)."""
+        cells = pg.get("cells") or []
+        return bool(cells) and not any(c.get("still") for c in cells) and \
+            0 < sum(c.get("seconds") or 0 for c in cells) < FLEETING
 
     def _waits(self, p, played):
         """The outcome for a menu that waits for the viewer, with its highlighted button, as a
@@ -667,7 +708,10 @@ def answer(out):
     if "unsure" in out:
         return {"unsure": out["unsure"]}
     if "title" in out:
-        return {"plays": out["title"], "chapter": out["chapter"], "before": out.get("before", [])}
+        a = {"plays": out["title"], "chapter": out["chapter"], "before": out.get("before", [])}
+        if out.get("after"):
+            a["after"] = out["after"]
+        return a
     if "menu" in out and out.get("played"):
         main = longest(out["played"])
         return {"plays": main["title"], "chapter": main["chapter"],

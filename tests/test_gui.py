@@ -361,6 +361,23 @@ def test_long_title_list_scrolls_and_keeps_the_buttons_on_screen(gui, tmp_path, 
     small.pack()
     root.update()
     assert not small.scrolls() and not small.bar.winfo_ismapped()
+    # scrolled to the end, then rows taken away (Show more unticked): back within the rows left,
+    # not blank past their end
+    long = dd_app.ScrollArea(root)
+    rows = [dd_app.ttk.Label(long.inner, text="row %d" % i) for i in range(400)]
+    for w in rows:
+        w.pack()
+    long.pack()
+    root.update()
+    long.canvas.yview_moveto(1.0)
+    root.update()
+    for w in rows[200:]:
+        w.destroy()
+    long.fit()                                  # (as the lists do after a refill)
+    root.update()
+    assert long.scrolls()
+    # (the last rows in view: within a scroll step of the end)
+    assert 0 < long.canvas.canvasy(0) <= long.inner.winfo_reqheight() - long.max_h + 20
 
 
 
@@ -1005,6 +1022,59 @@ def test_what_the_menus_found_is_saved_once_confirmed(gui, tmp_path, monkeypatch
         "Title 4": ("Extra", "Trailer")}                        # Title 1 (the film, unconfirmed): left be
 
 
+def test_a_window_is_kept_above_the_taskbar(gui, monkeypatch):
+    """A window whose bottom would sit under the taskbar (the work area ends above it) is moved
+    up, its title bar still on the screen; one that fits stays where it is."""
+    import tkinter as tk
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app, "work_area", lambda w: (0, 0, 1200, 600))
+    top = tk.Toplevel(root)
+    tk.Frame(top, width=300, height=400).pack()
+    top.geometry("+100+400")
+    pump(lambda: top.winfo_ismapped(), 5)
+    dd_app.keep_on_screen(top)
+    pump(lambda: top.winfo_rooty() + top.winfo_height() <= 600, 5)
+    assert top.winfo_rooty() + top.winfo_height() <= 600 and top.winfo_rooty() >= 0
+    x, y = top.winfo_rootx(), top.winfo_rooty()
+    dd_app.keep_on_screen(top)                                  # fits now: not moved again
+    root.update()
+    assert (top.winfo_rootx(), top.winfo_rooty()) == (x, y)
+    top.destroy()
+
+
+def test_a_copy_is_shown_as_one(gui, tmp_path, monkeypatch):
+    """Edit titles: a title the scan found the same video as another is shown as its copy, with
+    nothing to fill in (labelling the other is what counts)."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    rep = {"content_hash": "9" * 32, "format": "DVD", "kind": "movie", "best_guess": "Film (2001)", "path": str(tmp_path),
+           "candidates": [{"kind": "movie", "name": "Film", "year": 2001, "imdb_id": "tt0000001", "score": 90}],
+           "titles": [{"id": "Title 1", "role": "feature", "duration": 6000},
+                      {"id": "Title 10", "role": "duplicate", "duration": 147, "note": "same video as Title 17"},
+                      {"id": "Title 17", "role": "promo", "duration": 147}], "labels": {}}
+    app.rep = rep
+    d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
+    d.show_all.set(True)
+    d.refill()
+    texts = [w.cget("text") for w in d.area.inner.winfo_children() if w.winfo_class() == "TLabel"]
+    assert "Copy of Title 17" in texts and "Title 10" not in d.vars and "Title 17" in d.vars
+    d.save()
+    assert core.get_labels(core.library_open(app.scan_args().db), rep["content_hash"]) == {}
+    d.close()
+    # a play-all likewise: what it plays, nothing to fill in (The Iron Giant's deleted scenes)
+    rep["titles"] += [{"id": "Title 15", "role": "play-all", "duration": 600, "note": "plays Title 16, Title 17, Title 18, Title 20"}]
+    d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
+    d.show_all.set(True)
+    d.refill()
+    texts = [w.cget("text") for w in d.area.inner.winfo_children() if w.winfo_class() == "TLabel"]
+    assert "Play-all of Titles 16–18, 20" in texts and "Title 15" not in d.vars
+    assert dd_app.play_all_text("length equals Title 3") == "Play-all of Title 3"
+    d.save()
+    assert core.get_labels(core.library_open(app.scan_args().db), rep["content_hash"]) == {}
+    d.close()
+
+
 def test_the_menu_button_that_plays_a_title(gui, tmp_path, monkeypatch):
     """Edit titles: a title a menu button plays (Detect titles saw the page) has a picture beside
     it; clicked, the page shows with the button outlined and what was read on it."""
@@ -1327,8 +1397,36 @@ def test_promos_and_repeats_stay_out_of_the_way(gui, monkeypatch):
     picker.refill()
     assert "Title 4" in picker.vars                                 # ticked, so still shown
     assert picker.what(rep["titles"][3]) == "Promo: Coming Soon to DVD"    # what it is, by your label
+    assert picker.what(rep["titles"][1]) == "Copy of Title 1"
     picker.ok()
     assert app.selected == {"Title 1", "Title 4"}
+
+
+def test_choose_titles_names_titles_as_edit_titles_does(gui, monkeypatch):
+    """The Iron Giant: both cuts named by the menus, a play-all by what it plays, and the
+    deleted scenes by type and name, the same words as Edit titles'."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    rep = {"content_hash": "4" * 32, "format": "DVD", "kind": "movie", "best_guess": "The Iron Giant (1999)",
+           "candidates": [{"kind": "movie", "name": "The Iron Giant", "year": 1999, "imdb_id": "tt0129167", "score": 90}],
+           "titles": [{"id": "Title 1", "role": "feature", "duration": 5200},
+                      {"id": "Title 2", "role": "version", "duration": 5160},
+                      {"id": "Title 15", "role": "play-all", "duration": 600, "note": "plays Title 16, Title 17"},
+                      {"id": "Title 16", "role": "extra", "duration": 60},
+                      {"id": "Title 17", "role": "extra", "duration": 60}],
+           "detected": {"Title 1": {"type": "MainMovie", "title": "Signature Edition"},
+                        "Title 2": {"type": "MainMovie", "title": "Original Edition"},
+                        "Title 16": {"type": "DeletedScene", "title": "Campfire"}},
+           "labels": {}}
+    app.rep = rep
+    picker = dd_app.TitlePicker(root, app)
+    what = {t["id"]: picker.what(t) for t in rep["titles"]}
+    assert what["Title 1"] == "Feature: Signature Edition" and what["Title 2"] == "Feature: Original Edition"
+    assert what["Title 15"] == "Play-all of Titles 16–17"
+    assert what["Title 16"] == "Deleted Scene: Campfire"           # (in plain words, not TheDiscDB's)
+    assert what["Title 17"] == "Extra"                       # nothing named it: the scan's word
+    picker.top.destroy()
 
 
 def test_choose_titles_shows_episode_numbers_and_ads_from_thediscdb(gui, monkeypatch):
@@ -1348,7 +1446,8 @@ def test_choose_titles_shows_episode_numbers_and_ads_from_thediscdb(gui, monkeyp
     picker = dd_app.TitlePicker(root, app)
     root.update()
     texts = [w.cget("text") for w in picker.area.inner.winfo_children() if isinstance(w, dd_app.ttk.Label)]
-    assert "Episode 2" in texts and "Episode 3" in texts            # their numbers in the season
+    # their numbers in the season, and their names (as Edit titles has them)
+    assert "Episode 2: The Spelling Bee" in texts and "Episode 3: Speak Now" in texts
     assert [t["id"] for t in picker.rows] == ["Title 1", "Title 5", "Title 9"]   # E2, E3 (yours), E4
     picker.names["Title 1"] = "Psych - s01e09-e10 - Two Parter.mkv"
     assert picker.episode_text({"id": "Title 1"}) == "Episode 9-10"
