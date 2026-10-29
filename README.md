@@ -47,7 +47,11 @@ double-click **Disc Detective.pyw** (Windows) or run `python -m disc_detective`.
 
 Optional: **MakeMKV** for ripping,
 **tesseract** for reading text off cover art, a free **TMDB** key (in Settings) for
-extra posters.
+extra posters. Menu buttons are read best by **RapidOCR** (any system; Python 3.14 or
+older for now), then Windows' own OCR, then tesseract, whichever are installed:
+`pip install "disc-detective[rapid-ocr,windows-ocr] @ git+https://github.com/b-town-bit/disc-detective"`
+(or, from a copy of the repo, `pip install -e ".[rapid-ocr,windows-ocr]"`; leave out what your
+system can't have).
 
 On first launch it offers to download its data: the TheDiscDB index (about 4 MB)
 and IMDb's public title data (about 300 MB, indexed locally). It keeps both up to

@@ -262,21 +262,249 @@ SHORT_WORDS = {"a", "i", "of", "to", "in", "on", "an", "at", "my", "me", "is", "
                "no", "so", "do", "go", "oh", "tv", "dvd", "the", "and"}
 
 
-def button_text(image, rect, frame_size=(720, 480), pad=4):
+_win_ocr = threading.local()        # Windows' OCR engine, one per thread (None: there's none)
+# is_word(w) while a stakeout runs with a dictionary (crawl's is_word: the IMDb index): Windows'
+# OCR reads a button twice, as it is and its bright lettering alone (white over a busy picture:
+# Jurassic World's "DINOSAURS ROAM ONCE AGAIN", read as "OSAURS ROAM ONCE" as it is), and the
+# reading with more real words stands
+WORDS = None
+BRIGHT = 200                        # lettering this bright (of 255), the rest blanked: the second reading
+
+
+def _real(line):
+    """(real words less the rest, real words) in a reading: WORDS's dictionary, or the extras'."""
+    ws = re.findall(r"[A-Za-z]+", line)
+    real = sum(1 for w in ws if w.lower() in ("a", "i") or len(w) >= 2 and (
+        w.lower() in EXTRAS_VOCAB or (WORDS is not None and WORDS(w))))
+    return real - (len(ws) - real), real
+
+
+def windows_text(image):
+    """What Windows' own OCR (Windows.Media.Ocr, Windows 10 and later) reads in a picture: its
+    lines, joined; None when it isn't there (another system, or the optional winrt packages not
+    installed: pip install "disc-detective[windows-ocr]"). On menu lettering it reads poster art
+    Tesseract can't ("Spanglish", "Hellboy DVD", "Disney Parks"), in a fraction of the time; it
+    gives up rather than guess where Tesseract makes junk of it."""
+    lines = windows_lines(image)
+    return None if lines is None else " ".join(t for t, _, _ in lines)
+
+
+def windows_lines(image):
+    """windows_text's lines: [(text, (x0, y0, x1, y1), 1.0)] (it doesn't say how sure it is), or
+    None when there's no Windows OCR."""
+    if os.name != "nt":
+        return None
+    eng = getattr(_win_ocr, "engine", False)
+    if eng is False:
+        try:
+            from winrt.windows.media.ocr import OcrEngine
+            eng = OcrEngine.try_create_from_user_profile_languages()
+        except Exception:                       # (no winrt packages, or no OCR language installed)
+            eng = None
+        _win_ocr.engine = eng
+    if eng is None:
+        return None
+    try:
+        import asyncio
+        from winrt.windows.graphics.imaging import BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap
+        from winrt.windows.storage.streams import DataWriter
+        img = image.convert("RGBA")
+        w = DataWriter()
+        w.write_bytes(img.tobytes())
+        bmp = SoftwareBitmap.create_copy_from_buffer(w.detach_buffer(), BitmapPixelFormat.RGBA8,
+                                                     img.width, img.height, BitmapAlphaMode.PREMULTIPLIED)
+
+        async def recognize():
+            return await eng.recognize_async(bmp)
+        out = []
+        for line in asyncio.run(recognize()).lines:
+            bs = [wd.bounding_rect for wd in line.words]
+            box = (min(b.x for b in bs), min(b.y for b in bs), max(b.x + b.width for b in bs),
+                   max(b.y + b.height for b in bs)) if bs else (0, 0, 0, 0)
+            out.append((line.text, box, 1.0))
+        return out
+    except Exception:
+        return None
+
+
+_rapid = None                       # RapidOCR's engine once made (False: it isn't installed)
+_rapid_lock = threading.Lock()
+RAPID_LEAST = 0.5                   # a line RapidOCR is less sure of than this is left out
+
+
+def rapid_text(image):
+    """What RapidOCR (PaddleOCR's models, on onnxruntime) reads in a picture: its lines, top to
+    bottom, joined; None when it isn't installed (pip install "disc-detective[rapid-ocr]"; its
+    runtime needs Python 3.14 or older for now: a packaged release brings its own). Tuned on menus
+    (temp/fair_ocr_bench.py): the picture as it is (colour, its own size: enlarged it reads junk
+    into the margins), text found first (PP-OCRv6 small) without scaling small pictures up (its
+    default, 736 px at least: 6-9 times slower), read by the English PP-OCRv5 model. Against your
+    names for 135 buttons: 95 read with no wrong word (Windows OCR then Tesseract: 85), most
+    of the poster art too ("That's How You Know", "Nathaniel's Revelation", "TinkerBell")."""
+    lines = rapid_lines(image)
+    if lines is None:
+        return None
+    return " ".join(t for t, _, _ in sorted(lines, key=lambda x: (x[1][1], x[1][0])))
+
+
+def rapid_lines(image):
+    """rapid_text's lines it's sure of (RAPID_LEAST): [(text, (x0, y0, x1, y1), how sure)], or
+    None when RapidOCR isn't installed."""
+    global _rapid
+    with _rapid_lock:
+        if _rapid is None:
+            try:
+                import logging
+                from rapidocr import LangDet, LangRec, ModelType, OCRVersion, RapidOCR
+                logging.getLogger("RapidOCR").setLevel(logging.ERROR)
+                _rapid = RapidOCR(params={
+                    "Det.ocr_version": OCRVersion.PPOCRV6, "Det.lang_type": LangDet.EN,
+                    "Det.model_type": ModelType.SMALL, "Det.limit_type": "max", "Det.limit_side_len": 960,
+                    "Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.lang_type": LangRec.EN,
+                    "Rec.model_type": ModelType.MOBILE})
+            except Exception:                   # (not installed, or its models can't be had)
+                _rapid = False
+        if not _rapid:
+            return None
+        try:
+            import numpy as np
+            got = _rapid(np.array(image.convert("RGB")), use_det=True, use_cls=False)
+        except Exception:
+            return None
+    if got.boxes is None:
+        return []
+    return [(t, (float(b[:, 0].min()), float(b[:, 1].min()), float(b[:, 0].max()), float(b[:, 1].max())), float(s))
+            for b, t, s in zip(got.boxes, got.txts, got.scores) if s >= RAPID_LEAST]
+
+
+_pages_read = {}                    # {(id, size): a page's rapid_lines}: each picture read once
+_pages_lock = threading.Lock()
+
+
+def _page_lines(image):
+    """rapid_lines of a whole menu picture, read once for all its buttons (None: no RapidOCR)."""
+    key = (id(image), image.size)
+    with _pages_lock:                       # (one reading of a page, its buttons' threads waiting for it)
+        if key not in _pages_read:
+            if len(_pages_read) > 8:        # (a stakeout's last few pictures)
+                _pages_read.clear()
+            _pages_read[key] = (image, rapid_lines(image))   # (the picture kept: its id isn't reused)
+        return _pages_read[key][1]
+
+
+def _heading_boxes(image, rect, others, frame_size):
+    """Where a page's heading dips into a button (boxes in the picture's pixels): a line of the
+    whole page (RapidOCR's, _page_lines) straddling the button's edge (in it by a sixth to four
+    fifths of its height, and more in it than in any other), stacked right on a line outside
+    every button, no line between them: Enchanted's "Fantasy / Comes To Life" over its "Happy
+    Working Song" button, whose area takes in "Comes To Life". (A line well inside a button is
+    the button's, right under a heading or not: Spider-Man 3's "The Jane Austen" under
+    "PREVIEWS".) [] without RapidOCR or other buttons. Assigning the page's lines to buttons
+    outright did no better than reading each button's area: the areas aren't drawn round their
+    names closely enough (temp/fair_ocr_bench.py)."""
+    lines = _page_lines(image) if others else None
+    if not lines:
+        return []
+    sx, sy = image.width / frame_size[0], image.height / frame_size[1]
+    rects = [rect] + [r for r in others if tuple(r) != tuple(rect)]
+    rects = [(r[0] * sx, r[1] * sy, r[2] * sx, r[3] * sy) for r in rects]
+    across = lambda a, b: min(a[2], b[2]) > max(a[0], b[0])
+    mid = lambda b: (b[1] + b[3]) / 2
+
+    def share(b, r):
+        h, w = max(1.0, b[3] - b[1]), max(1.0, b[2] - b[0])
+        down = max(0.0, min(b[3], r[3]) - max(b[1], r[1])) / h
+        return down if max(0.0, min(b[2], r[2]) - max(b[0], r[0])) / w >= 0.5 else 0.0
+    boxes = [b for _, b, _ in lines]
+    shares = [[share(b, r) for r in rects] for b in boxes]
+    outside = [b for b, s in zip(boxes, shares) if max(s) < 0.3]
+
+    def continues(b):
+        h = b[3] - b[1]
+        return any(across(b, o) and
+                   -0.6 * min(h, o[3] - o[1]) <= max(b[1] - o[3], o[1] - b[3]) <= 0.8 * min(h, o[3] - o[1]) and
+                   not any(x is not b and x is not o and across(x, b) and
+                           min(mid(b), mid(o)) < mid(x) < max(mid(b), mid(o)) for x in boxes)
+                   for o in outside)
+    return [b for b, s in zip(boxes, shares) if 0.15 <= s[0] < 0.8 and s[0] >= max(s) and continues(b)]
+
+
+def _rapid_button(image, rect, others, frame_size, box, colour):
+    """RapidOCR's reading of a button's area (colour: the picture cut at box, its pixels), and
+    where the lines it kept are: ("words", (x0, y0, x1, y1) in the picture's pixels), or ("",
+    None): nothing read, or no RapidOCR. Sure of each line it keeps (RAPID_LEAST), its reading
+    isn't tidied as Tesseract's is ("Blu-ray", "McCoppin", "TinkerBell", "Q&A" look like junk to
+    _tidy), just rid of stray symbols; and of a page heading's line dipping into the button's area
+    (_heading_boxes: the page's other buttons known)."""
+    lines = rapid_lines(colour)
+    if not lines:
+        return "", None
+    # (the page read whole only for a button showing two lines or more: a heading's dip is one)
+    heads = _heading_boxes(image, rect, others, frame_size) if len(lines) >= 2 else []
+    moved = lambda b: (b[0] + box[0], b[1] + box[1], b[2] + box[0], b[3] + box[1])
+    over = lambda b, h: min(b[2], h[2]) > max(b[0], h[0]) and min(b[3], h[3]) - max(b[1], h[1]) > 0.5 * (b[3] - b[1])
+    lines = [(t, moved(b)) for t, b, _ in lines if not any(over(moved(b), h) for h in heads)]
+    got = " ".join(re.sub(r"[^\w'&:!?.,()\- ]+", "", " ".join(
+        t for t, _ in sorted(lines, key=lambda x: (x[1][1], x[1][0])))).replace("_", " ").split())
+    if not re.search(r"[A-Za-z]{2}", got):
+        return "", None
+    return got, (min(b[0] for _, b in lines), min(b[1] for _, b in lines),
+                 max(b[2] for _, b in lines), max(b[3] for _, b in lines))
+
+
+def words_area(image, rect, others=(), frame_size=(720, 480), pad=4):
+    """Where on a menu picture a button's words are, as RapidOCR read them (button_text's
+    reading): [x0, y0, x1, y1] in the disc's coordinates, round the lines kept, or None (no
+    RapidOCR, or nothing read). The picture's outline for a title: the words its name came from,
+    not the button's area as the disc draws it (tall on Enchanted's, a dot beside WALL-E's)."""
+    sx, sy = image.width / frame_size[0], image.height / frame_size[1]
+    x0, y0, x1, y1 = rect
+    box = (max(0, int((x0 - pad) * sx)), max(0, int((y0 - pad) * sy)),
+           min(image.width, int((x1 + pad) * sx)), min(image.height, int((y1 + pad) * sy)))
+    colour = image.crop(box).convert("RGB")
+    if not (colour.width and colour.height):
+        return None
+    _, where = _rapid_button(image, rect, others, frame_size, box, colour)
+    if not where:
+        return None
+    return [round(where[0] / sx), round(where[1] / sy), round(where[2] / sx), round(where[3] / sy)]
+
+
+def button_text(image, rect, frame_size=(720, 480), pad=4, others=()):
     """What's written in a button's rectangle of a menu picture (a PIL image), or "". The
-    rectangle is in the disc's 720x480 coordinates; the picture may be any size. Menu lettering
-    is fancy, so it's read several ways and the reading that looks most like words wins: grey,
-    black and white, and the bright coloured letters lifted off the background (yellow 3D letters
-    over a starfield: Muppets from Space); each as one line and as a block, a name over two lines
-    joined back up; and, read badly every way, tilted a little each way (slanted lettering)."""
-    if not shutil.which("tesseract"):
-        return ""
+    rectangle is in the disc's 720x480 coordinates; the picture may be any size. The best reader
+    there is first, its reading standing unless it has no words in it: RapidOCR (rapid_text),
+    then Windows' own OCR (windows_text), then Tesseract: menu lettering is fancy, so it's read several ways and the reading that
+    looks most like words wins: grey, black and white, and the bright coloured letters lifted
+    off the background (yellow 3D letters over a starfield: Muppets from Space); each as one line
+    and as a block, a name over two lines joined back up; and, read badly every way, tilted a
+    little each way (slanted lettering). (The two together, against your names for 135 buttons:
+    78 read with no wrong word, Tesseract alone 65.)"""
     from PIL import Image, ImageChops, ImageOps, ImageStat
     sx, sy = image.width / frame_size[0], image.height / frame_size[1]
     x0, y0, x1, y1 = rect
     box = (max(0, int((x0 - pad) * sx)), max(0, int((y0 - pad) * sy)),
            min(image.width, int((x1 + pad) * sx)), min(image.height, int((y1 + pad) * sy)))
     colour = image.crop(box).convert("RGB")
+    if colour.width and colour.height:
+        got, _ = _rapid_button(image, rect, others, frame_size, box, colour)     # (RapidOCR first)
+        if got:
+            return got
+        big = lambda g: g.resize((g.width * 3, g.height * 3), Image.LANCZOS)
+        shown = [big(colour)]
+        if WORDS:                               # (a dictionary to judge by: the lettering lifted out too)
+            shown.append(big(ImageOps.grayscale(colour).point(lambda v: 0 if v > BRIGHT else 255)))
+        wins = []
+        for img in shown:
+            got = windows_text(img)
+            if got is None:
+                break
+            wins.append(_tidy(re.sub(r"[^\w'&:!?.,()\- ]+", "", got).replace("_", " ").strip()))
+        win = max(wins, key=lambda s: (_real(s), _score(s)), default="")
+        if _score(win) > 0:
+            return win
+    if not shutil.which("tesseract"):
+        return ""
     grey = ImageOps.autocontrast(ImageOps.grayscale(colour), cutoff=1)
     # menu lettering is light on dark as often as dark on light: tesseract wants dark on light
     if ImageStat.Stat(grey).mean[0] < 128:
@@ -292,7 +520,7 @@ def button_text(image, rect, frame_size=(720, 480), pad=4):
         img.save(tmp)
         for psm in psms:
             out = subprocess.run(["tesseract", tmp, "stdout", "--psm", psm], capture_output=True, text=True,
-                                 timeout=20, **_no_console()).stdout
+                                 encoding="utf-8", errors="replace", timeout=20, **_no_console()).stdout
             got = [_tidy(re.sub(r"[^\w'&:!?.,()\- ]+", "", s).replace("_", " ").strip()) for s in out.splitlines()]
             got = [g for g in got if g]
             lines.extend(got)
@@ -352,7 +580,7 @@ def button_words(image, rect, others=(), frame_size=(720, 480)):
     """A button's words (button_text): for a tiny one, a light or a pointer by its label
     (Spider-Man's: lamps 5-16 pixels wide beside "SCENE SELECTIONS", pointers in panels saying
     "STAN LEE'S MUTANTS, MONSTERS & MARVELS"), what's printed round it, if that reads better."""
-    text = button_text(image, rect, frame_size)
+    text = button_text(image, rect, frame_size, others=others)
     x0, y0, x1, y1 = rect
     if x1 - x0 >= TINY:
         return text
@@ -445,11 +673,39 @@ def _better_reading(moved, still, rect, others=()):
 def page_text(image, rects, frame_size=(720, 480)):
     """The words on a menu picture outside its buttons (a page's heading: "Sneak Peeks" over
     the ads, in plainer lettering than the button that led there), or "". The buttons are
-    blanked first: a main menu's "Sneak Peeks" button isn't its heading."""
+    blanked first: a main menu's "Sneak Peeks" button isn't its heading. RapidOCR's reading, where
+    it's installed (over the saved pages: "SPECIAL FEATURES", "PREVIEWS", "BONUS MATERIAL", where
+    Tesseract's were mostly junk, "Kor ie BF Tt Pee lO TURES"); else Windows' OCR's or Tesseract's,
+    whichever has more real words (each reads some headings the other can't)."""
+    from PIL import Image, ImageDraw
+    sx, sy = image.width / frame_size[0], image.height / frame_size[1]
+    blank = image.convert("RGB")
+    draw = ImageDraw.Draw(blank)
+    for x0, y0, x1, y1 in rects:
+        draw.rectangle((x0 * sx, y0 * sy, x1 * sx, y1 * sy), fill=(128, 128, 128))
+    words = lambda s: " ".join(re.findall(r"[A-Za-z][A-Za-z']+", s or ""))
+    got = words(rapid_text(blank))
+    if got:
+        return got
+    seen = [words(windows_text(blank.resize((blank.width * 2, blank.height * 2), Image.LANCZOS))),
+            words(_tesseract_page(image, rects, sx, sy))]
+    return max(seen, key=_clean_share)
+
+
+def _clean_share(line):
+    """(the share of a reading's words that are real ones of 3 letters or more, how many): a
+    heading's reading judged clean, not long (Tesseract's junk is full of scraps the dictionary
+    knows, "as", "on", "Ss": by count, "is Ss lf LIN Sania ra" beat "BONUS")."""
+    ws = line.split()
+    real = [w for w in ws if len(w) >= 3 and (w.lower() in EXTRAS_VOCAB or (WORDS is not None and WORDS(w)))]
+    return (len(real) / len(ws) if ws else 0.0, len(real))
+
+
+def _tesseract_page(image, rects, sx, sy):
+    """Tesseract's reading of a page with its buttons blanked (page_text's), or ""."""
+    from PIL import Image, ImageDraw, ImageOps, ImageStat
     if not shutil.which("tesseract"):
         return ""
-    from PIL import Image, ImageDraw, ImageOps, ImageStat
-    sx, sy = image.width / frame_size[0], image.height / frame_size[1]
     grey = ImageOps.autocontrast(ImageOps.grayscale(image.convert("RGB")), cutoff=1)
     if ImageStat.Stat(grey).mean[0] < 128:
         grey = ImageOps.invert(grey)
@@ -461,7 +717,7 @@ def page_text(image, rects, frame_size=(720, 480)):
     try:
         grey.save(tmp)
         out = subprocess.run(["tesseract", tmp, "stdout", "--psm", "11"], capture_output=True, text=True,
-                             timeout=30, **_no_console()).stdout
+                             encoding="utf-8", errors="replace", timeout=30, **_no_console()).stdout
     except (OSError, subprocess.SubprocessError):
         return ""
     finally:
@@ -469,8 +725,7 @@ def page_text(image, rects, frame_size=(720, 480)):
             os.remove(tmp)
         except OSError:
             pass
-    words = re.findall(r"[A-Za-z][A-Za-z']+", out)
-    return " ".join(words)
+    return out
 
 
 def _score(line):
@@ -496,8 +751,9 @@ def _wordy(line):
     score = 0
     for tok in line.split():
         core = tok.strip(".,:;()'\"!?-")
+        bare = core.replace("'", "")            # ("Nathaniel's": istitle says no, the s a word of its own)
         if len(core) >= 2 and re.fullmatch(r"[A-Za-z][A-Za-z'&-]*|\d+(:\d\d)*|&", core) and (
-                core.isupper() or core.istitle() or core.islower() or core.isdigit() or ":" in core):
+                bare.isupper() or bare.istitle() or bare.islower() or core.isdigit() or ":" in core):
             score += len(core)
         elif re.fullmatch(r"\d+[.,]?|&|[AI]", tok):
             score += 1                      # "1." numbering, "&", "A"
@@ -1677,6 +1933,30 @@ class _Crawler:
         out.sort(key=lambda x: -x[0])
         return out, before[-1], after[-1]
 
+    def _safe_trips(self, candidates):
+        """The round trips find may press, the highlight's button unknown: those that can't land
+        on an auto-action button (selecting it presses it) from any button of these pages, going
+        or coming back; none such, the least risky first. Muppets from Space's Special Features:
+        "down" from ON/OFF to the music video, then "up" from there, lands on its auto button
+        (a speck under LIVE VIDEO COMMENTARY), which re-opens the page: the highlight moved
+        where nothing said, every press after it one button off (the music video played for
+        OUTTAKES)."""
+        def risk(trip):
+            key, back = trip
+            hits = 0
+            for st in candidates:
+                by = {b["n"]: b for b in _state_buttons(self.pages, st)}
+                for n, b in by.items():
+                    if b["auto"]:
+                        continue
+                    m = by.get(b[key])
+                    if m is not None and (m["auto"] or (by.get(m[back]) or {}).get("auto")):
+                        hits += 1
+            return hits
+        scored = sorted(self.ROUND_TRIPS, key=risk)
+        safe = [t for t in scored if risk(t) == 0]
+        return safe or scored
+
     def find(self, candidates, timeout=40):
         """(state, selected button), by sending the highlight to a neighbour and back (an arrow
         key and its opposite: _round_trip) and seeing where it went. Every page that round trip
@@ -1687,9 +1967,10 @@ class _Crawler:
         if len(candidates) == 1 and len(_state_buttons(self.pages, st)) == 1:
             return self._find_one_way(candidates)
         layout = lambda s: tuple(tuple(b["rect"]) for b in _state_buttons(self.pages, s))
+        trips = self._safe_trips(candidates)
         t0, i = time.time(), 0
         while time.time() - t0 < timeout:
-            key, back = self.ROUND_TRIPS[i % 4]
+            key, back = trips[i % len(trips)]
             i += 1
             weak = len(candidates) == 1         # (one page expected: a looser fit, confirmed below)
             res, a, b = self._round_trip(candidates, key, back, weak)
@@ -1718,7 +1999,7 @@ class _Crawler:
             for j in range(1, 4):               # more round trips, ruling pages out
                 if len({layout(s) for s in fits}) == 1:
                     break
-                k2, b2 = self.ROUND_TRIPS[(i + j) % 4]
+                k2, b2 = trips[(i + j) % len(trips)]
                 res2, _, _ = self._round_trip(list(fits), k2, b2)
                 scores = {(s, n): score for score, s, n, _ in res2}
                 fits = {s: n for s, n in fits.items() if scores.get((s, n), SEEN) >= SEEN}
@@ -1970,7 +2251,18 @@ class _Crawler:
         return chain
 
 
-def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
+def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, is_word=None):
+    """_crawl, with is_word (a dictionary: core.word_checker) to judge Windows' OCR readings by
+    (WORDS) while it runs."""
+    global WORDS
+    WORDS = is_word
+    try:
+        return _crawl(drive, vlc_dir, structure, out_dir, log, everything)
+    finally:
+        WORDS = None
+
+
+def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
     """The menu buttons that matter: their words (OCR) and where they go, a page or what they
     play. In rounds: a tour through the pages there's a way to, reading their buttons; then each
     button whose result the disc doesn't state outright is pressed, from a fresh start, and what
@@ -2310,6 +2602,8 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
            "pages": result, "chapters": {t["title"]: t["chapters"] for t in structure.get("titles", [])},
            "opening": opening}
     out["found"] = menu_titles(out)
+    if _rapid:                                  # (read by RapidOCR: plain_names trusts its names)
+        out["found"]["reader"] = "rapidocr"
     out["found"]["pictures"] = title_pictures(out, out_dir)
     with open(os.path.join(out_dir, "crawl.json"), "w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=2)
@@ -2349,9 +2643,14 @@ def nice_name(text):
     """A button's words as a name: menus shout in capitals (or whisper in lower case), names
     don't; and OCR's specks from the lettering's backdrop (an underscore, a lone bracket) go."""
     text = re.sub(r"[_|]+", " ", text)
-    # a list's number before the name ("4. J. Jonah Jameson", "2) Leaving..."); not a number
-    # that's part of it ("3 Blind Mice", "Stuart Little 2")
-    text = re.sub(r"^\s*\d{1,2}[.)]\s+", "", text)
+    # a list's number before the name ("4. J. Jonah Jameson", "2) Leaving...", "1.A Lock Of...":
+    # no space read after it); not a number that's part of it ("3 Blind Mice", "Stuart Little 2").
+    # A "1" then, alone before a word, is the name's "I" in a flourished capital ("3.1 Am Not
+    # Waiting For My Prince": I Am Not...)
+    listed = re.match(r"^\s*\d{1,2}[.)]\s*(?=[^\d\s.,]|1\s+[A-Za-z])", text)
+    if listed:
+        text = text[listed.end():]
+        text = re.sub(r"^1(?=\s+[A-Za-z])", "I", text)
     if text.count("(") != text.count(")"):
         text = text.replace("(", " ").replace(")", " ")
     text = re.sub(r"\s+", " ", text).strip(" ,.:;-'\"")
@@ -2576,7 +2875,9 @@ def credit_fix(text, people, is_word):
                 names.append(ws)
     words = sorted({w for ws in names for w in ws if len(w) >= 3}, key=str.lower)
     known = {w.lower() for w in words}
-    toks = list(re.finditer(r"[A-Za-z][A-Za-z'-]*", text))
+    # (a word's "'s" left out of it: "Nathaniel's" is the name and stays possessive, not
+    # Enchanted's "Nathaniel Revelation"; "O'Brien" keeps its apostrophe)
+    toks = list(re.finditer(r"[A-Za-z][A-Za-z-]*(?:'(?![sS]\b)[A-Za-z-]+)*", text))
     unread = lambda w: w.lower() not in known and w.lower() not in EXTRAS_VOCAB and not (is_word and is_word(w))
     out, i, fixes = [], 0, []
     while i < len(toks):
@@ -2631,20 +2932,25 @@ def correct_names(found, people, is_word, title_fix=None):
 
 def plain_names(found, is_word):
     """found (menu_titles()) with the names that aren't readable dropped: the extra keeps a plain
-    name. As found when there's no dictionary (is_word None)."""
+    name. As found when there's no dictionary (is_word None). Read by RapidOCR (found["reader"]),
+    names are kept: it leaves out the lines it isn't sure of, and a real name of words no
+    well-known title has stands (Muppets from Space's "Cardshark Serenade", "Expectorating
+    Extraterrestrials": the filter wants two words in three a title's); Windows' OCR's and
+    Tesseract's readings make junk of a backdrop ("Beye olticak Peeks"), so theirs are judged."""
     if not found or not is_word:
         return found
     known = is_word
     is_word = lambda w: w.lower() in EXTRAS_VOCAB or known(w)      # (and extras' own words)
+    ok = (lambda n: True) if found.get("reader") == "rapidocr" else (lambda n: readable(n, is_word))
     extras = [dict(e, name=unmarked(e["name"], is_word)) for e in found.get("extras") or []]
-    extras = [dict(e, name=e["name"] if e["name"] and readable(e["name"], is_word) else "") for e in extras]
+    extras = [dict(e, name=e["name"] if e["name"] and ok(e["name"]) else "") for e in extras]
     # an ad's own words, too: unreadable, it's just "Previews" (the ad words, always readable)
     promo_names = {t: unmarked(n, is_word) for t, n in (found.get("promo_names") or {}).items()}
-    promo_names = {t: n if " - " not in n or readable(n.split(" - ", 1)[1], is_word) else n.split(" - ", 1)[0]
+    promo_names = {t: n if " - " not in n or ok(n.split(" - ", 1)[1]) else n.split(" - ", 1)[0]
                    for t, n in promo_names.items()}
     fname = unmarked(found.get("feature_name") or "", is_word)
     return dict(found, extras=extras, promo_names=promo_names,
-                feature_name=fname if fname and readable(fname, is_word) else "")
+                feature_name=fname if fname and ok(fname) else "")
 
 
 def title_pictures(out, out_dir):
@@ -2677,7 +2983,23 @@ def title_pictures(out, out_dir):
                 rank = (b["plays"].get("chapter") == 1, -len(p.get("route") or [])) + rank
             if t not in best or rank > best[t][0]:
                 best[t] = (rank, {"image": os.path.join(out_dir, p["image"]), "rect": list(b["rect"]),
-                                  "text": b.get("text") or ""})
+                                  "text": b.get("text") or "", "_rects": [x["rect"] for x in p["buttons"]]})
+    # outlined: the words the name was read from (words_area), where RapidOCR finds them; else the
+    # button's area, as the disc draws it ("button": that, either way)
+    pics = {}
+    for _, v in best.values():
+        rects = v.pop("_rects", ())
+        v["button"] = list(v["rect"])
+        try:
+            if v["image"] not in pics:
+                from PIL import Image
+                with Image.open(v["image"]) as im:
+                    pics[v["image"]] = im.convert("RGB")
+            area = words_area(pics[v["image"]], v["rect"], rects)
+        except Exception:
+            area = None
+        if area:
+            v["rect"] = area
     return {t: v for t, (_, v) in sorted(best.items())}
 
 
@@ -2903,7 +3225,7 @@ def main(argv=None):
         probe(root, vlc, out)
         print("probe written to", os.path.join(out, "probe.json"))
         return 0
-    result = crawl(root, vlc, s, out, everything=a.all)
+    result = crawl(root, vlc, s, out, everything=a.all, is_word=core.word_checker(core.default_imdb_dir()))
     result["found"] = plain_names(result["found"], _dictionary())
     print()
     print(crawl_text(result))

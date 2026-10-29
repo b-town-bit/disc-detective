@@ -1,4 +1,7 @@
 import os
+
+import pytest
+
 from disc_detective import menus
 
 
@@ -230,6 +233,12 @@ def test_plain_names_for_unreadable_words():
     shot = {"feature": 1, "promos": [], "extras": [{"title": 36, "name": "Storyboards and Animatics", "seconds": 60,
                                                     "listed": None, "kind": None}]}
     assert menus.plain_names(shot, lambda w: w.lower() == "and")["extras"][0]["name"] == "Storyboards and Animatics"
+    # read by RapidOCR, a name stands though no title has its words (Muppets from Space's)
+    muppets = {"feature": 1, "promos": [], "reader": "rapidocr",
+               "extras": [{"title": 12, "name": "Cardshark Serenade"}, {"title": 7, "name": "Expectorating Extraterrestrials"}]}
+    assert [e["name"] for e in menus.plain_names(muppets, is_word)["extras"]] == \
+        ["Cardshark Serenade", "Expectorating Extraterrestrials"]
+    assert [e["name"] for e in menus.plain_names(dict(muppets, reader=None), is_word)["extras"]] == ["", ""]
 
 
 def test_known_without_pressing():
@@ -264,6 +273,10 @@ def test_button_words():
     assert menus.nice_name("4. Jonah Jameson") == "Jonah Jameson"
     assert menus.nice_name("2) Leaving Karate") == "Leaving Karate"
     assert menus.nice_name("3 Blind Mice") == "3 Blind Mice" and menus.nice_name("Stuart Little 2") == "Stuart Little 2"
+    # RapidOCR's list numbers, no space after them; and a flourished "I" read as "1" (Enchanted)
+    assert menus.nice_name("1.A Lock Of Prince Edward's Hair") == "A Lock Of Prince Edward's Hair"
+    assert menus.nice_name("3.1 Am Not Waiting For My Prince") == "I Am Not Waiting For My Prince"
+    assert menus.nice_name("2) Leaving Karate") == "Leaving Karate" and menus.nice_name("1. 2 Fast") == "2 Fast"
     assert menus.nice_name("& Deleted Scenes") == "Deleted Scenes"
     assert menus.nice_name("3. Not Wasting Time On My Prince &") == "Not Wasting Time On My Prince"
     assert menus.nice_name("Ghost Rider™.") == "Ghost Rider" and menus.nice_name("Dumped!") == "Dumped!"
@@ -474,7 +487,7 @@ def test_the_button_to_show_for_each_title(tmp_path):
     pics = menus.title_pictures(out, str(tmp_path))
     assert sorted(pics) == [1, 5]
     assert pics[5] == {"image": os.path.join(str(tmp_path), "page_1_3_1.png"), "rect": [10, 10, 200, 40],
-                       "text": "Making Of"}
+                       "text": "Making Of", "button": [10, 10, 200, 40]}
     assert pics[1]["text"] == "1. Opening"                     # read best: a scene's words, over none
     # the feature: the button nearest the menu the disc opens on, read well or not (WALL-E's main
     # menu Play, read as "DO", not a page further in that reads "Play Film")
@@ -483,6 +496,26 @@ def test_the_button_to_show_for_each_title(tmp_path):
     assert feature["image"].endswith("page_1_2_1.png") and feature["rect"] == [10, 10, 200, 40]
     out["pages"].pop(1)
     assert menus.title_pictures(out, str(tmp_path))[1]["rect"] == [10, 10, 200, 40]   # the first: Play
+
+
+def test_a_titles_picture_outlines_the_words_read(tmp_path, monkeypatch):
+    """The outline on a title's picture: the words its name was read from, where RapidOCR finds
+    them (Enchanted's tall button areas, WALL-E's dots beside their words); else the button's
+    area as the disc draws it. Both kept: "rect" outlined, "button" the disc's."""
+    from PIL import Image
+    Image.new("RGB", (720, 480), "white").save(str(tmp_path / "page_1_3_1.png"))
+    out = {"pages": [{"domain": 1, "page": 3, "program": 1, "route": [], "image": "page_1_3_1.png",
+                      "buttons": [{"n": 1, "rect": [76, 285, 397, 349], "text": "Happy Working Song",
+                                   "plays": {"title": 38, "chapter": 1}},
+                                  {"n": 2, "rect": [76, 351, 397, 384], "text": "That's How You Know",
+                                   "plays": {"title": 39, "chapter": 1}}]}]}
+    asked = []
+    monkeypatch.setattr(menus, "words_area", lambda img, rect, rects: asked.append(rects) or (
+        [148, 311, 350, 349] if rect[1] == 285 else None))
+    pics = menus.title_pictures(out, str(tmp_path))
+    assert pics[38]["rect"] == [148, 311, 350, 349] and pics[38]["button"] == [76, 285, 397, 349]
+    assert pics[39]["rect"] == pics[39]["button"] == [76, 351, 397, 384]       # (nothing found: the button's)
+    assert asked[0] == [[76, 285, 397, 349], [76, 351, 397, 384]]               # (the page's other buttons too)
 
 
 def test_which_pages_a_round_trip_can_show():
@@ -1007,6 +1040,12 @@ def test_names_put_right_by_the_films_credits():
     assert fix("KENT MANSLY") == "KENT MANSLEY"                              # in the reading's capitals
     assert fix("ARIELS BEGINNING") == "ARIELS BEGINNING" and fix("Dean MGCOPRR") == "Dean MGCOPRR"
     assert fix("Storyboards and Animatics") == "Storyboards and Animatics"  # (extras' own words)
+    # a possessive stays one: Enchanted's "Nathaniel's Revelation" isn't "Nathaniel Revelation"
+    enchanted = ["Nathaniel", "Prince Edward", "Conan O'Brien"]
+    assert menus.credit_fix("Nathaniel's Revelation", enchanted, is_word) == "Nathaniel's Revelation"
+    assert menus.credit_fix("Nathanel's Revelation", enchanted, is_word) == "Nathaniel's Revelation"
+    assert menus.credit_fix("A Lock Of Prince Edward's Hair", enchanted, is_word) == "A Lock Of Prince Edward's Hair"
+    assert menus.credit_fix("Conan O'Brlen", enchanted, is_word) == "Conan O'Brien"
     found = {"feature": 1, "promos": [9], "promo_names": {9: "Previews - Ghost Riderm"},
              "extras": [{"title": 23, "name": "Hagart Hughs", "seconds": 60, "listed": None, "kind": None}]}
     fixed = menus.correct_names(found, people, is_word, lambda t: "Ghost Rider" if t == "Ghost Riderm" else t)
@@ -1016,3 +1055,176 @@ def test_names_put_right_by_the_films_credits():
                                            {"id": "Title 9", "role": "extra"}])
     assert labels["Title 23"]["title"] == "Hogarth Hughes" and 'read as "Hagart Hughs"' in labels["Title 23"]["note"]
     assert labels["Title 9"]["title"] == "Previews - Ghost Rider" and "Ghost Riderm" in labels["Title 9"]["note"]
+
+
+def test_windows_ocr_first_then_tesseract(monkeypatch):
+    """A button's words: Windows' own OCR first; its reading stands unless it has no words in
+    it (junk, or nothing), and then Tesseract reads it as before."""
+    from PIL import Image
+    img = Image.new("RGB", (720, 480), "white")
+    asked = []
+    monkeypatch.setattr(menus, "rapid_text", lambda im: None)               # (no RapidOCR)
+    monkeypatch.setattr(menus, "windows_text", lambda im: asked.append(im.size) or "Spanglish")
+    monkeypatch.setattr(menus.shutil, "which", lambda name: None)          # (no Tesseract at all)
+    assert menus.button_text(img, [100, 100, 200, 130]) == "Spanglish"
+    assert asked == [(3 * 108, 3 * 38)]                                     # the button's area, 3x
+    for junk in ("", "~ |", None):                                          # no words: Tesseract's turn
+        monkeypatch.setattr(menus, "windows_text", lambda im, j=junk: j)
+        assert menus.button_text(img, [100, 100, 200, 130]) == ""
+
+
+def test_rapidocr_first(monkeypatch):
+    """RapidOCR, where it's installed, reads first, the button's area as it is (its own size);
+    its reading stands unless it has no words in it, and then Windows' OCR has its turn."""
+    from PIL import Image
+    img = Image.new("RGB", (720, 480), "white")
+    asked = []
+    line = lambda t: [(t, (4, 4, 100, 30), 0.99)]
+    monkeypatch.setattr(menus, "rapid_lines", lambda im: asked.append(im.size) or line("Nathaniel's Revelation"))
+    monkeypatch.setattr(menus, "windows_text", lambda im: "Ngthaniel Rgvelaion")
+    assert menus.button_text(img, [100, 100, 200, 130]) == "Nathaniel's Revelation"
+    assert asked == [(108, 38)]
+    monkeypatch.setattr(menus, "rapid_lines", lambda im: line("~ |"))
+    assert menus.button_text(img, [100, 100, 200, 130]) == "Ngthaniel Rgvelaion"
+
+
+def test_a_heading_dipping_into_a_button(monkeypatch):
+    """Enchanted's music page: its heading "Fantasy / Comes To Life" over two lines, the second
+    dipping into the "Happy Working Song" button's area. Read off the whole page, that line is
+    the heading's (straddling the button's edge, stacked on a line outside every button) and
+    left out of the button's words; a line well inside a button stays, under a heading or not."""
+    from PIL import Image
+    img = Image.new("RGB", (720, 480), "white")
+    rects = [[76, 285, 397, 349], [76, 351, 397, 384], [76, 386, 397, 426], [412, 398, 679, 450]]
+    page = [("Fantasy", (182, 237, 295, 285), 0.99), ("Comes To Life", (139, 268, 343, 317), 0.97),
+            ("Happy Working Song", (148, 311, 350, 353), 0.94), ("That's How You Know", (150, 346, 354, 380), 0.97)]
+    monkeypatch.setattr(menus, "_page_lines", lambda im: page)
+
+    def crop_lines(im):                     # the button's area: the page's lines in it, its own pixels
+        return [(t, (b[0] - 72, max(0, b[1] - 281), b[2] - 72, min(im.height, b[3] - 281)), s)
+                for t, b, s in page[1:3]] if im.height > 60 else []
+    monkeypatch.setattr(menus, "rapid_lines", crop_lines)
+    assert menus._heading_boxes(img, rects[0], rects, (720, 480)) == [(139, 268, 343, 317)]
+    assert menus.button_text(img, rects[0], others=rects) == "Happy Working Song"
+    assert menus.button_text(img, rects[0]) == "Comes To Life Happy Working Song"   # (its page unknown)
+    # "The Jane Austen" well inside its button, right under "PREVIEWS": the button's
+    page = [("PREVIEWS", (223, 45, 496, 88), 0.94), ("The Jane Austen", (159, 95, 336, 125), 0.99)]
+    assert menus._heading_boxes(img, [108, 93, 457, 152], [[112, 154, 429, 208]], (720, 480)) == []
+
+
+def test_rapidocr_reads_a_label():
+    """The real thing, where RapidOCR is installed (lines top to bottom)."""
+    from PIL import Image, ImageDraw, ImageFont
+    img = Image.new("RGB", (480, 140), (60, 60, 60))
+    try:
+        font = ImageFont.truetype("arial.ttf", 40)
+    except OSError:
+        pytest.skip("no Arial")
+    ImageDraw.Draw(img).text((20, 15), "DINOSAURS ROAM", font=font, fill="white")
+    ImageDraw.Draw(img).text((20, 75), "ONCE AGAIN", font=font, fill="white")
+    got = menus.rapid_text(img)
+    if got is None:
+        pytest.skip("no RapidOCR here")
+    assert got == "DINOSAURS ROAM ONCE AGAIN"
+
+
+def test_windows_ocr_reads_a_label():
+    """The real thing, where there is one (Windows with the winrt packages)."""
+    from PIL import Image, ImageDraw, ImageFont
+    img = Image.new("RGB", (480, 90), "white")
+    try:
+        font = ImageFont.truetype("arial.ttf", 40)
+    except OSError:
+        pytest.skip("no Arial")
+    ImageDraw.Draw(img).text((20, 20), "Bonus Features", font=font, fill="black")
+    got = menus.windows_text(img)
+    if got is None:
+        pytest.skip("no Windows OCR here")
+    assert got.strip().lower() == "bonus features"
+
+
+def test_windows_ocr_judged_by_real_words(monkeypatch):
+    """With a dictionary (a stakeout's: the IMDb index), Windows' OCR reads a button twice, as
+    it is and its bright lettering alone, and the reading with more real words stands: Jurassic
+    World's white lettering over a busy picture, "OSAURS ROAM ONCE" as it is. Without one, once."""
+    from PIL import Image
+    img = Image.new("RGB", (720, 480), "white")
+    monkeypatch.setattr(menus, "rapid_text", lambda im: None)               # (no RapidOCR)
+    reads = iter(["OSAURS ROAM ONCE", "DINOSAURS ROAM ONCE AGAIN"])
+    monkeypatch.setattr(menus, "windows_text", lambda im: next(reads))
+    words = {"dinosaurs", "roam", "once", "again"}
+    monkeypatch.setattr(menus, "WORDS", lambda w: w.lower() in words)
+    assert menus.button_text(img, [100, 100, 300, 160]) == "DINOSAURS ROAM ONCE AGAIN"
+    # a tie on real words less the rest: the one with more real words (Martin & Short's)
+    reads = iter(["MARTIN & SHORT IVITRVIEW FAC", "MARTIN UCH"])
+    monkeypatch.setattr(menus, "WORDS", lambda w: w.lower() in {"martin", "short"})
+    assert menus.button_text(img, [100, 100, 300, 160]) == "MARTIN & SHORT IVITRVIEW FAC"
+    # no dictionary: one reading, as it is
+    asked = []
+    monkeypatch.setattr(menus, "WORDS", None)
+    monkeypatch.setattr(menus, "windows_text", lambda im: asked.append(1) or "PLAY MOVIE")
+    assert menus.button_text(img, [100, 100, 300, 160]) == "PLAY MOVIE" and len(asked) == 1
+
+
+def test_a_word_checker_for_any_thread(tmp_path):
+    """core.word_checker: the IMDb index as a dictionary, usable from a stakeout's reading
+    threads (its own read-only connection); None without an index."""
+    import threading
+    from disc_detective import core
+    import sqlite3
+    assert core.word_checker(str(tmp_path)) is None and core.word_checker(None) is None
+    con = sqlite3.connect(str(tmp_path / core.IMDB_DB))                    # a tiny index: one title
+    try:
+        con.execute("CREATE VIRTUAL TABLE titles_fts USING fts5(title)")
+    except sqlite3.OperationalError:
+        pytest.skip("no FTS5 in this sqlite")
+    con.execute("CREATE TABLE ratings (id INTEGER PRIMARY KEY, votes INTEGER)")
+    con.execute("INSERT INTO titles_fts (rowid, title) VALUES (1, 'Dinosaurs Roam Once Again')")
+    con.execute("INSERT INTO ratings VALUES (1, ?)", (core.WORD_VOTES,))
+    con.commit()
+    con.close()
+    is_word = core.word_checker(str(tmp_path))
+    got = []
+    t = threading.Thread(target=lambda: got.append((is_word("dinosaurs"), is_word("osaurs"))))
+    t.start()
+    t.join()
+    assert got == [(True, False)]
+
+
+def test_a_pages_heading_read_by_the_best_reader(monkeypatch):
+    """A page's heading (its words outside the buttons): RapidOCR's, where it's installed; else
+    Windows' OCR's or Tesseract's, whichever is cleaner (more of it real words), not longer:
+    Tesseract's junk is full of scraps a dictionary knows ("is Ss lf LIN" against "BONUS")."""
+    from PIL import Image
+    img = Image.new("RGB", (720, 480), "white")
+    rects = [[100, 200, 300, 240]]
+    monkeypatch.setattr(menus, "WORDS", lambda w: w.lower() in {"bonus", "is", "lin", "sneak", "peeks"})
+    monkeypatch.setattr(menus, "rapid_text", lambda im: "Sneak Peeks")
+    monkeypatch.setattr(menus, "windows_text", lambda im: "BONUS")
+    assert menus.page_text(img, rects) == "Sneak Peeks"
+    monkeypatch.setattr(menus, "rapid_text", lambda im: None)
+    monkeypatch.setattr(menus, "_tesseract_page", lambda *a: "is Ss lf LIN Sania ra Wi ite oh SP")
+    assert menus.page_text(img, rects) == "BONUS"
+    monkeypatch.setattr(menus, "windows_text", lambda im: None)
+    assert menus.page_text(img, rects) == "is Ss lf LIN Sania ra Wi ite oh SP"     # (only Tesseract)
+
+
+def test_finding_the_highlight_keeps_off_auto_buttons():
+    """find, the highlight's button unknown, presses the round trips that can't land on an
+    auto-action button first (selecting it presses it): Muppets from Space's Special Features,
+    where "up" from the music video lands on one, re-opening the page and leaving every press
+    after it a button off. None safe from every button: the least risky first."""
+    btn = lambda n, rect, up, down, left, right, auto=False: {
+        "n": n, "rect": rect, "up": up, "down": down, "left": left, "right": right, "auto": auto, "cmd": {}}
+    page = [btn(1, [263, 138, 391, 196], 8, 3, 8, 2), btn(2, [403, 117, 541, 168], 8, 3, 1, 3),
+            btn(3, [391, 168, 641, 235], 9, 4, 2, 4), btn(4, [381, 235, 617, 292], 3, 5, 3, 5),
+            btn(8, [370, 401, 646, 442], 4, 9, 4, 9), btn(9, [378, 92, 387, 100], 1, 1, 1, 1, auto=True)]
+    c = object.__new__(menus._Crawler)
+    c.pages = menus._pages({"titles": [], "vmgm": [], "vtsm": {1: [
+        {"pgc": 6, "cells": [{}], "buttons": page, "program_buttons": [page], "pre": []}]}})
+    trips = c._safe_trips([(1, 6, 1)])
+    assert trips[0] == ("right", "left") and trips[-1] in (("down", "up"), ("up", "down"))
+    plain = [btn(1, [0, 0, 9, 9], 2, 2, 2, 2), btn(2, [0, 20, 9, 29], 1, 1, 1, 1)]
+    c.pages = menus._pages({"titles": [], "vmgm": [], "vtsm": {1: [
+        {"pgc": 1, "cells": [{}], "buttons": plain, "program_buttons": [plain], "pre": []}]}})
+    assert c._safe_trips([(1, 1, 1)]) == list(menus._Crawler.ROUND_TRIPS)   # (all safe: as before)

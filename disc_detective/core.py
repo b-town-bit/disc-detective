@@ -1837,9 +1837,62 @@ def extract_cover(root, fmt, outdir, bd_meta=None):
 
 
 def ocr(image):
-    """Phrases read off cover art, best first ("3 NINJAS", "KICK BACK"). A DVD's menu still is
-    small (720x480), so it is enlarged in grey first; only confident words count, and a phrase
-    ends at any word tesseract wasn't sure of, so logo lettering and fine print drop out."""
+    """Phrases read off cover art, best first ("3 NINJAS", "KICK BACK"): RapidOCR's, else Windows'
+    OCR's (ocr_phrases), else Tesseract's (_tesseract_phrases). RapidOCR reads stylized titles the
+    others can't: The Swan Princess's gold script as "the wan princess" (Windows: nothing;
+    Tesseract: junk), near enough for a title search."""
+    if not image:
+        return None
+    try:
+        from PIL import Image
+        from . import menus
+        with Image.open(image) as im:
+            pic = im.convert("RGB")
+        for read, scale in ((menus.rapid_lines, 1), (menus.windows_lines, 2 if pic.width <= 800 else 1)):
+            lines = read(pic.resize((pic.width * scale, pic.height * scale), Image.LANCZOS) if scale > 1 else pic)
+            phrases = ocr_phrases(lines or [])
+            if phrases:
+                return phrases
+    except Exception:
+        pass
+    return _tesseract_phrases(image)
+
+
+def ocr_phrases(lines, least=0.8):
+    """A picture's lines of text ([(text, (x0, y0, x1, y1), how sure)]) as phrases, biggest
+    lettering first (a title is the biggest words on a cover): lines stacked right under one
+    another, overlapping side to side and of a size, are one phrase (The Swan Princess's "the",
+    "wan", "princess"); words of a letter or less sure than least left out."""
+    lines = [(" ".join(re.findall(r"[A-Za-z0-9&'\-]{2,}|\b[AI]\b|\d", t)), b) for t, b, s in lines if s >= least]
+    lines = sorted((x for x in lines if x[0]), key=lambda x: x[1][1])
+    groups = []
+    for text, b in lines:
+        h = b[3] - b[1]
+        for g in groups:
+            t2, b2 = g[-1]
+            h2 = b2[3] - b2[1]
+            low = min(h, h2)
+            # (right under it: overlapping by up to 60% of a line, as stylized titles do, The Swan
+            # Princess's "the" inside the S of "wan"; or a gap up to 80% of one)
+            if -0.6 * low <= b[1] - b2[3] <= 0.8 * low and min(b[2], b2[2]) > max(b[0], b2[0]) and \
+                    max(h, h2) <= 4 * low:
+                g.append((text, b))
+                break
+        else:
+            groups.append([(text, b)])
+    groups.sort(key=lambda g: -max(b[3] - b[1] for _, b in g))
+    out = []
+    for g in groups:
+        ph = " ".join(t for t, _ in g)
+        if ph.lower() not in (x.lower() for x in out):
+            out.append(ph)
+    return out[:8]
+
+
+def _tesseract_phrases(image):
+    """Tesseract's phrases off cover art. A DVD's menu still is small (720x480), so it is
+    enlarged in grey first; only confident words count, and a phrase ends at any word tesseract
+    wasn't sure of, so logo lettering and fine print drop out."""
     if not image or not shutil.which("tesseract"):
         return None
     src = image
@@ -1857,7 +1910,8 @@ def ocr(image):
     for psm in ("11", "3"):
         try:
             tsv = subprocess.run(["tesseract", src, "stdout", "--psm", psm, "tsv"],
-                                 capture_output=True, text=True, timeout=60, **NO_CONSOLE).stdout
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                 timeout=60, **NO_CONSOLE).stdout
         except Exception:
             return None
         lines = {}
@@ -2122,6 +2176,28 @@ def title_words(con):
     return is_word
 
 
+def word_checker(imdb_dir):
+    """title_words for any thread (a stakeout reads its buttons several at once): its own
+    read-only connection to the IMDb index, one lookup at a time. None without the index."""
+    import sqlite3
+    import threading
+    path = os.path.join(imdb_dir, IMDB_DB) if imdb_dir else None
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % path.replace("\\", "/"), uri=True, check_same_thread=False)
+    except sqlite3.Error:
+        return None
+    lookup, lock = title_words(con), threading.Lock()
+    if lookup is None:
+        return None
+
+    def is_word(w):
+        with lock:
+            return lookup(w)
+    return is_word
+
+
 # The IMDb credits index (Settings: IMDb credits, off by default): who's in the well-known titles,
 # and as whom; to search a film by the names in its credits (frames of a disc's end credits read
 # by OCR), and words for reading menus. title.principals and name.basics (1.1 GB together) are
@@ -2302,8 +2378,11 @@ def _fts_query(q, prefix_last):
     return " AND ".join(parts)
 
 
-def imdb_search(con, query, truncated, types, limit=40):
-    """Candidate rows: exact normalized title, prefix (truncated labels), and word match."""
+def imdb_search(con, query, truncated, types, limit=40, loose=False):
+    """Candidate rows: exact normalized title, prefix (truncated labels), and word match. loose
+    (a phrase read off cover art): also well-known titles with any of its words, since OCR of a
+    stylized title can miss a letter that word match needs ("the wan princess": The Swan
+    Princess); how near the whole title is (name_score) ranks them after."""
     n = norm_title(query)
     qmarks = ",".join("?" * len(types))
     base = ("SELECT t.id, t.type, t.title, t.year, t.end_year, t.runtime, COALESCE(r.votes,0) "
@@ -2326,7 +2405,25 @@ def imdb_search(con, query, truncated, types, limit=40):
                 rows.setdefault(r[0], r)
         except Exception:
             pass   # no FTS5 in this SQLite build
+    # (not "the", "and"...: in thousands of titles, the best known of them crowd out the one wanted)
+    words = [w for w in re.findall(r"[a-z0-9]+", (query or "").lower()) if len(w) >= 3 and w not in LOOSE_SKIP]
+    if loose and words:
+        try:
+            sql = ("SELECT t.id, t.type, t.title, t.year, t.end_year, t.runtime, COALESCE(r.votes,0) "
+                   "FROM titles_fts f JOIN titles t ON t.id = f.rowid JOIN ratings r ON r.id = t.id "
+                   "WHERE titles_fts MATCH ? AND t.type IN (%s) AND r.votes >= ? ORDER BY 7 DESC LIMIT ?" % qmarks)
+            for r in con.execute(sql, (" OR ".join('"%s"' % w for w in words), *types, LOOSE_VOTES, LOOSE_ROWS)):
+                rows.setdefault(r[0], r)
+        except Exception:
+            pass
     return list(rows.values())
+
+
+LOOSE_VOTES = 1000      # a cover phrase's loose search: well-known titles only
+LOOSE_ROWS = 400        # (the best known with any of its words; name_score sorts them)
+LOOSE_SKIP = {"the", "and", "for", "with", "from", "you", "your", "his", "her", "its", "our", "not", "but",
+              "are", "was", "who", "what", "all", "new", "one", "two", "man", "dvd", "disc", "movie", "edition",
+              "special", "collector", "widescreen", "fullscreen"}
 
 
 # what a run-together label word may have skipped between its pieces: any words (labels are cut
@@ -2411,8 +2508,10 @@ def imdb_candidates(con, queries, kind, facts):
         split = split_runon(con, query)          # HARRYPOTTER3: words run together
         if split and split.lower() not in (q.lower() for q, _ in queries):
             queries.append((split, truncated))
+    covered = {p.lower() for p in facts.get("cover_phrases") or []}     # (read off cover art: searched loosely)
     for query, truncated in queries:
-        for (n, ttype, title, year, end_year, runtime, votes) in imdb_search(con, query, truncated, types):
+        for (n, ttype, title, year, end_year, runtime, votes) in imdb_search(
+                con, query, truncated, types, loose=(query or "").lower() in covered):
             ns = name_score(query, title, truncated)
             if ns < 0.6:
                 continue
@@ -4800,7 +4899,7 @@ def identify(root, args):
 
     eps = [t for t in titles if t["role"] == "episode"]
     feats = [t for t in titles if t["role"] == "feature"]
-    facts = {"mastered": rep["mastered"]}
+    facts = {"mastered": rep["mastered"], "cover_phrases": [ph[:60] for ph in rep.get("cover_ocr") or []]}
     if eps:
         facts["episode_minutes"] = round(sorted(t["duration"] for t in eps)[len(eps) // 2] / 60)
         facts["episode_count"] = len(eps)

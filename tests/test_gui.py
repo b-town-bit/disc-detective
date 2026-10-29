@@ -810,7 +810,7 @@ def test_label_titles_saves_your_labels(gui, tmp_path, monkeypatch):
     d = dd_app.TitlesDialog(root, app, h, "A Disc", on_save=lambda: saved.append(1))
     assert list(d.vars) == ["Title 4"]                          # logos and menus aren't listed
     assert d.state["Title 4"]["type"] == "Extra" and not d.changed("Title 4")     # our guess: not saved as it is
-    assert str(d.confirm_btn.cget("state")) == "disabled"      # nothing found by the menus to confirm
+    assert not d.found()                                        # nothing found by the menus to confirm
     assert not d.episode_boxes["Title 4"][0].winfo_manager()    # no season and number for an extra
     # the wheel over a dropdown scrolls the list: it doesn't change the type (nor make it yours)
     kind = [w for w in d.area.inner.winfo_children() if w.winfo_class() == "TCombobox"][0]
@@ -988,7 +988,7 @@ def test_what_the_menus_found_is_saved_once_confirmed(gui, tmp_path, monkeypatch
     d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
     # an extra the menus couldn't name (Title 3) isn't found: the scan's guess, no Confirm? box
     # (Title 6, a promo you saved, isn't the menus' to offer again: it stays tucked away)
-    assert sorted(d.found()) == ["Title 1", "Title 2", "Title 5"] and str(d.confirm_btn.cget("state")) == "normal"
+    assert sorted(d.found()) == ["Title 1", "Title 2", "Title 5"]
     assert "Title 6" not in d.vars
     assert d.state["Title 3"]["from"] == "scan"
     # what's to confirm comes first, an ad too (shown though promos are tucked away): film, extras, promos
@@ -1459,7 +1459,7 @@ def test_choose_titles_shows_episode_numbers_and_ads_from_thediscdb(gui, monkeyp
     assert (st["Title 1"]["season"], st["Title 1"]["episode"], st["Title 1"]["title"]) == ("1", "2", "The Spelling Bee")
     assert st["Title 1"]["from"] == "scan" and not st["Title 1"]["ok"]
     assert st["Title 5"]["from"] == "yours" and st["Title 5"]["episode"] == "3"
-    assert str(edit.confirm_btn.cget("state")) == "disabled"   # no stakeout: nothing to confirm
+    assert not edit.found()                                     # no stakeout: nothing to confirm
     edit.close()
     picker.top.destroy()
     # TheDiscDB's "Trailer" that is an ad for other releases is a promo; this film's trailer isn't
@@ -1516,5 +1516,43 @@ def test_the_themed_scrollbar():
         assert asked[-1] == ("scroll", 3, "units")
         bar.set(0.0, 1.0)                                    # everything in view: no thumb
         assert bar._span() is None and bar.itemcget(bar._thumb, "state") == "hidden"
+    finally:
+        root.destroy()
+
+
+def test_a_menu_picture_shows_the_words_read_on_demand(tmp_path):
+    """Edit titles' menu picture: the button's area as a gold dashed box, the rest dimmed; the
+    words its name was read from outlined only while the pointer is on the gold box, or after a
+    click on it (another click hides them). Nothing read: just the box, pointing or not."""
+    from PIL import Image
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display")
+    root.withdraw()
+    try:
+        path = str(tmp_path / "page.png")
+        Image.new("RGB", (720, 480), (40, 60, 90)).save(path)
+        v = dd_app.MenuPicture(root)
+        v.show("Title 30", {"image": path, "rect": [186, 297, 291, 340], "button": [66, 275, 375, 364],
+                            "text": "DELETED SCENES"})
+        root.update()
+        ev = lambda x, y: type("E", (), {"x": x, "y": y})()
+        x0, y0, x1, y1 = v.hot
+        on, off = ev((x0 + x1) / 2, (y0 + y1) / 2), ev(x0 - 5, y0 - 5)
+        assert v.photo is v.photos[0]                              # (just the box)
+        v._pointer(on)
+        assert v.photo is v.photos[1]                              # pointing at it: the words too
+        v._pointer(off)
+        assert v.photo is v.photos[0]
+        v._click(on)
+        v._pointer(off)
+        assert v.photo is v.photos[1]                              # clicked: they stay
+        v._click(on)
+        assert v.photo is v.photos[0]
+        assert "point at it" in v.read.cget("text")
+        v.show("Title 44", {"image": path, "rect": [385, 382, 622, 456], "button": [385, 382, 622, 456], "text": ""})
+        v._pointer(ev(*v.hot[:2]))
+        assert v.photo is v.photos[0] and "point at it" not in v.read.cget("text")
     finally:
         root.destroy()

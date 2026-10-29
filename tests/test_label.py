@@ -114,3 +114,15 @@ def test_cover_text_is_read_as_phrases(tmp_path):
     path = str(tmp_path / "cover.png")
     im.save(path)
     assert "KICK BACK" in (ocr(path) or [])
+
+
+def test_cover_lines_as_phrases():
+    """A reader's lines (RapidOCR's, Windows') as cover phrases: a title stacked line on line,
+    overlapping as stylized titles do, is one phrase (The Swan Princess's "the", "wan" inside the
+    S, "princess"), the biggest lettering first; a blurb apart, and lines it's unsure of, left out."""
+    from disc_detective.core import ocr_phrases
+    lines = [("bigger kicks!", (60, 300, 200, 322), 0.95),
+             ("the", (676, 953, 1187, 1219), 0.87), ("wan", (713, 1090, 1931, 1598), 0.9),
+             ("princess", (537, 1397, 1954, 1875), 0.84), ("~", (10, 10, 20, 20), 0.3)]
+    assert ocr_phrases(lines) == ["the wan princess", "bigger kicks"]
+    assert ocr_phrases([]) == []

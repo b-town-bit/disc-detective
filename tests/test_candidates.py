@@ -307,3 +307,15 @@ def test_gemini_reads_the_cover_and_imdb_checks_it(imdb_dir, tmp_path, monkeypat
 def test_ai_answers_are_read(text, want):
     a = core.parse_ai_answer(text)
     assert (a and (a["title"], a["year"])) == want or (a is None and want is None)
+
+
+def test_a_title_read_off_cover_art(imdb):
+    """A phrase read off a stylized cover can miss a letter word match needs (The Swan Princess's
+    gold script: "the wan princess"): searched loosely, well-known titles with any of its words,
+    the nearest whole title and the disc's runtime decide. A label's query isn't loose."""
+    q = "the wan princess"
+    c = core.imdb_candidates(imdb, [(q, False)], "movie", {"mastered": None, "feature_minutes": 90, "cover_phrases": [q]})
+    assert core.is_probable(c), c[:2]
+    assert (c[0]["name"], c[0]["year"]) == ("The Swan Princess", 1994)
+    c = core.imdb_candidates(imdb, [(q, False)], "movie", {"mastered": None, "feature_minutes": 90})
+    assert "The Swan Princess" not in [x["name"] for x in c]

@@ -14,6 +14,19 @@ dependencies = ["Pillow"]  # posters and box art (Tk can't show JPEGs by itself)
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-timeout"]
+# RapidOCR for menu buttons, the best reader (read first): its runtime needs Python 3.14 or older
+# for now (a packaged release brings its own Python)
+rapid-ocr = ["rapidocr", "onnxruntime"]
+# Windows' own OCR for menu buttons (after RapidOCR; tesseract when neither finds words)
+windows-ocr = [
+    "winrt-runtime; sys_platform == 'win32'",
+    "winrt-Windows.Media.Ocr; sys_platform == 'win32'",
+    "winrt-Windows.Graphics.Imaging; sys_platform == 'win32'",
+    "winrt-Windows.Storage.Streams; sys_platform == 'win32'",
+    "winrt-Windows.Foundation; sys_platform == 'win32'",
+    "winrt-Windows.Foundation.Collections; sys_platform == 'win32'",
+    "winrt-Windows.Globalization; sys_platform == 'win32'",
+]
 
 [project.scripts]
 disc-detective = "disc_detective.core:main"

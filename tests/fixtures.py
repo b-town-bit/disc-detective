@@ -53,6 +53,9 @@ def build_imdb(d):
     add("movie", "Gone in 60 Seconds", 1974, 97, 9000)
     add("video", "'Gone in 60 Seconds' Unmasked", 2001, 30, 400)     # a making-of, the year after
     add("movie", "The Prince of Egypt", 1998, 99, 140000)
+    add("movie", "The Swan Princess", 1994, 90, 29866)          # cover OCR: "the wan princess"
+    add("movie", "The Princess", 2022, 94, 17409)
+    add("movie", "Princess", 2008, 88, 2052)
     add("movie", "Shrek", 2001, 90, 750000)
     add("movie", "Shrek 2", 2004, 93, 500000)
     add("movie", "An American Tailor", 1984, 75, 900)

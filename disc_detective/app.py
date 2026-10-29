@@ -77,7 +77,7 @@ def drive_models():
         if os.name == "nt":
             r = subprocess.run(["powershell", "-NoProfile", "-Command",
                                 "Get-CimInstance Win32_CDROMDrive | Select-Object Drive, Caption | ConvertTo-Json"],
-                               capture_output=True, text=True, timeout=20, creationflags=NO_WINDOW)
+                               capture_output=True, text=True, errors="replace", timeout=20, creationflags=NO_WINDOW)
             rows = json.loads(r.stdout or "[]")
             for row in rows if isinstance(rows, list) else [rows]:
                 if row.get("Drive") and row.get("Caption"):
@@ -2034,8 +2034,9 @@ class App:
             out = menus.menu_dir(rep["content_hash"])
             self.post(self.tell, "Going on stakeout…")
             log("reading the menus of %s with VLC %s" % (root, vlc))
-            result = menus.crawl(root, vlc, structure, out, log=log)
             args = self.scan_args()
+            # (the IMDb index as a dictionary: which of Windows OCR's two readings has real words)
+            result = menus.crawl(root, vlc, structure, out, log=log, is_word=di.word_checker(args.imdb_dir))
             try:                         # names OCR made up out of the backdrop: plain names
                 titles = di.imdb_open(args.imdb_dir, allow_download=False, log=lambda m: None)
                 is_word = di.title_words(titles)
@@ -2982,8 +2983,6 @@ class TitlesDialog:
         self.save_btn = ttk.Button(btns, text="Save", command=self.save)
         self.save_btn.pack(side="right")
         ttk.Button(btns, text="Cancel", command=self.close).pack(side="right", padx=(0, 8))
-        self.confirm_btn = ttk.Button(btns, text="Confirm all", command=self.confirm_all)
-        self.confirm_btn.pack(side="left")
         self.show_all = tk.BooleanVar(value=False)
         self.more = ttk.Checkbutton(body, variable=self.show_all, command=self.refill)
         self.area = ScrollArea(body, max_frac=0.45)    # (the rest scrolls: the window stays short)
@@ -3095,7 +3094,6 @@ class TitlesDialog:
         self.episode_heads()
         self.heads["CONFIRM?"].config(text="CONFIRM?" if self.found() else "")
         state = "disabled" if self.locked else "normal"
-        self.confirm_btn.config(state=state if self.found() else "disabled")
         self.save_btn.config(state=state)
         self.more.config(state=state)
         self.area.fit()                         # (fewer rows: no word from Tk while scrolled past them)
@@ -3180,11 +3178,6 @@ class TitlesDialog:
 
     def confirmed(self, tid):
         self.confirm(tid, self.vars[tid]["ok"].get())
-
-    def confirm_all(self):
-        """Everything the menus found, confirmed."""
-        for tid in self.found():
-            self.confirm(tid)
 
     # season and number: for an episode (or an episode's deleted scene) only
     NAMED = {"Episode": "%s", "DeletedScene": "%s Deleted Scene"}
@@ -3379,6 +3372,7 @@ class MenuPicture:
     through the disc's menus in VLC."""
 
     FRAME = (720, 480)                    # the disc's own coordinates, the buttons' rectangles in
+    PALER, DARKER = 0.55, 0.75            # the menu round the button: half its colour, a quarter darker
 
     def __init__(self, parent):
         self.top = top = new_dialog(parent)
@@ -3393,6 +3387,9 @@ class MenuPicture:
         self.read.pack(anchor="w", pady=(2, 8))
         self.pic = ttk.Label(body, style="DeskSub.TLabel")
         self.pic.pack()
+        self.pic.bind("<Motion>", self._pointer)
+        self.pic.bind("<Leave>", lambda e: (setattr(self, "over", False), self._redraw()))
+        self.pic.bind("<Button-1>", self._click)
         btns = ttk.Frame(body, style="Desk.TFrame")
         btns.pack(fill="x", pady=(10, 0))
         ttk.Button(btns, text="Close", command=top.destroy).pack(side="right")
@@ -3406,34 +3403,107 @@ class MenuPicture:
             return False
 
     def show(self, tid, pic):
+        """The page's picture: the rest of the menu dimmed, the button's area (a gold dashed box)
+        as it is; the words its name was read from outlined in red only while the pointer is on
+        the gold box, or after a click on it (another click hides them): for checking a reading,
+        not needed to find the button."""
         import base64
         import io
-        from PIL import Image, ImageDraw
+        from PIL import Image, ImageDraw, ImageEnhance
         self.head.config(text="%s plays from this button" % tid)
         words = (pic.get("text") or "").strip()
+        button = list(pic.get("button") or pic["rect"])
+        shown = list(pic["rect"])                 # (the words read, or the button's area: nothing read)
         # (the picture is the page as it was read: the menu's own highlight can be on another button)
         self.read.config(text=("Detect titles read it as “%s”." % words if words else
                                "Detect titles couldn't read its words.") +
-                         " It's outlined in red; the menu's own highlight may be on another button.")
+                         " The gold dashed box is the button on the menu" +
+                         ("; point at it, or click it, to see the words it was read from (in red)." if words else ".") +
+                         " The menu's own highlight may be on another button.")
         with Image.open(pic["image"]) as im:
             im = im.convert("RGB")
         sx, sy = im.width / self.FRAME[0], im.height / self.FRAME[1]
-        x0, y0, x1, y1 = pic["rect"]
-        box = (x0 * sx - 3, y0 * sy - 3, x1 * sx + 3, y1 * sy + 3)
-        draw = ImageDraw.Draw(im)
+        # a spotlight: the rest of the menu a touch darker and paler, the button's area (and its
+        # words) as they are, so the eye finds them
+        dim = ImageEnhance.Brightness(ImageEnhance.Color(im).enhance(self.PALER)).enhance(self.DARKER)
+        lit = Image.new("L", im.size, 0)
+        for x0, y0, x1, y1 in (shown, button):
+            ImageDraw.Draw(lit).rectangle((x0 * sx, y0 * sy, x1 * sx, y1 * sy), fill=255)
+        base = Image.composite(im, dim, lit).convert("RGBA")
         w = max(3, round(im.width / 180))
-        draw.rectangle(box, outline=(255, 255, 255), width=w + 2)     # (seen on dark menus and light)
-        draw.rectangle(box, outline=th.WAX, width=w)
+        # the button's area as the disc draws it: gold, dashed (a dark edge under it: seen on light
+        # menus too)
+        marks = Image.new("RGBA", im.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(marks)
+        x0, y0, x1, y1 = button
+        area = (x0 * sx - 2, y0 * sy - 2, x1 * sx + 2, y1 * sy + 2)
+        thin = max(2, w // 2)
+        dashed_box(draw, area, (0, 0, 0, 90), thin + 2, dash=round(8 * sx), gap=round(5 * sx))
+        dashed_box(draw, area, tuple(int(th.BRASS_400[i:i + 2], 16) for i in (1, 3, 5)) + (235,), thin,
+                   dash=round(8 * sx), gap=round(5 * sx))
+        plain = Image.alpha_composite(base, marks)
+        # and the words read, outlined clear of them: a gap, then the line, half see-through, so
+        # the text under it (a neighbour's) still reads
+        draw = ImageDraw.Draw(marks)
+        x0, y0, x1, y1 = shown
+        gap = w + 3
+        box = (x0 * sx - gap - w, y0 * sy - gap - w, x1 * sx + gap + w, y1 * sy + gap + w)
+        draw.rectangle(box, outline=(255, 255, 255, 120), width=w + 2)
+        draw.rectangle(box, outline=tuple(int(th.WAX[i:i + 2], 16) for i in (1, 3, 5)) + (190,), width=w)
+        read = Image.alpha_composite(base, marks)
         k = th.SCALE * min(1.0, 900 / im.width)
-        if k != 1.0:
-            im = im.resize((round(im.width * k), round(im.height * k)), Image.LANCZOS)
-        buf = io.BytesIO()
-        im.save(buf, "PNG")
-        self.photo = tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
-        self.pic.config(image=self.photo)
+
+        def photo(img):
+            img = img.convert("RGB")
+            if k != 1.0:
+                img = img.resize((round(img.width * k), round(img.height * k)), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, "PNG")
+            return tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
+        self.photos = (photo(plain), photo(read))
+        self.hot = tuple(v * k for v in area)     # (the gold box, in the shown picture's pixels)
+        self.pinned = self.over = False
+        self.words_shown = bool(words)
+        self.photo = self.photos[0]
+        self.pic.config(image=self.photo, cursor="")
         self.top.deiconify()
         self.top.lift()
         keep_on_screen(self.top)                  # (the picture makes it bigger than it opened)
+
+    def _on_box(self, e):
+        x0, y0, x1, y1 = getattr(self, "hot", (0, 0, -1, -1))
+        return x0 <= e.x <= x1 and y0 <= e.y <= y1
+
+    def _pointer(self, e):
+        """Over the gold box: the words read, outlined; off it, as before (unless pinned)."""
+        self.over = self._on_box(e)
+        self._redraw()
+
+    def _click(self, e):
+        if self._on_box(e):
+            self.pinned = not self.pinned
+            self._redraw()
+
+    def _redraw(self):
+        if not getattr(self, "photos", None) or not self.words_shown:
+            return
+        want = self.photos[1] if (self.over or self.pinned) else self.photos[0]
+        if want is not self.photo:
+            self.photo = want
+            self.pic.config(image=want)
+        self.pic.config(cursor="hand2" if self.over else "")
+
+
+def dashed_box(draw, box, colour, width, dash=8, gap=5):
+    """A dashed rectangle (Pillow draws only solid ones): dash long strokes, gap apart."""
+    x0, y0, x1, y1 = (int(round(v)) for v in box)
+    dash, gap = max(1, dash), max(1, gap)
+    for a, b, fixed, across in ((x0, x1, y0, True), (x0, x1, y1, True), (y0, y1, x0, False), (y0, y1, x1, False)):
+        p = a
+        while p < b:
+            q = min(p + dash, b)
+            draw.line(((p, fixed), (q, fixed)) if across else ((fixed, p), (fixed, q)), fill=colour, width=width)
+            p = q + gap
 
 
 def human_count(n):
