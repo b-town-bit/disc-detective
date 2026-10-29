@@ -12,9 +12,11 @@ def test_commands():
     assert menus.command(b"\0" * 8) == {"op": "nop"}
 
 
-def _nav(vobu_ea, buttons=()):
-    """A navigation packet: pack header, PCI with the given button rects, DSI's VOBU end address."""
+def _nav(vobu_ea, buttons=(), ptm=0.0):
+    """A navigation packet: pack header, PCI with the given button rects and start time, DSI's VOBU
+    end address."""
     s = bytearray(menus.SECTOR)
+    s[0x2D + 0x0C:0x2D + 0x10] = round(ptm * 90000).to_bytes(4, "big")
     s[0:4] = b"\x00\x00\x01\xba"
     s[0x26:0x2A] = b"\x00\x00\x01\xbf"
     hli = 0x2D + 0x60
@@ -31,16 +33,18 @@ def _nav(vobu_ea, buttons=()):
 def test_buttons_found_partway_through_a_motion_menu(tmp_path):
     # VOBU at 0 (3 sectors) and 3 (2 sectors) have none; the one at 5 has the buttons
     vob = bytearray(menus.SECTOR * 8)
-    for sector, data in ((0, _nav(2)), (3, _nav(1)), (5, _nav(2, [(10, 20, 110, 60), (10, 70, 110, 99)]))):
+    for sector, data in ((0, _nav(2, ptm=0.25)), (3, _nav(1, ptm=0.75)),
+                         (5, _nav(2, [(10, 20, 110, 60), (10, 70, 110, 99)], 1.25))):
         vob[sector * menus.SECTOR:(sector + 1) * menus.SECTOR] = data
     path = tmp_path / "VTS_01_0.VOB"
     path.write_bytes(bytes(vob))
     with open(path, "rb") as fh:
-        btns = menus._buttons(fh, [{"first": 0, "last": 7}])
+        btns, at = menus._buttons(fh, [{"first": 0, "last": 7}])
         assert [b["rect"] for b in btns] == [[10, 20, 110, 60], [10, 70, 110, 99]]
         assert btns[0]["cmd"] == {"op": "link_page", "to": 11}
-        assert menus._buttons(fh, [{"first": 0, "last": 4}]) == []     # the page ends first
-        assert menus._buttons(fh, []) == []
+        assert at == 1.0                        # (the units start 0.5 s apart: on in the third)
+        assert menus._buttons(fh, [{"first": 0, "last": 4}]) == ([], 0.0)     # the page ends first
+        assert menus._buttons(fh, []) == ([], 0.0)
 
 
 def test_a_refused_read_says_so(monkeypatch):
@@ -355,6 +359,32 @@ def test_detected_labels():
     assert menus.detected_labels({"feature": None, "extras": [], "promos": []}, titles) == {}
     trailer = menus.detected_labels({"feature": 1, "extras": [{"title": 2, "name": "Theatrical Trailer"}]}, titles)
     assert trailer["Title 2"]["type"] == "Trailer"            # TheDiscDB's type for a film's own trailer
+    # what a player shows before the menu (Jurassic World's preview reel, and an 85 s one the
+    # scan called junk): previews, even set aside as junk
+    reel = [{"id": "Title 10", "role": "feature"}, {"id": "Title 2", "role": "junk"}, {"id": "Title 3", "role": "extra"}]
+    previews = menus.detected_labels({"feature": 10, "extras": [], "opening": [2, 3]}, reel)
+    assert previews["Title 3"]["type"] == previews["Title 2"]["type"] == "Promo"
+    assert previews["Title 3"]["title"] == "Previews" and "before the menu" in previews["Title 3"]["note"]
+
+
+def test_the_previews_a_player_shows_before_the_menu():
+    """Father of the Bride: a player plays a logo (12 s) and 6 minutes of trailers (title 2 here)
+    before its menu; VLC skips both. The trailers count, the logo doesn't (too short); a title
+    a menu button also plays isn't one."""
+    from disc_detective import dvdvm
+    from test_dvdvm import pgc
+    disc = dvdvm.Disc.__new__(dvdvm.Disc)
+    disc.titles = [{"title": n, "vts": 1, "ttn": n} for n in (1, 2, 3)]
+    disc.first_play = pgc(pre=["3002000000030000"])                         # JumpTT 3: the logo
+    disc.title_pgcs = {1: {1: pgc(6000), 2: pgc(361, post=["3008000000830000"]),   # the trailers; root menu
+                           3: pgc(12, post=["3002000000020000"])}}           # the logo, then JumpTT 2
+    disc.ptt = {1: {1: [(1, 1)], 2: [(2, 1)], 3: [(3, 1)]}}
+    disc.menus = {"vmgm": {}, 1: {1: ("root", True, pgc())}}
+    disc.buttons = {(1, 1): [[{"n": 1, "raw": "3002000000010000", "rect": [0, 0, 1, 1], "cmd": {}}]]}
+    assert dvdvm.opening(dvdvm.Engine(disc)) == [2]
+    page = {"domain": 1, "page": 1, "program": 1, "route": [], "image": None,
+            "buttons": [{"n": 1, "rect": [0, 0, 1, 1], "text": "Play", "plays": {"title": 1, "chapter": 1, "seconds": 6000}}]}
+    assert menus.menu_titles({"pages": [page], "opening": [2, 1]})["opening"] == [2]
 
 
 def test_passing_by_scenes_trailers_and_settings():
@@ -446,6 +476,11 @@ def test_the_button_to_show_for_each_title(tmp_path):
     assert pics[5] == {"image": os.path.join(str(tmp_path), "page_1_3_1.png"), "rect": [10, 10, 200, 40],
                        "text": "Making Of"}
     assert pics[1]["text"] == "1. Opening"                     # read best: a scene's words, over none
+    # the feature: the button nearest the menu the disc opens on, read well or not (WALL-E's main
+    # menu Play, read as "DO", not a page further in that reads "Play Film")
+    out["pages"][1]["route"] = [{"page": 2, "program": 1, "button": 3}]
+    feature = menus.title_pictures(dict(out, found={"feature": 1}), str(tmp_path))[1]
+    assert feature["image"].endswith("page_1_2_1.png") and feature["rect"] == [10, 10, 200, 40]
     out["pages"].pop(1)
     assert menus.title_pictures(out, str(tmp_path))[1]["rect"] == [10, 10, 200, 40]   # the first: Play
 
@@ -615,9 +650,26 @@ def test_an_ad_that_says_its_an_ad():
 def test_watch_a_title_in_vlc(monkeypatch, tmp_path):
     (tmp_path / "vlc.exe").write_text("")
     ran = []
-    monkeypatch.setattr(menus.subprocess, "Popen", lambda cmd, **kw: ran.append(cmd))
+
+    class Player:                               # a VLC window: open till killed
+        def __init__(self, cmd, **kw):
+            self.cmd, self.open = cmd, True
+            ran.append(self)
+
+        def poll(self):
+            return None if self.open else 1
+
+        def kill(self):
+            self.open = False
+    monkeypatch.setattr(menus.subprocess, "Popen", Player)
     assert menus.watch_title(str(tmp_path), "E:\\", 30)
-    assert ran == [[str(tmp_path / "vlc.exe"), menus.dvd_mrl("E:\\") + "#30"]]
+    assert ran[0].cmd == [str(tmp_path / "vlc.exe"), menus.dvd_mrl("E:\\") + "#30"]
+    # one window at a time: the next title closes the one before; and stop_watching closes it
+    assert menus.watch_title(str(tmp_path), "E:\\", 31)
+    assert [p.open for p in ran] == [False, True]
+    menus.stop_watching()
+    assert not ran[1].open
+    menus.stop_watching()                       # (nothing open: nothing to do)
     monkeypatch.setattr(menus.shutil, "which", lambda name: None)
     assert not menus.watch_title(str(tmp_path / "nowhere"), "E:\\", 30)
 

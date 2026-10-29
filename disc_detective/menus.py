@@ -95,9 +95,12 @@ class Refused(OSError):
 def _buttons(vob, cells):
     """A menu page's buttons: those of the first navigation packet that has any, or [] (none /
     unreadable). Motion menus often turn their buttons on partway through, so this walks the
-    page's cells one video unit (VOBU) at a time; each navigation packet says where the next is."""
+    page's cells one video unit (VOBU) at a time; each navigation packet says where the next is.
+    Also the seconds into these cells that the buttons come on (Father of the Bride's Bonus
+    page: 2.75 s; keys pressed before then do nothing)."""
+    before = 0.0
     for cell in cells:
-        sector = cell["first"]
+        sector, first = cell["first"], None
         while sector <= cell["last"]:
             vob.seek(sector * SECTOR)
             try:
@@ -106,11 +109,14 @@ def _buttons(vob, cells):
                 raise Refused("the drive won't read sector %d of the menus" % sector) from e
             if len(s) < SECTOR or s[0:4] != b"\x00\x00\x01\xba" or s[0x26:0x2A] != b"\x00\x00\x01\xbf":
                 break
+            ptm = _u32(s, 0x2D + 0x0C) / 90000      # the unit's start time (PCI)
+            first = ptm if first is None else first
             out = _nav_buttons(s)
             if out:
-                return out
+                return out, round(before + max(0.0, ptm - first), 2)
             sector += _u32(s, 0x40F) + 1        # the DSI's VOBU end address: the next unit follows it
-    return []
+        before += cell.get("seconds") or 0
+    return [], 0.0
 
 
 def _nav_buttons(s):
@@ -202,10 +208,12 @@ def dvd_structure(root):
             for n, typ, entry, p in _menu_pgcs(ifo, _u32(ifo, ptr)):
                 # a page's programs can each have their own buttons (scene pages: 1-3, 4-6, ...)
                 starts = [c for c in p.get("program_cells") or [1] if 1 <= c <= len(p["cells"])] or [1]
-                progs = [_buttons(vob, p["cells"][a - 1:(starts[i + 1] - 1 if i + 1 < len(starts) else None)])
-                         if vob else [] for i, a in enumerate(starts)]
+                found = [_buttons(vob, p["cells"][a - 1:(starts[i + 1] - 1 if i + 1 < len(starts) else None)])
+                         if vob else ([], 0.0) for i, a in enumerate(starts)]
+                progs = [b for b, _ in found]
                 pages.append({"pgc": n, "type": typ, "entry": entry, "cells": p["cells"],
                               "buttons": next((b for b in progs if b), []), "program_buttons": progs,
+                              "buttons_at": [at for _, at in found],
                               "program_cells": starts, "pre": [command(c) for c in p["pre"]]})
         finally:
             if vob:
@@ -537,14 +545,33 @@ def vlc_player(folder):
     return shutil.which("vlc")
 
 
+_watching = None                    # the VLC window watch_title opened (one at a time)
+
+
 def watch_title(folder, source, title):
     """Plays one title of a DVD (a drive or a folder) in VLC, in a window of its own: to see
-    what it is. False if there's no VLC player to open."""
+    what it is. One window: the one opened before is closed first. False if there's no VLC
+    player to open."""
+    global _watching
     exe = vlc_player(folder) if folder else None
     if not exe:
         return False
-    subprocess.Popen([exe, dvd_mrl(source) + "#%d" % title], close_fds=True)
+    stop_watching()
+    _watching = subprocess.Popen([exe, dvd_mrl(source) + "#%d" % title], close_fds=True)
     return True
+
+
+def stop_watching():
+    """Close the VLC window watch_title opened, if it's still open: before the drive is needed
+    (a scan, a stakeout, a rip), and as the app closes. Left open, VLC windows reading a disc
+    that's been changed can hang, beyond closing, till the next sign-in."""
+    global _watching
+    p, _watching = _watching, None
+    if p is not None and p.poll() is None:
+        try:
+            p.kill()
+        except OSError:
+            pass
 
 
 class _Title(ctypes.Structure):
@@ -766,7 +793,7 @@ def end_session():
 # a disc's menu data (dvd_structure) never changes: read once, kept by fingerprint in your data
 # folder, and read back for the next stakeout (WALL-E's 443 pages: two minutes off the drive).
 # Bumped whenever dvd_structure gives more or other than before: older copies are read again
-STRUCTURE_VERSION = 1
+STRUCTURE_VERSION = 2              # 2: when each program's buttons come on (buttons_at)
 
 
 def _structure_file(content_hash, home=None):
@@ -986,7 +1013,9 @@ def _lead_in(pages, st):
     # up to the first program with buttons (Enchanted's main menu has them from its first: no wait)
     k = next((i for i in range(1, min(st[2], len(starts)) + 1) if i <= len(progs) and progs[i - 1]), st[2])
     first = starts[k - 1] if 0 < k <= len(starts) else 1
-    return sum(c.get("seconds") or 0 for c in (p.get("cells") or [])[:first - 1])
+    at = p.get("buttons_at") or []             # (and into that program, till its buttons come on)
+    return sum(c.get("seconds") or 0 for c in (p.get("cells") or [])[:first - 1]) + \
+        (at[k - 1] if 0 < k <= len(at) else 0)
 
 
 def _state_buttons(pages, st):
@@ -1969,10 +1998,12 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
     # page a button leads to, before VLC presses anything; and where the disc starts, which VLC
     # is shown first (a disc that plays its film by itself: Menu pressed, as a viewer would).
     # What it can't follow, or answers differently by route, is left for VLC to press.
-    began, engine = {}, {}
+    began, engine, opening = {}, {}, []
     try:
         from . import dvdvm
-        began, engine, reached = dvdvm.explore(dvdvm.Engine(dvdvm.Disc(drive, structure)))
+        eng = dvdvm.Engine(dvdvm.Disc(drive, structure))
+        began, engine, reached = dvdvm.explore(eng)
+        opening = dvdvm.opening(eng)            # (a player's previews before the menu: VLC skips them)
         near = _reachable(states, began, engine, reached)
         if near is not None:
             states = c.states = near
@@ -2276,7 +2307,8 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
     c.pool.shutdown(wait=False)
     c.more.shutdown(wait=False)
     out = {"drive": drive, "titles": titles, "start": list(start), "minutes": round((time.time() - t0) / 60, 1),
-           "pages": result, "chapters": {t["title"]: t["chapters"] for t in structure.get("titles", [])}}
+           "pages": result, "chapters": {t["title"]: t["chapters"] for t in structure.get("titles", [])},
+           "opening": opening}
     out["found"] = menu_titles(out)
     out["found"]["pictures"] = title_pictures(out, out_dir)
     with open(os.path.join(out_dir, "crawl.json"), "w", encoding="utf-8") as fh:
@@ -2453,8 +2485,11 @@ def menu_titles(out):
     ftext = max([x["text"] for x in by[feature] if x.get("chapter") in (1, None)] or [""], key=_wordy)
     feature_name = nice_name(ftext) if _wordy(ftext) > 0 and not _play_text(ftext) and \
         not PLAY_ALL_RE.search(ftext) else ""
+    # what a player shows before the menu, no button playing it: its previews
+    offered = {feature} | {e["title"] for e in extras} | set(promos) | set(play_alls)
+    opening = [t for t in out.get("opening") or [] if t not in offered]
     return {"feature": feature, "feature_name": feature_name, "extras": extras, "promos": promos,
-            "promo_names": promo_names, "play_alls": play_alls}
+            "promo_names": promo_names, "play_alls": play_alls, "opening": opening}
 
 
 # what an ad is called, in words that say it's an ad (core.AD_RE knows them: a TheDiscDB name
@@ -2616,8 +2651,11 @@ def title_pictures(out, out_dir):
     """For each title a menu button plays, the button to show for it: {title: {"image": the
     page's picture (a path), "rect": the button's [x0, y0, x1, y1] (the disc's 720x480), "text":
     its words as read}}. Only pages read have a picture; of a title's buttons, the one read
-    best (the film: its Play button sooner than a scene's; nothing read, the first)."""
+    best (the film: its Play button sooner than a scene's; nothing read, the first). The
+    feature's, though: the button nearest the menu the disc opens on, as a viewer plays the film
+    (WALL-E's main menu Play, read as "DO", not a commentary page's "Play Film" three presses on)."""
     best = {}
+    feature = (out.get("found") or {}).get("feature")
     for p in out["pages"]:
         if not p.get("image"):
             continue
@@ -2635,6 +2673,8 @@ def title_pictures(out, out_dir):
             # (and one that says it's an ad over one saying nothing: The Sorcerer's Apprentice's title
             # 66, FastPlay's first sneak peek too, but "Peeks" names it, "Ploy" doesn't)
             rank = (score if score >= 6 else 0, _ad_text(b.get("text")), b["plays"].get("chapter") == 1, -b["n"])
+            if t == feature:                    # (from its start, then nearest the first menu)
+                rank = (b["plays"].get("chapter") == 1, -len(p.get("route") or [])) + rank
             if t not in best or rank > best[t][0]:
                 best[t] = (rank, {"image": os.path.join(out_dir, p["image"]), "rect": list(b["rect"]),
                                   "text": b.get("text") or ""})
@@ -2669,6 +2709,8 @@ def detected_labels(found, titles, keep=()):
     feature = "Title %d" % found["feature"] if found.get("feature") else None
     promos = {"Title %d" % n for n in found.get("promos") or []}
     promo_names = {"Title %d" % int(n): name for n, name in (found.get("promo_names") or {}).items()}
+    # what a player shows before the menu: its previews (Jurassic World's preview reel)
+    opening = {"Title %d" % n for n in found.get("opening") or []}
     played = lambda tid: tid in named or tid == feature or tid in promos
     # the feature named by its button only beside another cut ("Signature Edition")
     cuts = any(t["id"] in named and t.get("role") in ("feature", "version") for t in titles)
@@ -2683,7 +2725,7 @@ def detected_labels(found, titles, keep=()):
     out = {}
     for t in titles:
         tid = t["id"]
-        offered = played(tid)
+        offered = played(tid) or tid in opening
         if tid in keep or tid in play_alls or tid in twins.values() or (t.get("role") in COPY_ROLES and tid not in twins) or \
                 (t.get("role") in HIDDEN_ROLES and not offered):
             continue
@@ -2703,6 +2745,9 @@ def detected_labels(found, titles, keep=()):
                                      if tid in others else "the menus: an extra")}
         elif tid in promos:
             out[tid] = {"type": "Promo", "title": promo_names.get(tid), "note": said(tid, "the menus: an ad")}
+        elif tid in opening:
+            out[tid] = {"type": "Promo", "title": "Previews",
+                        "note": "plays before the menu on a player (VLC skips it): previews, as a rule"}
         else:
             out[tid] = {"type": "Promo", "title": None, "note": "the menus: nothing plays it"}
     return out
@@ -2725,6 +2770,9 @@ def found_text(found):
     if found.get("play_alls"):
         lines.append("Play all: title%s %s" % ("s" if len(found["play_alls"]) > 1 else "",
                                                ", ".join(map(str, found["play_alls"]))))
+    if found.get("opening"):
+        lines.append("Previews: title%s %s (before the menu, on a player)" % (
+            "s" if len(found["opening"]) > 1 else "", ", ".join(map(str, found["opening"]))))
     return "\n".join(lines)
 
 

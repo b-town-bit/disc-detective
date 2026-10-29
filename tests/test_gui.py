@@ -1479,3 +1479,42 @@ def test_a_4k_discs_film_says_so():
     rep["titles"][0]["video_info"] = {"codec": "AVC", "height": 1080}
     rep["titles"][1]["video_info"] = {"codec": "HEVC", "height": 2160}
     assert dd_app.picture_format(rep) == (False, None)
+
+
+def test_the_themed_scrollbar():
+    """The study's scrollbar: a pill sized to the view's share, at its place along the bar;
+    wider and full brass under the pointer; dragging it, clicking beside it and the wheel over it
+    ask its command what a ttk.Scrollbar would."""
+    from disc_detective import theme as th
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display")
+    try:
+        asked = []
+        bar = th.ScrollBar(root, command=lambda *a: asked.append(a), bg=th.VELLUM_100)
+        bar.place(x=0, y=0, width=th.px(16), height=400)
+        root.update()
+        bar.set(0.25, 0.5)
+        start, n = bar._span()
+        gap = th.px(bar.GAP)
+        assert abs(n - round((400 - 2 * gap) * 0.25)) <= 1
+        assert abs(start - (gap + round((400 - 2 * gap - n) * 0.25 / 0.75))) <= 1
+        assert bar.get() == (0.25, 0.5)
+        rest = bar._imgs.copy()
+        bar._hover(True)                                     # under the pointer: the wider, brass one
+        assert set(bar._imgs) - set(rest)
+        assert max(k[0] for k in bar._imgs) == th.px(bar.WIDE)
+        ev = lambda y, **kw: type("E", (), dict({"x": 3, "y": y}, **kw))()
+        bar._press(ev(start + 5))                            # taken hold of, and dragged to the end
+        bar._move(ev(400))
+        assert asked[-1][0] == "moveto" and abs(asked[-1][1] - 0.75) < 0.01
+        bar._release(ev(start + 5))
+        bar._press(ev(2))                                    # above it: a page up
+        assert asked[-1] == ("scroll", -1, "pages")
+        bar._wheel(ev(0, delta=-120, num=None))              # the wheel: 3 rows down
+        assert asked[-1] == ("scroll", 3, "units")
+        bar.set(0.0, 1.0)                                    # everything in view: no thumb
+        assert bar._span() is None and bar.itemcget(bar._thumb, "state") == "hidden"
+    finally:
+        root.destroy()

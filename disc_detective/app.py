@@ -722,8 +722,8 @@ class NotesWindow:
         f.pack(fill="both", expand=True)
         self.text = tk.Text(f, wrap="none", font=("Consolas" if os.name == "nt" else "Courier", 9),
                             height=20, width=100, relief="flat", borderwidth=0)
-        ys = ttk.Scrollbar(f, orient="vertical", command=self.text.yview)
-        xs = ttk.Scrollbar(f, orient="horizontal", command=self.text.xview)
+        ys = th.ScrollBar(f, orient="vertical", command=self.text.yview)
+        xs = th.ScrollBar(f, orient="horizontal", command=self.text.xview)
         self.text.configure(yscrollcommand=autohide(ys), xscrollcommand=autohide(xs))
         self.text.grid(row=0, column=0, sticky="nsew")
         ys.grid(row=0, column=1, sticky="ns")
@@ -1300,6 +1300,9 @@ class App:
 
     def set_busy(self, busy, ripping=False):
         self.busy, self.ripping = busy, ripping
+        if busy:                                # (the drive's needed: a title playing in VLC is closed)
+            from . import menus
+            menus.stop_watching()
         self.scan_btn.config(state="disabled" if busy else "normal")
         self.drive_btn.config(state="disabled" if busy else "normal")
         if ripping:
@@ -2399,6 +2402,8 @@ class App:
             return
         self.cancel()
         self.stop_prescan()
+        from . import menus
+        menus.stop_watching()                   # (a title playing in VLC: closed with the app)
         self.remember()
         di.logger.removeHandler(self._notes_handler)
         self.root.destroy()
@@ -2612,7 +2617,7 @@ class ScrollArea(ttk.Frame):
         bg = ttk.Style(self).lookup("TFrame", "background") or None
         self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0, yscrollincrement=20,
                                 **({"background": bg} if bg else {}))
-        self.bar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.bar = th.ScrollBar(self, orient="vertical", command=self.canvas.yview, bg=bg)
         self.canvas.configure(yscrollcommand=self.bar.set)
         self.inner = ttk.Frame(self.canvas)
         self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
@@ -2742,6 +2747,7 @@ class DeskScroll(ScrollArea):
         super().__init__(parent)
         self.configure(style="Desk.TFrame")
         self.canvas.configure(background=th.PARCHMENT)
+        self.bar.recolour(th.PARCHMENT)
         self.inner.configure(style="Desk.TFrame")
         self.item = self.canvas.find_all()[0]
         self.canvas.bind("<Configure>", lambda e: (self.canvas.itemconfigure(self.item, width=e.width), self.fit()))
@@ -2997,6 +3003,8 @@ class TitlesDialog:
             return False
 
     def close(self):
+        from . import menus
+        menus.stop_watching()                   # (a title it played in VLC: closed with it)
         for w in (self.viewer, self.guide):
             if w is not None and w.alive():
                 w.top.destroy()
@@ -4189,7 +4197,7 @@ class HelpDiscDBDialog:
             for c, head, w in cols:
                 tv.heading(c, text=head, anchor="w")
                 tv.column(c, width=w, anchor="w", stretch=c in ("title", "disc"))
-            ys = ttk.Scrollbar(box, orient="vertical", command=tv.yview)
+            ys = th.ScrollBar(box, orient="vertical", command=tv.yview)
             tv.configure(yscrollcommand=ys.set)
             tv.pack(side="left", fill="both", expand=True)
             ys.pack(side="right", fill="y")

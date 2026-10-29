@@ -60,13 +60,80 @@ def test_a_disc_from_first_play_to_a_button():
     # (button 2 of page 1 only sets GPRM1 = 7: it stays on the page)
     eng = dvdvm.Engine(disc)
     p, out = eng.start()
-    assert out["menu"] == (1, 1, 1) and [x["title"] for x in out["played"]] == [1]
+    # (as VLC opens a disc: the clip the first-play program jumps to isn't played; title 1, then
+    # the Title menu (none here), then the Root menu)
+    assert out["menu"] == (1, 1, 1) and "played" not in out
+    assert eng._start_played()[1]["menu"] == (1, 1, 1)                      # (a player: the clip first)
+    assert [x["title"] for x in eng._start_played()[1]["played"]] == [1]
     assert dvdvm.answer(eng.press(p, 1)) == {"plays": 2, "chapter": 2, "before": []}
     assert dvdvm.answer(eng.press(p, 2)) == {"stays": True}
     start, found, menus = dvdvm.explore(eng)
     assert start["goes_to"] == (1, 1, 1) and "menu_key" not in start
     assert found[(1, 1, 1, 1)] == [{"plays": 2, "chapter": 2, "before": []}]
     assert start["menu_goes_to"] == (1, 1, 1)                               # Menu: back to its root menu
+
+
+def test_the_disc_opens_as_vlc_opens_it():
+    """Father of the Bride: its start plays a logo, then 6 minutes of trailers; VLC goes from the
+    first-play program's settings to title 1 (whose pre commands set GPRM6 = 1, their jump
+    ignored), then the Title menu: the main menu, highlighting by GPRM6 (0: button 1, else 2)."""
+    disc = dvdvm.Disc.__new__(dvdvm.Disc)
+    disc.titles = [{"title": 1, "vts": 1, "ttn": 1}, {"title": 2, "vts": 1, "ttn": 2}]
+    disc.first_play = pgc(pre=["7100000900010000", "3002000000020000"])     # GPRM9 = 1; JumpTT 2
+    disc.title_pgcs = {1: {1: pgc(6000, pre=["7100000600010000", "3002000000020000"]),   # GPRM6 = 1; JumpTT 2
+                           2: pgc(360, post=["3008000000830000"])}}          # trailers, then the root menu
+    disc.ptt = {1: {1: [(1, 1)], 2: [(2, 1)]}}
+    # GPRM0 = GPRM6; button 2; GPRM15 = 0; if GPRM15 == GPRM0: button 1
+    main = pgc(pre=["6100000000060000", "5600000008000000", "7100000f00000000", "5620000004000f00"])
+    disc.menus = {"vmgm": {1: ("title", True, pgc(pre=["2004000000000002"])),     # the title menu: to PGC 2
+                           2: ("", False, pgc(pre=["3006000101830000"]))},        # JumpSS the root menu
+                  1: {1: ("root", True, main)}}
+    btn = lambda n: {"n": n, "raw": "3002000000010000", "rect": [0, 0, 1, 1], "auto": False, "up": 0,
+                     "down": 0, "left": 0, "right": 0, "cmd": {}}
+    disc.buttons = {(1, 1): [[btn(1), btn(2)]]}
+    eng = dvdvm.Engine(disc)
+    p, out = eng.start()
+    assert out["menu"] == (1, 1, 1) and out["button"] == 2 and "played" not in out
+    assert p.gprm[9] == 1 and p.gprm[6] == 1
+    # a player, from first play: the trailers, and GPRM6 never set
+    p2, out2 = eng._start_played()
+    assert out2["button"] == 1 and [x["title"] for x in out2["played"]] == [2]
+
+
+def test_the_page_left_forces_the_highlight():
+    """libdvdnav forces the highlight at a cell change, to the forced button of the video before
+    it: Enchanted's Bonus page forces button 1; its Main Menu button asks the main menu for button
+    3 (the one last used), and VLC shows 1. The main menu's own forced button counts only at its
+    next cell change: it doesn't force anything on arrival."""
+    disc = dvdvm.Disc.__new__(dvdvm.Disc)
+    disc.titles, disc.ptt, disc.title_pgcs, disc.first_play = [], {}, {}, None
+    disc.menus = {1: {1: ("root", True, pgc(pre=["7500000b04000000", "46000000000b0000"])),   # button = GPRM11
+                      2: ("", False, pgc())}}
+    btn = lambda n, raw, forced=False: {"n": n, "raw": raw, "rect": [0, 0, 1, 1], "cmd": {}, "forced": forced}
+    disc.buttons = {(1, 1): [[btn(1, "2004000000000002", True), btn(2, "2004000000000002"), btn(3, "2004000000000002")]],
+                    (1, 2): [[btn(1, "7104000b00030001", True), btn(2, "7104000b00030001")]]}  # GPRM11 = 3; main
+    eng = dvdvm.Engine(disc)
+    p = dvdvm.Player(disc)
+    p.domain, p.pgcn = 1, 2
+    page = eng._waits(p, [])["player"]
+    assert eng.press(page, 2)["button"] == 1                 # (the page left forces 1)
+    page.fosl = 0                                             # a page forcing nothing: the program's 3
+    assert eng.press(page, 2)["button"] == 3
+
+
+def test_a_menu_counts_the_wait_till_its_buttons_come_on():
+    """Father of the Bride's Bonus page: buttons from 2.75 s into its first cell; keys before then
+    do nothing, so the page's intro is that long."""
+    disc = dvdvm.Disc.__new__(dvdvm.Disc)
+    disc.titles, disc.ptt, disc.title_pgcs, disc.first_play = [], {}, {}, None
+    disc.menus = {1: {1: ("root", True, pgc(pre=["2004000000000002"])), 2: ("", False, pgc(40))}}
+    btn = {"n": 1, "raw": "2004000000000002", "rect": [0, 0, 1, 1], "cmd": {}}
+    disc.buttons = {(1, 2): [[btn]]}
+    disc.buttons_at = {(1, 2): [2.75]}
+    p = dvdvm.Player(disc)
+    p.domain, p.pgcn = 1, 1
+    out = dvdvm.Engine(disc).follow(p, {"op": "pgcn", "n": 2}, through=False)
+    assert out["menu"] == (1, 2, 1) and out["intro"] == 2.75
 
 
 def test_a_chapter_link_skips_the_titles_pre_commands():

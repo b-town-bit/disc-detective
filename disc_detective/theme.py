@@ -707,6 +707,154 @@ class Gauge(tk.Canvas):
         self.coords(self._fill, x, inset)
 
 
+class ScrollBar(tk.Canvas):
+    """A scrollbar in the study's colours, as modern apps have them: a thin rounded pill, no
+    arrows and no trough; pale brass at rest, so it keeps out of the way, full brass and a little
+    wider under the pointer or while it's dragged. Takes what the app asks of a ttk.Scrollbar
+    (command, set, get), so it drops in for one; the wheel over it scrolls what it scrolls."""
+
+    THIN, WIDE, GAP, LEAST = 7, 10, 3, 28    # px: at rest, under the pointer, either side, shortest
+
+    def __init__(self, parent, orient="vertical", command=None, bg=None):
+        self._bg = bg or ttk.Style().lookup("TFrame", "background") or VELLUM_100
+        self._v = orient == "vertical"
+        side = px(self.WIDE + 2 * self.GAP)
+        super().__init__(parent, background=self._bg, highlightthickness=0, bd=0,
+                         **({"width": side} if self._v else {"height": side}))
+        self._cmd = command
+        self._lo, self._hi = 0.0, 1.0
+        self._hot, self._grab, self._acc = False, None, 0.0
+        self._imgs = {}
+        self._rest, self._lit = self._resting(self._bg), BRASS_600
+        self._thumb = self.create_image(0, 0, anchor="nw")
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Enter>", lambda e: self._hover(True))
+        self.bind("<Leave>", lambda e: self._hover(False))
+        self.bind("<ButtonPress-1>", self._press)
+        self.bind("<B1-Motion>", self._move)
+        self.bind("<ButtonRelease-1>", self._release)
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.bind(seq, self._wheel)
+
+    # ---- ttk.Scrollbar's calls ----
+    def set(self, lo, hi):
+        self._lo, self._hi = float(lo), float(hi)
+        self._draw()
+
+    def get(self):
+        return self._lo, self._hi
+
+    def configure(self, cnf=None, **kw):
+        kw = dict(cnf or {}, **kw)
+        if "command" in kw:
+            self._cmd = kw.pop("command")
+        if kw:
+            super().configure(**kw)
+    config = configure
+
+    def recolour(self, bg):
+        """On another background (the desk's parchment): its resting brass mixed to suit."""
+        self._bg, self._rest = bg, self._resting(bg)
+        super().configure(background=bg)
+        self._imgs.clear()
+        self._draw()
+
+    def _resting(self, bg):
+        """The thumb at rest: brass, three quarters of the way from the background (any colour
+        Tk knows, a system one included)."""
+        r, g, b = (v >> 8 for v in self.winfo_rgb(bg))
+        return _blend("#%02x%02x%02x" % (r, g, b), BRASS_400, 0.75)
+
+    # ---- where the thumb is ----
+    def _length(self):
+        return self.winfo_height() if self._v else self.winfo_width()
+
+    def _span(self):
+        """(start, length) of the thumb along the bar, in pixels; None: nothing to scroll."""
+        room = self._length() - 2 * px(self.GAP)
+        share = self._hi - self._lo
+        if room <= 0 or share >= 1.0:
+            return None
+        n = max(min(px(self.LEAST), room), round(room * share))
+        start = round((room - n) * self._lo / (1.0 - share)) if share < 1.0 else 0
+        return px(self.GAP) + max(0, min(start, room - n)), n
+
+    # ---- the pointer ----
+    def _hover(self, on):
+        self._hot = on
+        self._draw()
+
+    def _at(self, e):
+        return e.y if self._v else e.x
+
+    def _press(self, e):
+        span = self._span()
+        if not span or not self._cmd:
+            return
+        start, n = span
+        if start <= self._at(e) <= start + n:
+            self._grab = self._at(e) - start            # dragged by where it was taken hold of
+            self._draw()
+        else:                                           # the bar beside it: a page that way
+            self._cmd("scroll", -1 if self._at(e) < start else 1, "pages")
+
+    def _move(self, e):
+        span = self._span()
+        if self._grab is None or not span or not self._cmd:
+            return
+        room = self._length() - 2 * px(self.GAP) - span[1]
+        if room > 0:
+            frac = (self._at(e) - self._grab - px(self.GAP)) / room
+            self._cmd("moveto", max(0.0, min(1.0, frac)) * (1.0 - (self._hi - self._lo)))
+
+    def _release(self, e):
+        self._grab = None
+        self._hot = 0 <= e.x < self.winfo_width() and 0 <= e.y < self.winfo_height()
+        self._draw()
+
+    def _wheel(self, e):
+        if not self._cmd:
+            return "break"
+        if getattr(e, "num", None) in (4, 5):
+            units = -3 if e.num == 4 else 3
+        else:
+            self._acc += -float(getattr(e, "delta", 0) or 0) / 40.0   # 120 a notch: 3 rows
+            units = int(self._acc)
+            self._acc -= units
+        if units:
+            self._cmd("scroll", units, "units")
+        return "break"
+
+    # ---- drawing ----
+    def _pill(self, w, h, colour):
+        """A pill w by h (anti-aliased: drawn four times over and shrunk)."""
+        from PIL import Image, ImageDraw
+        k = 4
+        img = Image.new("RGBA", (w * k, h * k), (0, 0, 0, 0))
+        ImageDraw.Draw(img).rounded_rectangle((0, 0, w * k - 1, h * k - 1), min(w, h) * k // 2, fill=colour)
+        return img.resize((w, h), Image.LANCZOS)
+
+    def _draw(self):
+        span = self._span()
+        if not span:
+            self.itemconfigure(self._thumb, state="hidden")
+            return
+        start, n = span
+        lit = self._hot or self._grab is not None
+        t = px(self.WIDE if lit else self.THIN)
+        colour = self._lit if lit else self._rest
+        w, h = (t, n) if self._v else (n, t)
+        key = (w, h, colour)
+        if key not in self._imgs:
+            if len(self._imgs) > 40:              # (lengths come and go as windows resize)
+                self._imgs.clear()
+            self._imgs[key] = _photo(self._pill(w, h, colour))
+        across = (self.winfo_width() if self._v else self.winfo_height()) - t
+        x, y = (across // 2, start) if self._v else (start, across // 2)
+        self.itemconfigure(self._thumb, image=self._imgs[key], state="normal")
+        self.coords(self._thumb, x, y)
+
+
 ART_DIR = os.path.join(HERE, "art")
 
 

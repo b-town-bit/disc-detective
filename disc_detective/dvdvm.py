@@ -6,7 +6,7 @@ go to menu page 8"), and every menu page has commands of its own that run on the
 its end ("if register 4 is 2, play title 10"). A player keeps 16 registers the disc can set and
 24 of its own (language, region, which title is playing...) and runs those commands as you press.
 This module does the same, from the IFO files and the menus' button tables (menus.dvd_structure):
-start the disc as a player would (its first-play program, any warnings it plays first), reach the
+start the disc as VLC does (its first-play program's settings, title 1's, then its Title menu), reach the
 menu it settles on, and from there press any button and follow where it goes, to a menu page or
 to a title. The command set, its bit layout and its arithmetic follow the DVD spec as libdvdnav
 (VLC's DVD library) implements it, so the answers are what VLC would do.
@@ -29,6 +29,10 @@ class Unsure(Exception):
     """The engine can't follow this faithfully (random numbers, timers, a loop...)."""
 
 
+class _AtTitle(Exception):
+    """Starting the disc as VLC does: the first-play program has reached a title."""
+
+
 def bits(cmd, start, count):
     """Bits of an 8-byte command, libdvdnav's way: start counts from the least significant bit
     (63 is the first byte's top bit), and count bits are taken going down from there."""
@@ -49,6 +53,8 @@ class Disc:
     """The disc's programs: the first-play PGC, the menu PGCs of the VMG and of each title set
     (their first language unit), each title set's title PGCs and chapter map, the title table,
     and the menus' buttons (from menus.dvd_structure: pages and their programs' buttons)."""
+
+    buttons_at = {}                         # (when each program's buttons come on: none known)
 
     def __init__(self, root, structure):
         vt = os.path.join(root, "VIDEO_TS") if os.path.isdir(os.path.join(root, "VIDEO_TS")) else root
@@ -77,12 +83,13 @@ class Disc:
             self.ptt[v] = {i + 1: [(_u16(ifo, o), _u16(ifo, o + 2)) for o in range(offs[i], offs[i + 1] - 3, 4)]
                            for i in range(n)}
         # buttons by (domain, pgc): each program's
-        self.buttons = {}
-        for p in structure.get("vmgm", []):
-            self.buttons[("vmgm", p["pgc"])] = p.get("program_buttons") or [p["buttons"]]
-        for v, pages in structure.get("vtsm", {}).items():
+        # (and the seconds into each program that its buttons come on)
+        self.buttons, self.buttons_at = {}, {}
+        for d, pages in [("vmgm", structure.get("vmgm", []))] + [(int(v), pages) for v, pages in
+                                                                  structure.get("vtsm", {}).items()]:
             for p in pages:
-                self.buttons[(int(v), p["pgc"])] = p.get("program_buttons") or [p["buttons"]]
+                self.buttons[(d, p["pgc"])] = p.get("program_buttons") or [p["buttons"]]
+                self.buttons_at[(d, p["pgc"])] = p.get("buttons_at") or []
 
     def title_of(self, vts, ttn):
         return next((t["title"] for t in self.titles if (t["vts"], t["ttn"]) == (vts, ttn)), None)
@@ -133,10 +140,11 @@ class Player:
         self.resume = None                                # where LinkRSM returns to (after a CallSS)
         self.count = 0
         self.intro = 0.0                                  # seconds of menu played since the press
+        self.fosl = 0                                     # the forced button of the menu video showing
 
     def copy(self):
         p = Player(self.disc)
-        p.gprm, p.sprm = list(self.gprm), list(self.sprm)
+        p.gprm, p.sprm, p.fosl = list(self.gprm), list(self.sprm), self.fosl
         p.domain, p.pgcn, p.pgn, p.resume, p.cell = self.domain, self.pgcn, self.pgn, self.resume, self.cell
         return p
 
@@ -337,6 +345,7 @@ class Engine:
         self.disc = disc
         self.short = short_title              # a title this short (a warning, an outtake) plays through
         self.menu_key = False                 # starting the disc, a viewer had to press Menu
+        self.to_title = False                 # starting the disc: stop as the first title begins
 
     # ---- where things are ----
     def pgc(self, p):
@@ -353,17 +362,60 @@ class Engine:
 
     # ---- the runs ----
     def start(self):
-        """From the disc's first-play program to the menu it waits on: (player, outcome). No
-        first-play program: the title menu, as a player does."""
+        """Opening the disc as VLC does ("start directly in menu", its default): the disc's
+        first-play program up to the first title it plays (its registers set, the title not
+        played), then title 1 (its pre commands only: libdvdnav runs them, a jump in them
+        ignored), then the Title menu, else the Root menu, as called from there. (player,
+        outcome): the menu it waits on. A player plays the start through instead: Father of the
+        Bride's 6 minutes of trailers, which VLC never shows, and its main menu then highlights
+        another button (title 1's commands set the register it reads)."""
+        p = Player(self.disc)
+        self.menu_key = False
+        if self.disc.first_play:
+            self.to_title = True
+            try:
+                self.enter(p, "fp", 0, through=True)
+            except _AtTitle:
+                pass
+            finally:
+                self.to_title = False
+        t = next((t for t in self.disc.titles if t["title"] == 1), None)
+        chapters = self.disc.ptt.get(t["vts"], {}).get(t["ttn"]) if t else None
+        pg = self.disc.title_pgcs.get(t["vts"], {}).get(chapters[0][0]) if chapters else None
+        if pg is None:                        # (no title 1: the first-play program's way, played through)
+            return self._start_played()
+        pgcn, pgn = chapters[0]
+        p.domain, p.pgcn, p.pgn, p.cell = ("tt", t["vts"]), pgcn, pgn, None
+        p.sprm[4], p.sprm[5], p.sprm[6], p.sprm[7] = 1, t["ttn"], pgcn, 1
+        try:
+            p.run(pg["pre"])
+        except Unsure:
+            return self._start_played()
+        p.resume = (p.domain, pgcn, pgn)
+        out = {"unsure": "no title menu"}
+        if self.disc.menu_pgc("vmgm", "title"):
+            out = self.follow(p.copy(), {"op": "vmgm_menu", "menu": 2, "call": True}, through=True)
+        if "menu" not in out:
+            self.menu_key = False
+            out = self.follow(p.copy(), {"op": "vtsm", "menu": 3, "call": True}, through=True)
+        if "menu" not in out:
+            return self._start_played()
+        if self.menu_key:                     # it only got to a menu by a viewer pressing Menu
+            out["menu_key"] = True
+        return out["player"], out
+
+    def _start_played(self):
+        """The disc started as a player does: its first-play program played through to the menu
+        it waits on. No first-play program: the title menu."""
         p = Player(self.disc)
         self.menu_key = False
         if self.disc.first_play:
             out = self.enter(p, "fp", 0, through=True)
         else:
             out = self.follow(p, {"op": "vmgm_menu", "menu": 2}, through=True)
-        if self.menu_key:                     # it only got to a menu by a viewer pressing Menu
+        if self.menu_key:
             out["menu_key"] = True
-        return p, out
+        return out.get("player") or p, out
 
     def press(self, player, n):
         """Press button n of the menu the player waits on (a copy is used): the outcome.
@@ -435,7 +487,13 @@ class Engine:
             link = p.run(pg["pre"])
             if link:
                 return self._link(p, link, through, played)
+        if isinstance(domain, tuple):
+            p.fosl = 0                        # (a title's video forces no button)
+        elif pg.get("cells"):                 # (a page of commands only plays nothing: no cell change)
+            self._forced(p)
         if isinstance(domain, tuple):         # a title
+            if self.to_title:
+                raise _AtTitle()
             title, chapter = self.disc.where_in_title(domain[1], pgcn, pgn)
             p.sprm[4] = title or p.sprm[4]
             p.sprm[5] = next((t["ttn"] for t in self.disc.titles if t["title"] == title), p.sprm[5])
@@ -473,15 +531,32 @@ class Engine:
         return bool(cells) and not any(c.get("still") for c in cells) and \
             0 < sum(c.get("seconds") or 0 for c in cells) < FLEETING
 
+    @staticmethod
+    def _forced(p):
+        """A cell change: libdvdnav forces the highlight to the forced button of the navigation
+        packet it read last, so of the video before the change, not the one coming (its "not
+        really the right place to do this"). Coming to a page, the page left decides: Enchanted's
+        pages force button 1, and back on its main menu, which asks for the button last used, VLC
+        highlights 1; a page's own forced button counts only at its next cell change."""
+        if p.fosl:
+            p.sprm[8] = p.fosl << 10
+        p.fosl = 0                            # (the coming video's: known as its cells play)
+
     def _waits(self, p, played):
-        """The outcome for a menu that waits for the viewer, with its highlighted button, as a
-        player picks it (libdvdnav): the page's forced one, else the one SPRM 8 holds if the page
-        has it, else button 1."""
+        """The outcome for a menu that waits for the viewer, with its highlighted button, as
+        libdvdnav picks it: the one SPRM 8 holds (the page's commands, or a forced button: _forced)
+        if the page has it, else button 1. The page's own forced button is the one forced at the
+        next cell change, a press away from here included."""
         btns = self.buttons(p)
-        n = next((b["n"] for b in btns if b.get("forced")), None) or p.sprm[8] >> 10
+        n = p.sprm[8] >> 10
         if not any(b["n"] == n for b in btns):
             n = 1
         p.sprm[8] = n << 10
+        p.fosl = next((b["n"] for b in btns if b.get("forced")), 0)
+        at = self.disc.buttons_at.get((p.domain, p.pgcn)) or []
+        starts = (self.pgc(p) or {}).get("program_cells") or [1]
+        if 0 < p.pgn <= min(len(at), len(starts)) and p.cell in (None, starts[p.pgn - 1]):
+            p.intro += at[p.pgn - 1]            # (from the program's start: till its buttons come on)
         out = {"menu": (p.domain, p.pgcn, p.pgn), "player": p, "button": n, "intro": p.intro}
         if played:
             out["played"] = played
@@ -498,6 +573,11 @@ class Engine:
             p.cell = n
             if n != first:                    # the cell before has played (a menu's intro, say)
                 p.intro += cells[n - 2].get("seconds") or 0
+                if not isinstance(p.domain, tuple):
+                    q = self._program_of(pg, n - 1)
+                    progs = self.disc.buttons.get((p.domain, p.pgcn)) or []
+                    p.fosl = next((b["n"] for b in (progs[q - 1] if q <= len(progs) else []) if b.get("forced")), 0)
+                    self._forced(p)
             if n != first and n in starts and not isinstance(p.domain, tuple):
                 # a menu's next program: if it has buttons, the disc waits there for the viewer
                 # (The Sorcerer's Apprentice: Tinker Bell, then the FastPlay chooser, one page)
@@ -664,6 +744,22 @@ def explore(engine, max_menus=MAX_MENUS):
         return _explore(engine, max_menus)
     finally:
         sys.setrecursionlimit(limit)
+
+
+def opening(engine, least=60):
+    """The titles a player plays before the disc's menu, at least least seconds long (the
+    warnings and logos are shorter): the previews on a player, which VLC (starting in the menu)
+    never shows, and no menu button plays (Father of the Bride's 6 minutes of trailers,
+    Jurassic World's preview reel)."""
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(max(limit, DEEP))
+    try:
+        _, out = engine._start_played()
+    except (Unsure, RecursionError):
+        return []
+    finally:
+        sys.setrecursionlimit(limit)
+    return [x["title"] for x in out.get("played", []) if x["title"] and (x["seconds"] or 0) >= least]
 
 
 def _explore(engine, max_menus):
