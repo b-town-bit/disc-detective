@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -100,6 +101,18 @@ def test_a_refused_read_says_so(monkeypatch):
 
 def _btn(n, cmd, up=0, down=0, auto=False):
     return {"n": n, "rect": [0, 0, 10, 10], "auto": auto, "up": up, "down": down, "left": 0, "right": 0, "cmd": cmd}
+
+
+def test_a_button_playing_one_title_from_its_routes_chapter():
+    """The Iron Giant's edition chooser: Play and each of its 34 scenes lead to it, so Signature
+    Edition plays title 1 from chapter 1 to 34, by route. It plays title 1 (from the start, as
+    Play has it), no press needed; two titles by route, or no Play's route, aren't this."""
+    by_route = [{"plays": 1, "chapter": c, "before": []} for c in range(1, 35)]
+    assert menus._one_title_by_route(by_route) == {"title": 1, "chapter": 1}
+    assert menus._one_title_by_route(by_route[:1]) is None                       # (one answer: as ever)
+    assert menus._one_title_by_route(by_route + [{"plays": 2, "chapter": 1}]) is None
+    assert menus._one_title_by_route(by_route[1:]) is None                       # (no chapter 1)
+    assert menus._one_title_by_route(by_route + [{"goes_to": (1, 2, 1)}]) is None
 
 
 def test_crawl_routes_and_moves():
@@ -213,7 +226,8 @@ def test_vlc_dvd_menu_when_the_film_plays_instead(monkeypatch):
 
 
 def test_plain_names_for_unreadable_words():
-    words = {"sneak", "peeks", "making", "enchanted", "fairy", "tale", "deleted", "scenes"}
+    words = {"sneak", "peeks", "making", "enchanted", "fairy", "tale", "deleted", "scenes", "serenade",
+             "extraterrestrials"}
     is_word = lambda w: w.lower() in words
     assert menus.readable("The Making of Enchanted", is_word)
     assert menus.readable("Deleted Scenes 2", is_word)
@@ -239,6 +253,23 @@ def test_plain_names_for_unreadable_words():
     assert [e["name"] for e in menus.plain_names(muppets, is_word)["extras"]] == \
         ["Cardshark Serenade", "Expectorating Extraterrestrials"]
     assert [e["name"] for e in menus.plain_names(dict(muppets, reader=None), is_word)["extras"]] == ["", ""]
+    # though a scrap of a name cut off isn't (Spider-Man's TV Spots: "22", "AMPION")
+    scraps = dict(muppets, extras=[{"title": 20, "name": "22"}, {"title": 21, "name": "AMPION"}])
+    assert [e["name"] for e in menus.plain_names(scraps, is_word)["extras"]] == ["", ""]
+    # and a name RapidOCR read sure enough isn't judged at all ("Cingular" at 1.00: no title's
+    # word); one it's less sure of is ("22" at 0.57)
+    sure = dict(muppets, extras=[{"title": 22, "name": "Cingular", "sure": 1.0}, {"title": 20, "name": "22", "sure": 0.57},
+                                 {"title": 24, "name": "Reviow", "sure": 0.9}])
+    assert [e["name"] for e in menus.plain_names(sure, is_word)["extras"]] == ["Cingular", "", ""]
+    # a little less sure, beside names on its page read well: a made-up name stands (Wallace &
+    # Gromit's gadgets); a short word misread doesn't ("Piay All"), nor one alone on its page
+    words |= {"christmas", "shopper", "the", "all"}
+    page = lambda n, name, s, p=(7, 33, 1): {"title": n, "name": name, "sure": s, "page": list(p)}
+    gadgets = dict(muppets, extras=[page(17, "The Soccamatic", 0.937), page(24, "A Christmas Cardomatic", 0.99),
+                                    page(26, "Shopper 13", 0.99), page(15, "Piay All", 0.927),
+                                    page(23, "The 525 Crackervac", 0.953, (7, 26, 1))])
+    assert [e["name"] for e in menus.plain_names(gadgets, is_word)["extras"]] == \
+        ["The Soccamatic", "A Christmas Cardomatic", "Shopper 13", "", ""]
 
 
 def test_known_without_pressing():
@@ -302,8 +333,10 @@ def test_menu_titles():
     found = menus.menu_titles(out)
     assert found["feature"] == 1
     assert found["extras"] == [
-        {"title": 10, "name": "An Invitation to Father of the Bride", "seconds": 637.0, "listed": 635, "kind": None},
-        {"title": 11, "name": "Martin & Short Interview Each Other", "seconds": 316.0, "listed": 313, "kind": None}]
+        {"title": 10, "name": "An Invitation to Father of the Bride", "seconds": 637.0, "listed": 635, "kind": None,
+         "page": [1, 10, 1]},
+        {"title": 11, "name": "Martin & Short Interview Each Other", "seconds": 316.0, "listed": 313, "kind": None,
+         "page": [1, 10, 1]}]
     assert found["promos"] == [6, 9]
     assert "menu says 10:35, plays 10:37" in menus.found_text(found)
     # Father of the Bride Part II: the film's trailer in 2 chapters, an ad reel in 4 (one each)
@@ -372,6 +405,8 @@ def test_detected_labels():
     assert menus.detected_labels({"feature": None, "extras": [], "promos": []}, titles) == {}
     trailer = menus.detected_labels({"feature": 1, "extras": [{"title": 2, "name": "Theatrical Trailer"}]}, titles)
     assert trailer["Title 2"]["type"] == "Trailer"            # TheDiscDB's type for a film's own trailer
+    misread = menus.detected_labels({"feature": 1, "extras": [{"title": 2, "name": "Theatrical Taailer"}]}, titles)
+    assert misread["Title 2"]["type"] == "Trailer"            # a letter misread (Abbott and Costello Go to Mars)
     # what a player shows before the menu (Jurassic World's preview reel, and an 85 s one the
     # scan called junk): previews, even set aside as junk
     reel = [{"id": "Title 10", "role": "feature"}, {"id": "Title 2", "role": "junk"}, {"id": "Title 3", "role": "extra"}]
@@ -510,7 +545,7 @@ def test_a_titles_picture_outlines_the_words_read(tmp_path, monkeypatch):
                                   {"n": 2, "rect": [76, 351, 397, 384], "text": "That's How You Know",
                                    "plays": {"title": 39, "chapter": 1}}]}]}
     asked = []
-    monkeypatch.setattr(menus, "words_area", lambda img, rect, rects: asked.append(rects) or (
+    monkeypatch.setattr(menus, "words_area", lambda img, rect, rects, text=None: asked.append(rects) or (
         [148, 311, 350, 349] if rect[1] == 285 else None))
     pics = menus.title_pictures(out, str(tmp_path))
     assert pics[38]["rect"] == [148, 311, 350, 349] and pics[38]["button"] == [76, 285, 397, 349]
@@ -532,6 +567,31 @@ def test_which_pages_a_round_trip_can_show():
     assert c._returns((1, 1, 1)) and not c._returns((1, 2, 1)) and not c._returns((1, 3, 1))
 
 
+def test_the_highlights_colours_and_the_grey_to_look_over():
+    """A page's navigation packet says what colours its buttons light up in (each button's
+    colour set; the page's palette, from its program): Wallace & Gromit's first menu a black
+    asterisk, its Shorts page a white one. The check looks over the grey farthest from them:
+    white, black; light and dark both, or unknown, mid-grey."""
+    s = bytearray(2048)
+    pci = 0x2D
+    hli = pci + 0x60
+    s[hli + 17] = 2                                         # two buttons
+    s[hli + 22: hli + 26] = bytes([0x00, 0x10, 0x00, 0xF0])  # set 1 selected: pattern colour 1, opaque
+    s[hli + 30: hli + 34] = bytes([0x00, 0x20, 0x00, 0xF0])  # set 2 selected: pattern colour 2
+    s[hli + 46] = 0x40                                      # button 1: colour set 1
+    s[hli + 46 + 18] = 0x80                                 # button 2: colour set 2
+    buttons = menus._nav_buttons(bytes(s))
+    assert [b["lit"] for b in buttons] == [[1], [2]]
+    c = object.__new__(menus._Crawler)
+    palette = [[0, 0, 0], [16, 16, 16], [209, 209, 209]] + [[128, 128, 128]] * 13
+    c.pages = {(7, 25): {"buttons": [{"n": 1, "lit": [1]}], "palette": palette},
+               (7, 26): {"buttons": [{"n": 1, "lit": [2]}], "palette": palette},
+               (7, 27): {"buttons": [{"n": 1, "lit": [1]}, {"n": 2, "lit": [2]}], "palette": palette},
+               (7, 28): {"buttons": [{"n": 1}]}}
+    assert c._backdrop([(7, 25, 1)]) == 255 and c._backdrop([(7, 26, 1)]) == 0
+    assert c._backdrop([(7, 27, 1)]) == 128 and c._backdrop([(7, 28, 1)]) == 128
+
+
 def test_which_of_two_buttons_was_lit():
     """A two-button chooser fits a round trip from either button: the highlight (drawn over a
     button) says which it started on, lit before the press and not after."""
@@ -550,6 +610,28 @@ def test_which_of_two_buttons_was_lit():
         return img
     before, after = frame(chooser[1]["rect"]), frame(chooser[0]["rect"])     # Main Menu lit, then FastPlay
     assert c._lit((1, 43, 1), before, after, 2, 1) and not c._lit((1, 43, 1), before, after, 1, 2)
+
+    # a dark highlight on lighter buttons (Wallace & Gromit's: a black asterisk by the name), the
+    # buttons' pictures each their own colour: what's lit is what looks alike, before and after
+    def menu(lit):
+        img = Image.new("RGB", (720, 480), (190, 190, 120))
+        ImageDraw.Draw(img).rectangle([110, 390, 250, 420], fill=(230, 220, 170))
+        ImageDraw.Draw(img).rectangle([450, 390, 590, 420], fill=(240, 120, 60))
+        ImageDraw.Draw(img).ellipse([lit[0] + 2, 395, lit[0] + 16, 409], fill=(10, 10, 10))
+        return img
+    before, after = menu(chooser[0]["rect"]), menu(chooser[1]["rect"])      # 1 lit, then 2
+    assert c._lit((1, 43, 1), before, after, 1, 2) and not c._lit((1, 43, 1), before, after, 2, 1)
+
+    # over a flat grey (the video blanked white, for a black highlight): an unlit button is that
+    # grey, so the lit one is what stands out from it
+    def blank(lit, level):
+        img = Image.new("RGB", (720, 480), (level,) * 3)
+        img.info.update(dark=True, level=level)
+        ImageDraw.Draw(img).ellipse([lit[0] + 2, 395, lit[0] + 16, 409], fill=(16, 16, 16) if level else (209,) * 3)
+        return img
+    for level in (255, 0):
+        before, after = blank(chooser[0]["rect"], level), blank(chooser[1]["rect"], level)
+        assert c._lit((1, 43, 1), before, after, 1, 2) and not c._lit((1, 43, 1), before, after, 2, 1)
 
 
 def test_a_pages_heading_says_what_its_titles_are():
@@ -832,7 +914,7 @@ def test_highlight_checks_over_the_video_darkened():
     class V:
         is_dark = False
 
-        def dark(self, on):
+        def dark(self, on, level=0):
             self.is_dark = on
     hit, miss = ([(menus.SEEN + 50, (7, 8, 1), 1, 2)], None, None), ([], None, None)
     c = object.__new__(menus._Crawler)
@@ -855,11 +937,21 @@ def test_highlight_checks_over_the_video_darkened():
     for _ in range(3):
         c._round_trip([(7, 8, 1)], "down", "up")
     assert calls == ["dark", "dark", "dark", "as is"] and c.dark_ok
+    # that page, seen as it is only (Wallace & Gromit's first menu: a black asterisk, gone in the
+    # dark): as it is first there from now on, and its presses too; dark still for other pages
+    calls.clear()
+    c._round_trip([(7, 8, 1)], "down", "up")
+    c._press([(7, 8, 1)], "down")
+    assert calls == ["as is", "press"]
+    calls.clear()
+    c._press([(7, 9, 1)], "down")
+    assert calls == ["press dark"]
     shows["dark"] = True
-    # drawn in the video: dark shows nothing, as it is does
+    # drawn in the video: dark shows nothing, as it is does (page after page)
     c.dark_ok, shows["dark"] = None, False
     calls.clear()
     for _ in range(menus._Crawler.DARK_MISSES):
+        c.seen_as_is = set()
         assert c._round_trip([(7, 8, 1)], "down", "up") == hit
     assert calls == ["dark", "as is"] * menus._Crawler.DARK_MISSES and c.dark_ok is False
     calls.clear()
@@ -1063,7 +1155,7 @@ def test_windows_ocr_first_then_tesseract(monkeypatch):
     from PIL import Image
     img = Image.new("RGB", (720, 480), "white")
     asked = []
-    monkeypatch.setattr(menus, "rapid_text", lambda im: None)               # (no RapidOCR)
+    monkeypatch.setattr(menus, "rapid_lines", lambda im, least=None: None)  # (no RapidOCR)
     monkeypatch.setattr(menus, "windows_text", lambda im: asked.append(im.size) or "Spanglish")
     monkeypatch.setattr(menus.shutil, "which", lambda name: None)          # (no Tesseract at all)
     assert menus.button_text(img, [100, 100, 200, 130]) == "Spanglish"
@@ -1080,12 +1172,16 @@ def test_rapidocr_first(monkeypatch):
     img = Image.new("RGB", (720, 480), "white")
     asked = []
     line = lambda t: [(t, (4, 4, 100, 30), 0.99)]
-    monkeypatch.setattr(menus, "rapid_lines", lambda im: asked.append(im.size) or line("Nathaniel's Revelation"))
+    monkeypatch.setattr(menus, "rapid_lines", lambda im, least=None: asked.append(im.size) or line("Nathaniel's Revelation"))
     monkeypatch.setattr(menus, "windows_text", lambda im: "Ngthaniel Rgvelaion")
     assert menus.button_text(img, [100, 100, 200, 130]) == "Nathaniel's Revelation"
     assert asked == [(108, 38)]
-    monkeypatch.setattr(menus, "rapid_lines", lambda im: line("~ |"))
+    monkeypatch.setattr(menus, "rapid_lines", lambda im, least=None: line("~ |"))
     assert menus.button_text(img, [100, 100, 200, 130]) == "Ngthaniel Rgvelaion"
+    # no text found there at all, sure or not: nothing to read; the others aren't asked to make
+    # words of the backdrop (Spider-Man's title 28, a dark shirt)
+    monkeypatch.setattr(menus, "rapid_lines", lambda im, least=None: [])
+    assert menus.button_text(img, [100, 100, 200, 130]) == ""
 
 
 def test_a_heading_dipping_into_a_button(monkeypatch):
@@ -1103,7 +1199,7 @@ def test_a_heading_dipping_into_a_button(monkeypatch):
     def crop_lines(im):                     # the button's area: the page's lines in it, its own pixels
         return [(t, (b[0] - 72, max(0, b[1] - 281), b[2] - 72, min(im.height, b[3] - 281)), s)
                 for t, b, s in page[1:3]] if im.height > 60 else []
-    monkeypatch.setattr(menus, "rapid_lines", crop_lines)
+    monkeypatch.setattr(menus, "rapid_lines", lambda im, least=None: crop_lines(im))
     assert menus._heading_boxes(img, rects[0], rects, (720, 480)) == [(139, 268, 343, 317)]
     assert menus.button_text(img, rects[0], others=rects) == "Happy Working Song"
     assert menus.button_text(img, rects[0]) == "Comes To Life Happy Working Song"   # (its page unknown)
@@ -1149,7 +1245,7 @@ def test_windows_ocr_judged_by_real_words(monkeypatch):
     World's white lettering over a busy picture, "OSAURS ROAM ONCE" as it is. Without one, once."""
     from PIL import Image
     img = Image.new("RGB", (720, 480), "white")
-    monkeypatch.setattr(menus, "rapid_text", lambda im: None)               # (no RapidOCR)
+    monkeypatch.setattr(menus, "rapid_lines", lambda im, least=None: None)  # (no RapidOCR)
     reads = iter(["OSAURS ROAM ONCE", "DINOSAURS ROAM ONCE AGAIN"])
     monkeypatch.setattr(menus, "windows_text", lambda im: next(reads))
     words = {"dinosaurs", "roam", "once", "again"}
@@ -1228,3 +1324,339 @@ def test_finding_the_highlight_keeps_off_auto_buttons():
     c.pages = menus._pages({"titles": [], "vmgm": [], "vtsm": {1: [
         {"pgc": 1, "cells": [{}], "buttons": plain, "program_buttons": [plain], "pre": []}]}})
     assert c._safe_trips([(1, 1, 1)]) == list(menus._Crawler.ROUND_TRIPS)   # (all safe: as before)
+
+
+def test_tiny_buttons_named_by_the_pages_layout(monkeypatch):
+    """Spider-Man's TV Spots: slivers of buttons at the thumbnails' corners, each name under its
+    thumbnail, left of its sliver. Read off the whole page (twice the size), names stacked over
+    lines kept together; the page's layout learned from the nearest pairs, then each button the
+    name nearest where its layout says (nearest first alone gave "Blockbuster" to "Suit Up")."""
+    from PIL import Image
+    img = Image.new("RGB", (720, 480), "white")
+    rects = [[232, 154, 247, 182], [317, 150, 332, 176], [389, 152, 404, 180], [236, 242, 251, 271],
+             [317, 236, 332, 265], [393, 238, 408, 266], [450, 368, 465, 395]]
+    page = [("Amazing", (161, 163, 240, 180), 0.99), ("Epic", (272, 160, 311, 179), 1.0),
+            ("Thread", (355, 160, 403, 177), 0.98), ("of Hope", (341, 168, 406, 187), 0.9),
+            ("Upside", (194, 252, 237, 270), 0.94), ("Down", (190, 263, 235, 283), 0.89),
+            ("Suit Up", (260, 246, 328, 266), 0.89), ("Blockbuster", (331, 239, 425, 261), 0.95),
+            ("Countdown", (345, 249, 423, 271), 0.97), ("Thursday", (343, 261, 416, 280), 0.9),
+            ("Review #1", (336, 322, 421, 350), 0.91), ("MARKETING", (408, 350, 491, 378), 0.95)]
+    monkeypatch.setattr(menus, "_page_lines", lambda im, scale=1: page)
+    got = menus._tiny_labels(img, rects)
+    assert [got.get(tuple(r)) for r in rects[:6]] == ["Amazing", "Epic", "Thread of Hope", "Upside Down",
+                                                      "Suit Up", "Blockbuster Countdown Thursday"]
+    assert got.get(tuple(rects[6])) != "Review #1 MARKETING"         # (a panel under it, not stacked)
+    assert menus.button_words(img, rects[1], rects) == "Epic"
+    # the outline on its picture: the name it was read from, not the sliver's own area
+    assert menus.words_area(img, rects[1], rects) == [272, 160, 311, 179]
+    monkeypatch.setattr(menus, "_page_lines", lambda im, scale=1: None)  # (no RapidOCR: as before)
+    assert menus._tiny_labels(img, rects) == {}
+
+
+def test_a_name_read_by_rapidocr_needs_only_letters_here(tmp_path):
+    """Read by RapidOCR, a name with letters is kept for plain_names to judge with the dictionary
+    (Spider-Man's trailer "xXx": _wordy, made for Tesseract's junk, takes it for junk)."""
+    page = {"domain": 1, "page": 9, "program": 16, "route": [], "image": None, "buttons": [
+        {"n": 1, "rect": [0, 0, 9, 9], "text": "Play Movie", "plays": {"title": 1, "chapter": 1, "seconds": 7000}},
+        {"n": 2, "rect": [0, 20, 9, 29], "text": "xXx", "plays": {"title": 9, "chapter": 1, "seconds": 92}}]}
+    named = lambda out: {e["title"]: e["name"] for e in menus.menu_titles(out)["extras"]}
+    assert named({"pages": [page], "reader": "rapidocr"})[9] == "xXx"
+    assert named({"pages": [page]})[9] == ""                           # (Tesseract's: as before)
+
+
+def test_a_trailers_page_of_other_films_is_ads():
+    """A trailers page whose names are mostly well-known other films: those are ads, promos
+    ("Previews - xXx"); the film's own trailer stays an extra, and so does a page of its own
+    spots, though one is named like a film ("Epic"). Spider-Man's Trailers and TV Spots pages."""
+    films = {"xXx": "xXx", "Mr. Deeds": "Mr. Deeds", "Men in Black Ii": "Men in Black II", "Epic": "Epic",
+             "Spider-man": "Spider-Man"}
+    t = lambda n, name, page: {"title": n, "name": name, "seconds": 60, "listed": None, "kind": "Trailer", "page": page}
+    found = {"feature": 1, "promos": [], "promo_names": {}, "extras": [
+        t(8, "Spider-man", [1, 9, 16]), t(9, "xXx", [1, 9, 16]), t(10, "Stan Lee's Mutants", [1, 9, 16]),
+        t(11, "Mr. Deeds", [1, 9, 16]), t(12, "Men in Black Ii", [1, 9, 16]),
+        t(14, "Amazing", [1, 9, 18]), t(15, "Epic", [1, 9, 18]), t(16, "Thread of Hope", [1, 9, 18]),
+        t(17, "Suit Up", [1, 9, 18])]}
+    got = menus.trailer_ads(found, "Spider-Man", films.get)
+    assert got["promos"] == [9, 11, 12]
+    assert got["promo_names"][12] == "Previews - Men in Black II"
+    assert [e["title"] for e in got["extras"]] == [8, 10, 14, 15, 16, 17]
+    assert menus.trailer_ads(found, None, films.get) is found                 # (no film known: as found)
+
+
+def test_a_discs_menus_as_phrases(tmp_path, monkeypatch):
+    """What a disc's menus show, to name it: a kept stakeout's page pictures read as cover art
+    (no drive needed); the menus' own words left out ("PLAY", "WITH ENGLISH SUBTITLES": films
+    are called Play), and packaging's."""
+    from disc_detective import core
+    d = tmp_path / "ABC"
+    d.mkdir()
+    (d / "page_1_7_1.png").write_bytes(b"")
+    (d / "crawl.json").write_text(json.dumps({"pages": [{"image": "page_1_7_1.png"}, {"image": None}]}))
+    monkeypatch.setattr(menus, "menu_dir", lambda h: str(d))
+    read = []
+    monkeypatch.setattr(core, "ocr", lambda path: read.append(path) or
+                        ["PLAY WITH ENGLISH SUBTITLES", "PLAY", "CHAN RUSHHOUR", "Rush Hour", "WIDESCREEN EDITION"])
+    assert menus.menu_phrases("E:\\", None, "ABC") == ["CHAN RUSHHOUR", "Rush Hour"]
+    assert read == [str(d / "page_1_7_1.png")]
+    monkeypatch.setattr(menus, "menu_dir", lambda h: str(tmp_path / "none"))
+    assert menus.menu_phrases("E:\\", None, "ABC") == []                    # (nothing kept, no VLC)
+
+
+def test_a_button_area_holding_part_of_its_name(monkeypatch):
+    """Rush Hour 3: each highlight is a streak beside its name, the area over "PLAY FULLSCREEN
+    VERSION" taking in only its last letters. The name is the page's whole line (read off the
+    whole page) mostly in the area's height and crossing it; a line in another button's height
+    stays that one's (DVD-ROM/ONLINE FEATURES dipping into the icon under it), and a heading
+    grazing a button's edge isn't its name."""
+    from PIL import Image
+    img = Image.new("RGB", (720, 480), "white")
+    page = [("PLAY FULLSCREEN VERSION", (140, 171, 355, 194), 1.0), ("PLAY WIDESCREEN VERSION", (141, 212, 356, 232), 0.99),
+            ("VERSION SELECTION", (141, 342, 388, 414), 0.97), ("BACK", (459, 377, 510, 412), 1.0)]
+    rects = [[339, 158, 394, 199], [339, 206, 402, 244], [387, 374, 486, 425]]
+    monkeypatch.setattr(menus, "_page_lines", lambda im: page)
+
+    def crop_lines(im):                     # the area's own reading: what of the page's lines is in it
+        return [("ON", (0, 13, 20, 36), 0.9)] if im.height < 50 else []      # (the two version buttons)
+    monkeypatch.setattr(menus, "rapid_lines", lambda im, least=None: crop_lines(im))
+    assert [menus.button_text(img, r, others=rects) for r in rects] == \
+        ["PLAY FULLSCREEN VERSION", "PLAY WIDESCREEN VERSION", "BACK"]
+    page = [("DVD-ROM/ONLINE FEATURES", (341, 379, 539, 409), 0.99)]
+    rects = [[268, 381, 352, 407], [360, 401, 438, 436]]
+    monkeypatch.setattr(menus, "rapid_lines", lambda im, least=None: [])      # (its area: no text of its own)
+    assert menus.button_text(img, rects[0], others=rects) == "DVD-ROM ONLINE FEATURES"
+    assert menus._whole_lines(img, rects[1], rects, (720, 480), (356, 397, 442, 440)) == []
+    # an area holding its own lines whole: a line just over its edge is a neighbour's (WALL-E's
+    # Pinocchio ad, its two lines, the robot's "ALLOCATE" beside them), unless half in it
+    page = [("ALLOCATE", (15, 198, 76, 214), 0.99), ("PINOCCHIO 70TH ANNIVERSARY", (92, 210, 380, 226), 0.98),
+            ("PLATINUM EDITION", (150, 226, 326, 242), 0.99), ("UP", (220, 130, 252, 148), 1.0)]
+    rects = [[72, 206, 391, 245], [162, 127, 316, 153]]
+    assert menus._whole_lines(img, rects[0], rects, (720, 480), (72, 206, 391, 245)) == []
+    page[0] = ("ALLOCATE", (40, 206, 120, 222), 0.99)            # (over half of it in the area: its)
+    assert [t for t, _, _ in menus._whole_lines(img, rects[0], rects, (720, 480), (72, 206, 391, 245))] == ["ALLOCATE"]
+
+
+def test_menu_instructions_arent_a_films_name(monkeypatch, tmp_path):
+    """October Collections: its menu says "PLEASE CHOOSE THE FEATURE YOU WISH TO VIEW", read as a
+    block and line by line; none of it is searched ("YOU WISH TO VIEW" found You Wish!). A name
+    on the same menu still is."""
+    from disc_detective import core
+    shot = tmp_path / "menu.png"
+    shot.write_bytes(b"")
+    monkeypatch.setattr(menus, "_first_menu_frames", lambda drive, vlc, out, log=None: [str(shot)])
+    monkeypatch.setattr(core, "ocr", lambda path: ["PLEASE CHOOSE THE FEATURE YOU WISH TO VIEW", "PLEASE CHOOSE THE FEATURE",
+                                                   "YOU WISH TO VIEW", "The Haunted Mansion"])
+    assert menus.menu_phrases("E:\\", "vlc") == ["The Haunted Mansion"]
+    assert not menus._instructions("A View to a Kill") and menus._instructions("Press Enter to Play")
+
+
+def test_a_menu_read_in_strips(monkeypatch, tmp_path):
+    """October Collections: RapidOCR passes over "The Ghost and Mr. Chicken" (cartoon letters) on
+    the whole page and reads it in strips of it. Each strip's lines are put back where they are
+    on the page; read twice, the surer reading stays, and a piece inside a surer line goes."""
+    from PIL import Image
+    path = tmp_path / "menu.png"
+    Image.new("RGB", (720, 480), "black").save(path)
+
+    # (the strips' tops in the order they're read: 3 strips, then 4; each line as placed on the page)
+    tops = [0, 120, 280, 0, 90, 210, 330]
+    page = {0: [("The Ghost and", (250, 150, 460, 190), 1.0)], 1: [("RELLUCTANT", (240, 290, 380, 330), 0.87)],
+            5: [("Mr. Chickeh", (250, 195, 470, 235), 0.95), ("RELUCIAN ASTRONAUT", (210, 290, 510, 360), 0.91)]}
+    calls = []
+
+    def strip(im, least=None):
+        k = len(calls)
+        calls.append(im.height)
+        y0 = tops[k]
+        return [(t, (b[0], b[1] - y0, b[2], b[3] - y0), sc) for t, b, sc in page.get(k, [])]
+    monkeypatch.setattr(menus, "rapid_lines", strip)
+    got = menus.strip_phrases(str(path))
+    assert "The Ghost and Mr Chickeh" in got and "RELUCIAN ASTRONAUT" in got
+    assert not any("RELLUCTANT" in g for g in got)            # (inside the surer line)
+
+
+def test_several_films_each_with_its_own_menu():
+    """October Collections: a page per film, each headed with its name, a PLAY on each playing
+    its film. Both are films (not the longer one and an extra called "Play"), each with its
+    heading; a button saying only where it goes names nothing."""
+    page = lambda n, heading, buttons: {"domain": 1, "page": n, "program": 1, "heading": heading, "route": [],
+                                        "buttons": buttons, "passed_by": None}
+    play = lambda n, text, title, secs: {"n": n, "rect": [0, 0, 50, 20], "text": text,
+                                         "plays": {"title": title, "chapter": 1, "seconds": secs}}
+    out = {"pages": [page(1, "The Ghost and Chicken", [play(4, "PLAY", 1, 5385.6), play(2, "MENU", 3, 145.0)]),
+                     page(13, "RELUCTAT ASTRONAUT The LEMING", [play(4, "play", 2, 6120.2), play(2, "trailer", 4, 127.8)])],
+           "chapters": {}, "reader": "rapidocr"}
+    found = menus.menu_titles(out)
+    assert [(f["title"], f["name"], f["page"]) for f in found["features"]] ==         [(1, "The Ghost and Chicken", [1, 1, 1]), (2, "RELUCTAT ASTRONAUT The LEMING", [1, 13, 1])]
+    assert [(e["title"], e["name"]) for e in found["extras"]] == [(3, ""), (4, "Trailer")]
+    assert [e.get("film") for e in found["extras"]] == [1, 2]          # each on its own film's menu
+    titles = [{"id": "Title %d" % n, "role": r, "duration": d} for n, r, d in
+              ((1, "feature", 5386), (2, "feature", 6120), (3, "extra", 145), (4, "extra", 128))]
+    labels = menus.detected_labels(found, titles, keep=set())
+    assert labels["Title 1"]["type"] == labels["Title 2"]["type"] == "MainMovie"
+    assert labels["Title 1"]["title"] is None and "The Ghost and Chicken" in labels["Title 1"]["note"]
+    assert menus._nav_only("PLAY") and menus._nav_only("Scene Selection") and not menus._nav_only("Theatrical Trailer")
+    # "Set Up" says where it goes; "Up" alone is a film (WALL-E's trailer for it)
+    assert menus._nav_only("SET UP") and menus._nav_only("Setup") and not menus._nav_only("UP")
+    # a film's Play whose lettering wasn't read still makes it a film (Abbott and Costello's Buck Privates)
+    out["pages"][1]["buttons"][0]["text"] = ""
+    assert [f["title"] for f in menus.menu_titles(out)["features"]] == [1, 2]
+
+
+def test_two_films_a_second_apart():
+    """Abbott and Costello Go to Mars and Meet Dr. Jekyll and Mr. Hyde: 1:16:32 and 1:16:33, each
+    its own menu. Both films, their headings naming different ones; two the same length under
+    one heading are copies of one film."""
+    page = lambda d, heading, title, secs: {
+        "domain": d, "page": 1, "program": 1, "heading": heading, "route": [], "passed_by": None,
+        "buttons": [{"n": 1, "rect": [0, 0, 50, 20], "text": "PLAY",
+                     "plays": {"title": title, "chapter": 1, "seconds": secs}}]}
+    out = {"pages": [page(1, "BUD ABBOTT LOU COSTELLO GO TO MARS", 1, 4591.6),
+                     page(2, "ABBOTTAND COSTELLO LOU BUD MEET DR DJSEKYA HYDE", 2, 4592.3)],
+           "chapters": {}, "reader": "rapidocr"}
+    assert [f["title"] for f in menus.menu_titles(out)["features"]] == [1, 2]
+    out["pages"][1]["heading"] = "BUD ABBOTT LOU COSTELLO GO TO MARS"
+    assert not menus.menu_titles(out).get("features")
+
+
+def test_an_extra_named_for_its_film():
+    """The Great Mouse Detective: its menu's lettering reads as "SNEAK SET UP" (its Sneak Peeks
+    and Set Up buttons: The Set-Up, 1949); its bonus page's "The Making Of The Great Mouse
+    Detective" names the film whole."""
+    assert menus.making_of_names(["The Making Of The Great Mouse Detective", "Behind the Scenes of Up!",
+                                  "Making Of", "So You Think You Can Sleuth?"]) == ["The Great Mouse Detective", "Up"]
+    assert menus._menu_words(menus.trim_menu_words("SNEAK SET UP")) and menus._menu_words("Fast Play")
+
+
+def test_a_menus_own_words_off_a_phrases_ends():
+    """Pardon My Sarong's page reads as one block with its buttons: "PARDON WSARONG SCENES
+    PRODICTION NOTES LANGUAGES". The menu's own words (misread ones too) come off its ends;
+    words in a name stay; a phrase of nothing else goes."""
+    assert menus.trim_menu_words("PARDON WSARONG SCENES PRODICTION NOTES LANGUAGES") == "PARDON WSARONG"
+    assert menus.trim_menu_words("Menu WHO DONE IT") == "WHO DONE IT"
+    assert menus.trim_menu_words("The Making of Jurassic Park") == "The Making of Jurassic Park"
+    assert menus.trim_menu_words("Materials Languages") == "" and menus.trim_menu_words("The Gallery") == ""
+
+
+def test_each_films_picture_is_its_own_play(tmp_path):
+    """Pardon My Sarong & Who Done It?: Who Done It?'s menu has its Play, its Bonus Materials page
+    a commentary "Frank ON" that plays it too, and reads better. Each film of a disc of several
+    shows its Play nearest the first menu, as the one feature does: not the commentary's button."""
+    from PIL import Image
+    for name in ("page_1_1_1.png", "page_2_1_1.png", "page_2_13_1.png"):
+        Image.new("RGB", (720, 480), "black").save(tmp_path / name)
+    btn = lambda n, text, title: {"n": n, "rect": [100, 100 + 40 * n, 300, 130 + 40 * n], "text": text,
+                                  "plays": {"title": title, "chapter": 1, "seconds": {1: 5034.0, 2: 4626.0}.get(title, 100.0)}}
+    out = {"pages": [{"domain": 1, "page": 1, "program": 1, "image": "page_1_1_1.png", "heading": "",
+                      "route": [{"page": 1, "program": 1, "button": 1}], "buttons": [btn(1, "MNC PLAY", 1)]},
+                     {"domain": 2, "page": 1, "program": 1, "image": "page_2_1_1.png", "heading": "WHO DONE IT",
+                      "route": [{"page": 1, "program": 1, "button": 2}], "buttons": [btn(1, "Play", 2)]},
+                     {"domain": 2, "page": 13, "program": 1, "image": "page_2_13_1.png", "heading": "BONUS MATERIALS",
+                      "route": [{"page": 1, "program": 1, "button": 2}, {"page": 1, "program": 1, "button": 3}],
+                      "buttons": [btn(1, "Frank ON", 2), btn(2, "Theatrical Trailer", 3)]}],
+           "chapters": {}, "reader": "rapidocr"}
+    out["found"] = menus.menu_titles(out)
+    assert [f["title"] for f in out["found"]["features"]] == [1, 2]
+    pics = menus.title_pictures(out, str(tmp_path))
+    assert pics[2]["image"].endswith("page_2_1_1.png") and pics[2]["text"] == "Play"
+
+
+def test_a_films_menu_with_its_play_misread():
+    """Abbott and Costello Meet Frankenstein's menu: its Play read as "FKANKENSTEIN" (the film's
+    title lettering run into it). Still that film's own menu: the one button on its page playing
+    it from the start (its commentary page has two, ON and OFF). Its trailer is that film's."""
+    page = lambda d, n, buttons, route=1: {"domain": d, "page": n, "program": 1, "heading": "",
+                                           "route": [{"page": 1, "program": 1, "button": 1}] * route,
+                                           "buttons": buttons, "passed_by": None}
+    btn = lambda n, text, title, secs: {"n": n, "rect": [0, 0, 50, 20], "text": text,
+                                        "plays": {"title": title, "chapter": 1, "seconds": secs}}
+    out = {"pages": [page(1, 1, [btn(1, "PLAY", 1, 4666.0)]),
+                     page(2, 1, [btn(1, "FKANKENSTEIN", 2, 4965.0)]),
+                     page(2, 13, [btn(1, "Gregory ON", 2, 4965.0), btn(2, "-OFF", 2, 4965.0),
+                                  btn(4, "Theatrical Trailer", 3, 154.0)], route=2)],
+           "chapters": {}, "reader": "rapidocr"}
+    found = menus.menu_titles(out)
+    assert [(f["title"], f["page"]) for f in found["features"]] == [(1, [1, 1, 1]), (2, [2, 1, 1])]
+    assert [(e["title"], e.get("film")) for e in found["extras"]] == [(3, 2)]
+
+
+def test_an_extra_is_the_film_nearest_it_in_the_menus():
+    """Whose film an extra is, by where it sits in the menus: the film whose own page is nearest,
+    going in from the first menu. A Bonus page off the first menu is as near both films: the
+    disc's. A film's own Bonus page: that film's. A film whose Play is on the first menu itself
+    doesn't claim everything under it."""
+    def page(d, n, route, buttons):
+        return {"domain": d, "page": n, "program": 1, "route": route, "buttons": buttons}
+    go = lambda n, page: {"n": n, "rect": [0, 0, 9, 9], "text": "", "goes_to": {"page": page, "program": 1}}
+    pages = {("vmgm", 1, 1): page("vmgm", 1, [], [go(1, 1), go(2, 1), go(3, 9)]),
+             (1, 1, 1): page(1, 1, [{"page": 1, "program": 1, "button": 1}], [go(1, 13)]),     # film 1's page
+             (2, 1, 1): page(2, 1, [{"page": 1, "program": 1, "button": 2}], [go(1, 13)]),     # film 2's page
+             (2, 13, 1): page(2, 13, [{"page": 1, "program": 1, "button": 2},
+                                      {"page": 1, "program": 1, "button": 1}], []),            # film 2's bonus
+             (1, 9, 1): page(1, 9, [{"page": 1, "program": 1, "button": 3}], [])}              # the disc's bonus
+    films = {(1, 1, 1): 1, (2, 1, 1): 2}
+    on = lambda s: [{"page": list(s)}]
+    assert menus._menu_parent(pages, (1, 9, 1)) == ("vmgm", 1, 1)          # (off the first menu, not film 1's)
+    assert menus._film_of(on((2, 13, 1)), pages, films) == 2
+    assert menus._film_of(on((1, 1, 1)), pages, films) == 1
+    assert menus._film_of(on((1, 9, 1)), pages, films) is None             # as near both: the disc's
+    assert menus._film_of(on((1, 9, 1)), pages, {("vmgm", 1, 1): 1, (2, 1, 1): 2}) is None   # (a Play on the first menu)
+
+
+def test_a_discs_readings_put_one_another_right():
+    """A misread word of one reading put right by another's clean one ("KARLOF" in Meet the
+    Killer, Boris Karloff's heading, "BORIS KARLOFF" read whole); the clean short readings kept
+    beside the long, all of them searched. Only real words correct (a dictionary says so)."""
+    words = {"meet", "the", "boris", "karloff", "lou", "bud", "abbott", "costello", "love", "god"}
+    is_word = lambda w: w.lower() in words
+    got = menus.mend_phrases(["LOU BUD ABBOTT COSTELLO MEET THE ILLE BORIS KARLOF", "BORIS KARLOFF", "MEET THE"], is_word)
+    assert got[0] == "LOU BUD ABBOTT COSTELLO MEET THE ILLE BORIS KARLOFF" and "BORIS KARLOFF" in got
+    assert menus.mend_phrases(["The Jove God Love God", "The Love God"], is_word)[1] == "The Love God"   # (kept)
+    assert menus.mend_phrases(["BORIS KARLOF"], None) == ["BORIS KARLOF"]          # (no dictionary: as read)
+
+
+def test_each_films_own_words_apart_from_the_discs(tmp_path, monkeypatch):
+    """Words on every film's pages are the disc's (its stars: "BUD ABBOTT LOU COSTELLO"): each
+    film is searched by its own words, "HOLD TH", not the stars' names that find Bud Abbott and
+    Lou Costello in Hollywood (set aside where it's searched). A scrap of a word names nothing
+    ("Zap", "Lou")."""
+    from PIL import Image
+    for n in ("a.png", "b.png"):
+        Image.new("RGB", (720, 480)).save(tmp_path / n)
+    read = {"a.png": ["BUD ABBOTT LOU COSTELLO IN THE NAVY", "Lou"], "b.png": ["BUD ABBOTT LOU COSTELLO HOLD TH", "Zap"]}
+    from disc_detective import core
+    monkeypatch.setattr(core, "ocr", lambda path: read[os.path.basename(path)])
+    monkeypatch.setattr(menus, "strip_phrases", lambda path: [])
+    page = lambda d, image: {"domain": d, "page": 1, "program": 1, "image": image, "buttons": [],
+                             "route": [{"page": 1, "program": 1, "button": d}]}
+    raw = {"pages": [page(1, "a.png"), page(2, "b.png")],
+           "found": {"features": [{"title": 1, "name": "", "page": [1, 1, 1]}, {"title": 2, "name": "", "page": [2, 1, 1]}]}}
+    assert menus.feature_phrases(raw, str(tmp_path)) == {"Title 1": ["BUD ABBOTT LOU COSTELLO IN THE NAVY"],
+                                                         "Title 2": ["BUD ABBOTT LOU COSTELLO HOLD TH"]}
+    # (the stars' names set aside where it's searched: films_by_title, its readings and the films' names)
+    asked = []
+    monkeypatch.setattr(core, "imdb_candidates", lambda con, q, k, f: asked.append([x for x, _ in q]) or [])
+    titles = [{"id": "Title 1", "duration": 5130}, {"id": "Title 2", "duration": 5154}]
+    core.films_by_title(None, titles, menus.feature_phrases(raw, str(tmp_path)), {})
+    # (searched by its own words first, its whole readings after: weighed by its own words)
+    assert asked == [["IN THE NAVY", "BUD ABBOTT LOU COSTELLO IN THE NAVY"], ["HOLD TH", "BUD ABBOTT LOU COSTELLO HOLD TH"]]
+
+
+def test_the_root_menus_buttons_name_their_films(tmp_path, monkeypatch):
+    """The disc's own first menu: what's written on each button leading to a film's own page is
+    that film's (Lost in Alaska's logo, read only on the root menu: its own page's unread). The
+    page a button leads to is the one whose route ends pressing it ("page 1" is every film's)."""
+    from PIL import Image
+    Image.new("RGB", (720, 480)).save(tmp_path / "root.png")
+    monkeypatch.setattr(menus, "rapid_lines", lambda im, least=None: [("COMIN' ROUND", (180, 330, 328, 364), 0.98),
+                                                                      ("LOSTIN", (417, 317, 512, 364), 0.97)]
+                        if im.height == 480 else [])
+    monkeypatch.setattr(menus, "strip_phrases", lambda path: [])
+    from disc_detective import core
+    monkeypatch.setattr(core, "ocr", lambda path: [])
+    btn = lambda n, rect: {"n": n, "rect": rect, "text": "", "goes_to": {"page": 1, "program": 1}}
+    raw = {"pages": [{"domain": "vmgm", "page": 1, "program": 1, "image": "root.png", "route": [],
+                      "buttons": [btn(1, [120, 100, 362, 435]), btn(2, [363, 101, 600, 435])]},
+                     {"domain": 1, "page": 1, "program": 1, "route": [{"page": 1, "program": 1, "button": 1}], "buttons": []},
+                     {"domain": 2, "page": 1, "program": 1, "route": [{"page": 1, "program": 1, "button": 2}], "buttons": []}],
+           "found": {"features": [{"title": 1, "name": "", "page": [1, 1, 1]}, {"title": 2, "name": "", "page": [2, 1, 1]}]}}
+    assert menus.feature_phrases(raw, str(tmp_path)) == {"Title 1": ["COMIN' ROUND"], "Title 2": ["LOSTIN"]}

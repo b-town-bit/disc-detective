@@ -40,6 +40,26 @@ def test_play_all_of_every_episode():
     assert ts[0]["role"] == "play-all"
 
 
+def test_play_all_with_an_intro_of_its_own():
+    """Wallace & Gromit's Cracking Contraptions Play All: an intro card first (2% of it), no
+    gadget title has it, then each gadget's pieces in turn. A play-all all the same; a first
+    piece another title plays is that title, a part of it; one as big as a part isn't an intro."""
+    intro = (0, 13253)
+    parts = [(60000 * i, 60000 * i + 59999) for i in range(1, 11)]     # (the intro: 2% of it all)
+    ts = [T(16, 9, (0, 22, 0), 11, [intro] + parts)] + \
+         [T(17 + i, 9, (0, 2, 10), 1, [p]) for i, p in enumerate(parts)]
+    classify(ts, "DVD")
+    assert ts[0]["role"] == "play-all" and ts[0]["note"] == "plays " + ", ".join("Title %d" % n for n in range(17, 27))
+    ts.append(T(40, 9, (0, 0, 20), 1, [intro]))
+    classify(ts, "DVD")
+    assert ts[0]["note"].startswith("plays Title 40, Title 17")
+    # a first piece of its own as big as a part (a title, not an intro): no play-all of these
+    ts = [T(16, 9, (0, 24, 0), 11, [(0, 59999)] + parts)] + \
+         [T(17 + i, 9, (0, 2, 10), 1, [p]) for i, p in enumerate(parts)]
+    classify(ts, "DVD")
+    assert ts[0]["role"] != "play-all"
+
+
 def test_movie_with_alternate_version():
     ts = [T(1, 5, (1, 34, 2), 37, [F], 4), T(2, 4, (1, 34, 2), 37, [G], 4), T(3, 3, (0, 0, 0), 2, [])]
     ts[0]["video"] = "NTSC 4:3 letterboxed"
@@ -531,6 +551,109 @@ def test_a_box_set_disc_from_thediscdb_is_a_collection(imdb):
     t2 = [mk(1, 140), mk(2, 116)]
     core.discdb_roles(t2, cuts)
     assert core.discdb_collection(imdb, t2, cuts, {"mastered": "2010-01"}) is None
+
+
+def test_a_collection_naming_a_copy_makes_its_twin_the_copy():
+    """Wallace & Gromit: titles 6 and 7 the same video; the scan keeps 6, but the menu's Wrong
+    Trousers plays 7 (6 is the Play All's way in, and jumps elsewhere played alone). The answer
+    naming 7 the film: 6 is the copy now, not a film-length title no menu plays (a promo)."""
+    titles = [{"id": "Title 6", "role": "feature", "note": "", "duration": 1862},
+              {"id": "Title 7", "role": "duplicate", "note": "same video as Title 6", "duration": 1862},
+              {"id": "Title 8", "role": "duplicate", "note": "same video as Title 6", "duration": 1862}]
+    # (the answer's same-length titles, versions as a rule: this one's the same video, a copy)
+    c = {"kind": "collection", "items": [{"title_id": "Title 7", "imdb_id": "tt0108598",
+                                          "name": "Wallace & Gromit: The Wrong Trousers", "year": 1993}],
+         "versions": [{"title_id": "Title 6", "same_as": "Title 7"}, {"title_id": "Title 8", "same_as": "Title 7"}]}
+    core.apply_collection(c, titles)
+    assert [(t["role"], t["note"]) for t in titles] == [
+        ("duplicate", "same video as Title 7"), ("feature", "film 1: Wallace & Gromit: The Wrong Trousers (1993)"),
+        ("duplicate", "same video as Title 7")]
+
+
+def test_the_copy_the_menus_play_is_the_original():
+    """Of two titles of one video, the one the menus play is the original when they never play
+    the other (Wallace & Gromit's Wrong Trousers: title 7; title 6 its Play All's way in): roles
+    swap, and the scan's guesses follow. Both played (a commentary's Play), neither: as it was."""
+    titles = [{"id": "Title 6", "role": "feature", "note": "short film 3", "episode_index": 3},
+              {"id": "Title 7", "role": "duplicate", "note": "same video as Title 6"},
+              {"id": "Title 8", "role": "duplicate", "note": "same video as Title 6"}]
+    rep = {"titles": titles, "candidates": [{"kind": "collection", "items": [{"title_id": "Title 6"}],
+                                             "versions": [{"title_id": "Title 9", "same_as": "Title 6"}]}],
+           "plex_names": ["Title 6        -> A Close Shave (1995)/A Close Shave (1995).mkv"]}
+    assert core.prefer_played(rep, {"Title 7"}) == {"Title 6": "Title 7"}
+    assert [(t["id"], t["role"], t["note"]) for t in titles] == [
+        ("Title 6", "duplicate", "same video as Title 7"), ("Title 7", "feature", "short film 3"),
+        ("Title 8", "duplicate", "same video as Title 7")]
+    assert titles[1]["episode_index"] == 3 and "episode_index" not in titles[0]
+    assert rep["candidates"][0]["items"][0]["title_id"] == "Title 7"
+    assert rep["candidates"][0]["versions"][0]["same_as"] == "Title 7"
+    assert rep["plex_names"] == ["Title 7        -> A Close Shave (1995)/A Close Shave (1995).mkv"]
+    # both played (The Iron Giant's), or neither: nothing moves
+    twins = lambda: {"titles": [{"id": "Title 1", "role": "feature", "note": ""},
+                                {"id": "Title 4", "role": "duplicate", "note": "same video as Title 1"}]}
+    for played in ({"Title 1", "Title 4"}, set(), {"Title 1"}):
+        r = twins()
+        assert core.prefer_played(r, played) == {} and r["titles"][0]["role"] == "feature"
+
+
+def test_the_discs_program_on_the_scan():
+    """What the disc's program says its menus do, before any VLC (menus.program_map): Wallace &
+    Gromit's Wrong Trousers button plays title 7, its Play All goes on from title 1 into title 6
+    (the same video, only that chain reaches it). Title 7 is the original; the Play All plays 2, 3
+    and 7. A run going on into a title a button plays itself (Enchanted's deleted scenes, into
+    the film) or into a bumper isn't the play-all's."""
+    titles = [{"id": "Title 1", "role": "play-all", "note": "plays Title 2, Title 3"},
+              {"id": "Title 2", "role": "feature", "note": ""}, {"id": "Title 3", "role": "feature", "note": ""},
+              {"id": "Title 6", "role": "feature", "note": "short film 3"},
+              {"id": "Title 7", "role": "duplicate", "note": "same video as Title 6"},
+              {"id": "Title 9", "role": "junk", "note": ""}, {"id": "Title 11", "role": "play-all", "note": "plays Title 2"}]
+    rep = {"titles": titles}
+    where = lambda n: [{"page": [7, 26, 1], "button": n, "chapter": 1}]
+    pmap = {"plays": {1: where(1), 2: where(2), 3: where(3), 7: where(4), 11: where(5)},
+            "chains": {1: {"after": [], "into": 6}, 11: {"after": [9], "into": 2}}, "chained": [6, 9], "opening": []}
+    core.apply_program_map(rep, pmap)
+    by = {t["id"]: (t["role"], t["note"]) for t in titles}
+    assert by["Title 7"] == ("feature", "short film 3") and by["Title 6"] == ("duplicate", "same video as Title 7")
+    assert by["Title 1"] == ("play-all", "plays Title 2, Title 3, Title 7")
+    assert by["Title 11"] == ("play-all", "plays Title 2") and rep["program_map"] is pmap
+    rep2 = {"titles": [{"id": "Title 1", "role": "feature", "note": ""}]}
+    core.apply_program_map(rep2, None)
+    assert "program_map" not in rep2
+    # what a player plays before the menu, no button offering it: previews (The Lego Movie's,
+    # two taken for extras by their length); one a button plays too stays what it was
+    lego = {"titles": [{"id": "Title 1", "role": "feature", "note": ""}, {"id": "Title 7", "role": "extra", "note": ""},
+                       {"id": "Title 8", "role": "extra", "note": ""}, {"id": "Title 5", "role": "junk", "note": ""}]}
+    core.apply_program_map(lego, {"plays": {1: where(1), 8: where(2)}, "chains": {}, "chained": [], "opening": [5, 8, 7]})
+    assert [t["role"] for t in lego["titles"]] == ["feature", "promo", "extra", "promo"]
+    # the short ones a run plays on its way into the film: previews (The Sorcerer's Apprentice's
+    # FastPlay: sneak peeks 66, 70, 74 and 78, then the film, 35); a longer one isn't
+    sorc = {"titles": [{"id": "Title 35", "role": "feature", "note": "", "duration": 6540}] +
+            [{"id": "Title %d" % n, "role": r, "note": "", "duration": d}
+             for n, r, d in ((66, "junk", 68), (70, "extra", 150), (74, "extra", 121), (78, "junk", 77), (57, "extra", 1320))]}
+    core.apply_program_map(sorc, {"plays": {35: where(1), 66: where(2), 57: where(3)}, "opening": [],
+                                  "chains": {66: {"after": [70, 74, 78], "into": 35}}, "chained": [70, 74, 78]})
+    assert [t["role"] for t in sorc["titles"]] == ["feature", "promo", "promo", "promo", "promo", "extra"]
+
+
+def test_the_film_is_what_the_main_menus_play_plays():
+    """The scan's film, a title no button plays, while the Play on the menu the disc opens on
+    plays another of a film's length: that one's the film (its name follows). With a button
+    the program couldn't follow, or no one Play to go by: a doubt said, nothing changed."""
+    titles = lambda: [{"id": "Title 4", "role": "feature", "note": "", "duration": 6900},
+                      {"id": "Title 9", "role": "extra", "note": "", "duration": 6500},
+                      {"id": "Title 12", "role": "extra", "note": "", "duration": 300}]
+    pmap = {"start": [1, 2, 1], "unsure": 0, "chains": {}, "chained": [], "opening": [],
+            "plays": {9: [{"page": [1, 2, 1], "button": 1, "chapter": 1}], 12: [{"page": [1, 5, 1], "button": 2, "chapter": 1}]}}
+    rep = {"titles": titles(), "plex_names": ["Title 4        -> Film (2001) {imdb-tt1}/Film (2001).mkv"]}
+    said = core.apply_program_map(rep, pmap)
+    assert [t["role"] for t in rep["titles"]] == ["extra", "feature", "extra"] and len(said) == 1
+    assert rep["plex_names"] == ["Title 9        -> Film (2001) {imdb-tt1}/Film (2001).mkv"]
+    rep = {"titles": titles()}
+    said = core.apply_program_map(rep, dict(pmap, unsure=2))                # (a button it couldn't follow)
+    assert [t["role"] for t in rep["titles"]] == ["feature", "extra", "extra"] and "worth a look" in said[0]
+    rep = {"titles": titles()}
+    pmap["plays"][4] = [{"page": [1, 2, 1], "button": 2, "chapter": 1}]     # (both played: they agree enough)
+    assert core.apply_program_map(rep, pmap) == [] and rep["titles"][0]["role"] == "feature"
 
 
 def test_a_tv_special_disc(imdb):

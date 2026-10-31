@@ -126,3 +126,16 @@ def test_cover_lines_as_phrases():
              ("princess", (537, 1397, 1954, 1875), 0.84), ("~", (10, 10, 20, 20), 0.3)]
     assert ocr_phrases(lines) == ["the wan princess", "bigger kicks"]
     assert ocr_phrases([]) == []
+    # a banner about the packaging, right over the title, isn't joined to it (Spider-Man's)
+    spidey = [("WIDESCREEN SPECIAL EDITION", (215, 53, 504, 66), 0.99), ("SPIDER-MAN", (215, 73, 505, 96), 0.95)]
+    assert ocr_phrases(spidey) == ["SPIDER-MAN"]
+    # a quote stacked under a blurb: the block, and each of its lines of two words or more (the
+    # title is in one: 3 Ninjas Kick Back's); one word alone isn't offered (The Swan Princess's)
+    ninjas = [("KICK BACK", (272, 135, 378, 159), 1.0), ("TumTum, Colt and Rocky", (392, 324, 491, 338), 0.99),
+              ("an all-new adventure.", (397, 344, 486, 357), 0.94), ('"3 NINJAS KICK BACK', (375, 361, 503, 378), 0.97)]
+    got = ocr_phrases(ninjas)
+    assert got[0] == "KICK BACK" and "3 NINJAS KICK BACK" in got and "TumTum Colt and Rocky" in got
+    assert ocr_phrases(lines) == ["the wan princess", "bigger kicks"]
+    from disc_detective.core import packaging
+    assert packaging("2-DISC COLLECTOR'S EDITION") and packaging("15th Anniversary Special Edition")
+    assert not packaging("The Movie") and not packaging("Special Features") and not packaging("SPIDER-MAN")

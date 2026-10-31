@@ -278,3 +278,43 @@ def test_cover_line_up_finds_the_same_artwork(tmp_path):
     assert "2005-widescreen-dvd" in rep["candidates"][0]["why"]
     far = next(x for x in seen if x["year"] == 1982)
     assert far["distance"] > 0.3 and "cover_match" not in rep["candidates"][1]
+
+
+def test_a_double_feature_gets_its_films_collection_poster(tmp_path, monkeypatch):
+    """Rush Hour and Rush Hour 2 on one disc TheDiscDB doesn't have: both films are in TMDB's
+    "Rush Hour Collection", so the disc's picture is that collection's poster. Two films of
+    different collections get none of it (a film's own series isn't the whole disc's)."""
+    calls = []
+    coll = {"tt0120812": 90863, "tt0266915": 90863, "tt0371746": 1}
+    films = {"tt0120812": 2109, "tt0266915": 5175, "tt0371746": 9}
+
+    def get(key, path, **p):
+        calls.append(path)
+        if path.startswith("/find/"):
+            return {"movie_results": [{"id": films[path[6:]]}]}
+        if path.startswith("/movie/"):
+            n = next(i for i, m in films.items() if "/movie/%d" % m == path)
+            return {"belongs_to_collection": {"id": coll[n], "name": "Rush Hour Collection" if coll[n] == 90863 else "Other",
+                                              "poster_path": "/c%d.jpg" % coll[n]}}
+        return {"results": []}
+    monkeypatch.setattr(core, "tmdb_get", get)
+
+    class R(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: calls.append(req.full_url) or R(fixtures.POSTER_JPG))
+    items = [{"title_id": "Title 3", "imdb_id": "tt0120812", "name": "Rush Hour", "year": 1998},
+             {"title_id": "Title 5", "imdb_id": "tt0266915", "name": "Rush Hour 2", "year": 2001}]
+    rep = {"content_hash": "3" * 32, "discdb": {"hit": None}, "kind": "collection",
+           "candidates": [{"kind": "collection", "name": "Rush Hour & Rush Hour 2", "score": 100, "items": items}]}
+    a = core.find_artwork(rep, art_args(tmp_path, tmdb_key="k" * 32))
+    assert a["what"] == "collection poster" and core.TMDB_IMG + "/c90863.jpg" in calls
+    assert a["ref"] == "Rush Hour Collection"
+    art_dir = str(tmp_path / "art")
+    calls.clear()
+    assert core.tmdb_film_collection("tt0120812", art_dir, "k")["id"] == 90863 and not calls   # asked once a film
+    mixed = [items[0], {"title_id": "Title 6", "imdb_id": "tt0371746", "name": "Other", "year": 2004}]
+    assert core.tmdb_films_collection_poster(mixed, art_dir, "k") is None

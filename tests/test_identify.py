@@ -393,3 +393,16 @@ def test_the_imdb_credits_index(tmp_path, monkeypatch):
     got = core.film_credits(lib, "tt0129167", "KEY", str(imdb), home=str(tmp_path))
     assert sorted(got) == [("Brad Bird", None, "director"), ("Eli Marienthal", "Hogarth Hughes", "actor")]
     assert lib.execute("SELECT source FROM credits_fetched").fetchone()[0] == "imdb"
+
+
+def test_a_disc_named_by_its_menus(tmp_path, imdb_dir):
+    """Nothing names it (a catalogue number for a label, no cover art): what its menus show,
+    read as cover art is (the app's second look: menus.menu_phrases), names it, loosely
+    searched ("the wan princess"), the feature's length deciding. Rush Hour / Rush Hour 2's
+    double feature, its posters on its menu, was named this way."""
+    disc = fixtures.make_movie_bluray(str(tmp_path / "7000077241_1"), minutes=90)
+    rep, _ = run(disc, tmp_path, imdb_dir=imdb_dir, offline=True)
+    assert rep["status"].startswith("unidentified")
+    rep, _ = run(disc, tmp_path, imdb_dir=imdb_dir, offline=True, menu_phrases=["the wan princess"])
+    assert rep["menu_ocr"] == ["the wan princess"] and "the wan princess" in rep["facts"]["cover_phrases"]
+    assert rep["candidates"][0]["name"] == "The Swan Princess" and core.is_probable(rep["candidates"])

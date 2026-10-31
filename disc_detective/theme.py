@@ -39,6 +39,9 @@ INK_SUBTLE = "#a59784"
 GREEN = "#065f46"
 GREEN_DOT = "#059669"
 AMBER_DOT = "#b8860b"
+AMBER_50 = "#fbf0d2"      # a pill asking for a look, not an error: the rip card's "to confirm"
+AMBER_300 = "#e3c374"
+AMBER_800 = "#73500a"
 MAHOGANY = "#3a271d"
 TITLE_TEXT = "#f5ebd7"
 
@@ -424,6 +427,7 @@ def setup(root):
     label("Head.TLabel", bg=CARD, fg=INK, font=(SERIF, 11, "bold"))
     label("HeadTime.TLabel", bg=CARD, fg=BRASS_700, font=(MONO, 10))
     label("Badge.TLabel", bg=VELLUM_200, fg=BRASS_800, font=(MONO, 9), padding=(5, 0))
+    label("Confirm.TLabel", bg=AMBER_50, fg=AMBER_800, font=(MONO, 9), padding=(5, 0))
     label("Path.TLabel", bg=VELLUM_50, fg=INK, font=(MONO, 9))
     label("InsetVal.TLabel", bg=VELLUM_100, fg=INK, font=(SERIF, 10, "bold"))
     label("InsetOk.TLabel", bg=VELLUM_100, fg=GREEN, font=(SANS, 9, "bold"))
@@ -572,6 +576,20 @@ def scaled_photo(path):
 GAUGE_DARK, GAUGE_BRIGHT = "#6b430c", "#f0c24e"     # the fill: dark brass, warming to gold at its head
 
 
+def _cached(cache, key, make, keep=40):
+    """cache[key], made (make()) when it isn't there; the least lately used dropped past keep. Not
+    all of them at once: a picture on screen dropped shows nothing till it's drawn again (the
+    sliding progress bar, whose run takes a new width each frame, blinked out every few seconds
+    as its cache filled and was emptied, the trough on screen with it)."""
+    if key in cache:
+        cache[key] = cache.pop(key)           # (to the end: lately used)
+    else:
+        while len(cache) >= keep:
+            cache.pop(next(iter(cache)))      # (the least lately used)
+        cache[key] = make()
+    return cache[key]
+
+
 def _photo(img):
     import base64
     import io
@@ -643,11 +661,7 @@ class Gauge(tk.Canvas):
 
     # ---- drawing ----
     def _img(self, key, make):
-        if key not in self._imgs:
-            if len(self._imgs) > 40:              # (widths come and go as the window resizes)
-                self._imgs.clear()
-            self._imgs[key] = _photo(make())
-        return self._imgs[key]
+        return _cached(self._imgs, key, lambda: _photo(make()))
 
     def _pill_mask(self, w, h):
         """A pill's shape (anti-aliased ends) as an L-mode mask."""
@@ -844,14 +858,11 @@ class ScrollBar(tk.Canvas):
         t = px(self.WIDE if lit else self.THIN)
         colour = self._lit if lit else self._rest
         w, h = (t, n) if self._v else (n, t)
-        key = (w, h, colour)
-        if key not in self._imgs:
-            if len(self._imgs) > 40:              # (lengths come and go as windows resize)
-                self._imgs.clear()
-            self._imgs[key] = _photo(self._pill(w, h, colour))
+        # (lengths come and go as windows resize: the least lately used dropped, not the one shown)
+        img = _cached(self._imgs, (w, h, colour), lambda: _photo(self._pill(w, h, colour)))
         across = (self.winfo_width() if self._v else self.winfo_height()) - t
         x, y = (across // 2, start) if self._v else (start, across // 2)
-        self.itemconfigure(self._thumb, image=self._imgs[key], state="normal")
+        self.itemconfigure(self._thumb, image=img, state="normal")
         self.coords(self._thumb, x, y)
 
 

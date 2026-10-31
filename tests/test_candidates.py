@@ -319,3 +319,234 @@ def test_a_title_read_off_cover_art(imdb):
     assert (c[0]["name"], c[0]["year"]) == ("The Swan Princess", 1994)
     c = core.imdb_candidates(imdb, [(q, False)], "movie", {"mastered": None, "feature_minutes": 90})
     assert "The Swan Princess" not in [x["name"] for x in c]
+
+
+def test_a_double_feature_from_the_scans_own_guesses():
+    """Rush Hour and Rush Hour 2 on one disc: two feature-length titles of their own video, each
+    as long as a different strong guess, make a collection of both films."""
+    t3 = {"id": "Title 3", "role": "feature", "duration": 5862, "segments": ((1, 0, 999),)}
+    t5 = {"id": "Title 5", "role": "extra", "duration": 5396, "segments": ((2, 0, 899),)}
+    cands = [{"kind": "movie", "name": "Rush Hour", "year": 1998, "imdb_id": "tt0120812", "runtime": 98, "score": 58},
+             {"kind": "movie", "name": "Rush Hour 2", "year": 2001, "imdb_id": "tt0266915", "runtime": 90, "score": 55},
+             {"kind": "movie", "name": "Rush Hour 3", "year": 2007, "imdb_id": "tt0293564", "runtime": 91, "score": 40}]
+    df = core.double_feature([t3, t5], cands)
+    assert df["kind"] == "collection" and df["name"] == "Rush Hour & Rush Hour 2"
+    assert [(i["title_id"], i["imdb_id"]) for i in df["items"]] == [("Title 3", "tt0120812"), ("Title 5", "tt0266915")]
+    assert core.adopt_guess([df] + cands) is df
+    # The Iron Giant: two cuts of one film share most of their video, so they stay one film
+    theatrical = dict(t3, segments=((1, 0, 499), (1, 500, 999)))
+    signature = dict(t5, segments=((1, 0, 499), (3, 0, 49), (1, 500, 999)))
+    assert core.double_feature([theatrical, signature], cands) is None
+    # a confident single match isn't split up because another film happens to fit a long extra
+    sure = [dict(cands[0], score=92)] + cands[1:]
+    assert core.double_feature([t3, t5], sure) is None
+
+
+def test_films_you_name_matched_to_titles_by_length():
+    """Multi-film: the films you list, each matched to a title by length (an Abbott and Costello
+    disc of three); a film with no length takes the longest title left; more films than titles
+    leaves one over."""
+    titles = [{"id": "Title 1", "role": "junk", "duration": 30}, {"id": "Title 2", "role": "feature", "duration": 83 * 60},
+              {"id": "Title 4", "role": "extra", "duration": 70 * 60}, {"id": "Title 6", "role": "extra", "duration": 79 * 60},
+              {"id": "Title 9", "role": "extra", "duration": 12 * 60}]
+    films = [{"imdb_id": "tt1", "name": "Buck Privates", "runtime": 84}, {"imdb_id": "tt2", "name": "In the Navy", "runtime": 85},
+             {"imdb_id": "tt3", "name": "Hold That Ghost"}]
+    pairs, left = core.films_to_titles(titles, films)
+    assert [(t["id"], f["name"]) for t, f in pairs] == [("Title 2", "Buck Privates"), ("Title 4", "Hold That Ghost"),
+                                                        ("Title 6", "In the Navy")]
+    assert not left
+    pairs, left = core.films_to_titles(titles[:2], films)
+    assert len(pairs) == 1 and [f["name"] for f in left] == ["In the Navy", "Hold That Ghost"]
+
+
+def test_a_double_features_films_are_named_by_what_was_read():
+    """October Collections: The Ghost and Mr. Chicken and The Reluctant Astronaut, read off its
+    menu. Ghost Town shares only "Ghost" (60%) but is far better known and exactly as long as
+    the second feature: the second film is the one whose name was read (84%), fourth or not."""
+    t1 = {"id": "Title 1", "role": "feature", "duration": 5386, "segments": ((1, 0, 999),)}
+    t2 = {"id": "Title 2", "role": "feature", "duration": 6120, "segments": ((2, 0, 999),)}
+    film = lambda name, year, rt, score, ns: {"kind": "movie", "name": name, "year": year, "imdb_id": "tt%d" % year,
+                                             "runtime": rt, "score": score, "name_score": ns}
+    cands = [film("The Ghost and Mr. Chicken", 1966, 90, 98.1, 0.95), film("Ghost Town", 2008, 102, 94.8, 0.6),
+             film("The Ghost Galleon", 1974, 89, 84.3, 0.77), film("The Reluctant Astronaut", 1967, 101, 86.5, 0.84),
+             film("Little Ghost", 1997, 90, 80.6, 0.64)]
+    df = core.double_feature([t1, t2], cands)
+    assert df["name"] == "The Ghost and Mr. Chicken & The Reluctant Astronaut"
+
+
+def test_a_films_menu_heading_says_which_title_it_is():
+    """Each film's own menu, its heading as read: The Ghost and Mr. Chicken's says "The Ghost and
+    Chicken" and plays title 1. Headings that don't clearly name one film each leave it to the
+    lengths."""
+    items = [{"title_id": "Title 2", "imdb_id": "tt0059221", "name": "The Ghost and Mr. Chicken"},
+             {"title_id": "Title 1", "imdb_id": "tt0062190", "name": "The Reluctant Astronaut"}]
+    heads = {"Title 1": "The Ghost and Chicken", "Title 2": "RELUCTAT ASTRONAUT The LEMING"}
+    assert core.films_by_headings(items, heads) == {"tt0059221": "Title 1", "tt0062190": "Title 2"}
+    assert core.films_by_headings(items, {"Title 1": "The Ghost and Chicken", "Title 2": ""}) is None
+    assert core.films_by_headings(items, {"Title 1": "Feature One", "Title 2": "Feature Two"}) is None
+
+
+def test_films_apart_and_headings_with_more_on_them():
+    """Abbott and Costello: two features of their own video are two films apart (cuts of one film
+    share theirs: one); each film's menu heading names its stars too ("BUD ABBOTT COSTELLO IN BUCK
+    PRIVATES"), the film's name inside it still says which title it is."""
+    a = {"id": "Title 1", "role": "feature", "duration": 4950, "segments": ((1, 0, 999),)}
+    b = {"id": "Title 2", "role": "extra", "duration": 5046, "segments": ((2, 0, 999),)}
+    cut = {"id": "Title 3", "role": "version", "duration": 5200, "segments": ((1, 0, 999), (3, 0, 99))}
+    assert core.films_apart([a, b]) == 2 and core.films_apart([a, cut]) == 1
+    items = [{"title_id": "Title 2", "imdb_id": "tt0032873", "name": "One Night in the Tropics"},
+             {"title_id": "Title 1", "imdb_id": "tt0033436", "name": "Buck Privates"}]
+    heads = {"Title 1": "LOU BUD ABBOTT COSTELLO OneNight TROiICS", "Title 2": "BUD ABBOTT COSTELLO IN BUCK PRIVATES"}
+    assert core.films_by_headings(items, heads) == {"tt0032873": "Title 1", "tt0033436": "Title 2"}
+
+
+def test_the_last_film_takes_the_last_title():
+    """Abbott and Costello: In the Navy's menu heading names it; Hold That Ghost's only its stars.
+    The one film left takes the one title left (the two are 85.5 and 85.9 minutes: lengths can't tell)."""
+    items = [{"title_id": "Title 1", "imdb_id": "tt0033723", "name": "Hold That Ghost"},
+             {"title_id": "Title 2", "imdb_id": "tt0033754", "name": "In the Navy"}]
+    heads = {"Title 1": "BUD ABBOTT LOU COSTELLO IN THE NAVY", "Title 2": "BUD ABBOTT LOU COSTELLO"}
+    assert core.films_by_headings(items, heads) == {"tt0033754": "Title 1", "tt0033723": "Title 2"}
+    three = items + [{"title_id": "Title 3", "imdb_id": "tt3", "name": "Buck Privates"}]
+    assert core.films_by_headings(three, dict(heads, **{"Title 3": "BUD ABBOTT LOU COSTELLO"})) is None   # two unread
+
+
+def test_a_film_named_for_sure_needs_no_top_score():
+    """Abbott and Costello: Keep 'Em Flying and Ride 'Em Cowboy. Ride 'Em Cowboy's name was read
+    off the menu for sure (92%), but it scores 17 points under the first film (IMDb has it 82
+    minutes, the disc 86): it's the second film all the same. A film only sharing a word, as far
+    down, isn't."""
+    t1 = {"id": "Title 1", "role": "feature", "duration": 5160, "segments": ((1, 0, 999),)}
+    t2 = {"id": "Title 2", "role": "feature", "duration": 5136, "segments": ((2, 0, 999),)}
+    film = lambda name, year, rt, score, ns: {"kind": "movie", "name": name, "year": year, "imdb_id": "tt%d" % year,
+                                             "runtime": rt, "score": score, "name_score": ns}
+    cands = [film("Keep 'Em Flying", 1941, 86, 90.9, 0.87), film("Ride 'Em Cowboy", 1942, 82, 74.1, 0.92),
+             film("Abbott and Costello Meet Frankenstein", 1948, 83, 71.4, 0.68)]
+    assert core.double_feature([t1, t2], cands)["name"] == "Keep 'Em Flying & Ride 'Em Cowboy"
+    cands[1]["name_score"] = 0.78                                 # (named less surely: too far down)
+    assert core.double_feature([t1, t2], cands) is None
+
+
+def test_films_of_different_names_pair_first():
+    """"WHO DONE IT" read off the menu finds Who Done It? (1942) and Who Done It? (1956), both near
+    the top: more likely one name read twice than two films. Pardon My Sarong, read as "PARDON
+    WSARONG", is the other film. Two of one name alone don't pair here (an original and its remake
+    on one disc pair by their own menus, films_by_title)."""
+    t1 = {"id": "Title 1", "role": "feature", "duration": 5034, "segments": ((1, 0, 999),)}
+    t2 = {"id": "Title 2", "role": "feature", "duration": 4626, "segments": ((2, 0, 999),)}
+    film = lambda name, year, rt, score, ns: {"kind": "movie", "name": name, "year": year, "imdb_id": "tt%d" % year,
+                                             "runtime": rt, "score": score, "name_score": ns}
+    who42, who56 = film("Who Done It?", 1942, 77, 99.8, 1.0), film("Who Done It?", 1956, 85, 91.5, 1.0)
+    sarong = film("Pardon My Sarong", 1943, 84, 94.1, 0.89)
+    df = core.double_feature([t1, t2], [who42, sarong, who56])
+    assert [(i["title_id"], i["name"]) for i in df["items"]] == [("Title 1", "Pardon My Sarong"), ("Title 2", "Who Done It?")]
+    assert core.double_feature([t1, t2], [who42, who56]) is None             # one name read twice
+    little = [film("The Little Giant", 1933, 76, 93.6, 0.88), film("Little Giant", 1946, 91, 59.5, 1.0)]
+    assert core.double_feature([t1, dict(t2, duration=91 * 60)], little) is None     # ("The": one name too)
+
+
+def test_each_title_searched_by_its_own_menu(monkeypatch):
+    """A disc of two films, each with its own menu (Detect titles): each title searched for by its
+    own menu's words and its own length, as if it were a disc of its own. An original and its
+    remake of one name pair this way (Gone in 60 Seconds, 1974 and 2000), each by its length.
+    A title its own words don't name: no answer this way."""
+    titles = [{"id": "Title 1", "role": "feature", "duration": 103 * 60}, {"id": "Title 2", "role": "feature", "duration": 118 * 60}]
+    films = [{"kind": "movie", "name": "Gone in 60 Seconds", "year": y, "imdb_id": "tt%d" % y, "runtime": rt,
+              "score": 90, "name_score": 1.0} for y, rt in ((2000, 118), (1974, 103))]
+    asked = []
+
+    def search(con, queries, kind, facts):
+        asked.append((queries, facts["feature_minutes"]))
+        return sorted(films, key=lambda c: abs(c["runtime"] - facts["feature_minutes"]))
+    monkeypatch.setattr(core, "imdb_candidates", search)
+    df = core.films_by_title(None, titles, {"Title 1": ["GONE IN 60 SECONDS"], "Title 2": ["GONE IN 60 SECONDS"]}, {})
+    assert [(i["title_id"], i["year"]) for i in df["items"]] == [("Title 1", 1974), ("Title 2", 2000)]
+    assert [m for _, m in asked] == [103, 118]                       # (each its own length)
+    assert df["why"].startswith("each film named by its own menu")
+    monkeypatch.setattr(core, "imdb_candidates", lambda con, q, k, f: [dict(films[0], name_score=0.5)])
+    assert core.films_by_title(None, titles, {"Title 1": ["X"], "Title 2": ["Y"]}, {}) is None
+
+
+def test_words_side_by_side_are_one_line():
+    """The Naughty Nineties' menu: its arched title read as three pieces side by side, each a
+    little higher or lower, touching: one phrase again, left to right. Buttons stacked under it
+    stay their own lines."""
+    lines = [("NINETIES", (369, 47, 585, 171), 0.96), ("NAUGHTY", (184, 51, 392, 148), 0.98),
+             ("THE", (151, 79, 224, 142), 0.92), ("PLAY", (211, 192, 274, 229), 1.0),
+             ("ST.LOUIS", (370, 236, 419, 257), 0.98), ("SCENES", (201, 239, 282, 271), 1.0)]
+    got = core.ocr_phrases(lines)
+    assert "THE NAUGHTY NINETIES" in got                                   # (and stacked on its buttons, trimmed later)
+    assert not any("SCENES ST" in g or "PLAY ST" in g for g in got)       # (a word across the page isn't its line)
+    assert core._plain_name("The Little Giant") == core._plain_name("Little Giant")
+
+
+def test_a_title_its_menu_doesnt_name_takes_a_guess_by_length(monkeypatch):
+    """Mexican Hayride's menu names it; the other title's page only in pieces that name nothing
+    alone. The named one stands, the other takes the scan's best other guess as long as it (not
+    the same film, nor another of its name)."""
+    titles = [{"id": "Title 1", "role": "feature", "duration": 77 * 60}, {"id": "Title 2", "role": "feature", "duration": 84 * 60}]
+    hayride = {"kind": "movie", "name": "Mexican Hayride", "year": 1948, "imdb_id": "tt1", "runtime": 77, "score": 80,
+               "name_score": 0.83}
+    monkeypatch.setattr(core, "imdb_candidates", lambda con, q, k, f: [hayride] if f["feature_minutes"] == 77 else [])
+    killer = {"kind": "movie", "name": "Meet the Killer, Boris Karloff", "year": 1949, "imdb_id": "tt2", "runtime": 84,
+              "score": 83, "name_score": 0.85}
+    mars = {"kind": "movie", "name": "Abbott and Costello Go to Mars", "year": 1953, "imdb_id": "tt3", "runtime": 77,
+            "score": 90, "name_score": 0.8}
+    df = core.films_by_title(None, titles, {"Title 1": ["MEXICAN HLOE ARDE"], "Title 2": ["BUD ABBOTT"]}, {},
+                             [mars, killer, hayride])
+    assert [(i["title_id"], i["name"]) for i in df["items"]] == [("Title 1", "Mexican Hayride"),
+                                                                  ("Title 2", "Meet the Killer, Boris Karloff")]
+    assert df["why"].startswith("films named by their own menus, the rest by length")
+    assert core.films_by_title(None, titles, {"Title 1": ["MEXICAN"], "Title 2": ["BUD"]}, {}, [mars]) is None
+
+
+def test_the_stars_names_dont_pair_a_film_with_a_heading():
+    """Headings that all name the stars ("BUD ABBOTT LOU COSTELLO …"), and a film whose own name
+    has them (Bud Abbott Lou Costello Meet the Killer, Boris Karloff): the stars' names don't pair
+    it with In the Navy's heading; each film by its own words."""
+    items = [{"title_id": "Title 1", "imdb_id": "tt1", "name": "Bud Abbott Lou Costello Meet the Killer Boris Karloff"},
+             {"title_id": "Title 2", "imdb_id": "tt2", "name": "In the Navy"}]
+    heads = {"Title 1": "BUD ABBOTT LOU COSTELLO IN THE NAVY", "Title 2": "LOU BUD ABBOTT COSTELLO MEET THE ILLE BORIS KARLOFF"}
+    assert core.films_by_headings(items, heads) == {"tt2": "Title 1", "tt1": "Title 2"}
+
+
+def test_the_films_cast_has_the_discs_stars(monkeypatch):
+    """Both films' pages read "BUD ABBOTT COSTELLO …": the disc's stars. Three 1950-ish films of 80
+    minutes match title 1's "IN THE FOREIGN LEGION"; the one whose cast has Abbott and Costello is
+    the one (Caught in the Foreign Legion only shares the name)."""
+    titles = [{"id": "Title 1", "role": "feature", "duration": 80 * 60}, {"id": "Title 2", "role": "feature", "duration": 82 * 60}]
+    film = lambda iid, name, rt, score, ns: {"kind": "movie", "name": name, "year": 1950, "imdb_id": iid, "runtime": rt,
+                                             "score": score, "name_score": ns}
+    legion = [film("tt0161045", "Caught in the Foreign Legion", 80, 88.2, 0.86),
+              film("tt0042179", "Abbott and Costello in the Foreign Legion", 80, 84.5, 0.68)]
+    invisible = [film("tt0043255", "Bud Abbott and Lou Costello Meet the Invisible Man", 82, 80, 0.8)]
+    monkeypatch.setattr(core, "imdb_candidates", lambda con, q, k, f: legion if f["feature_minutes"] == 80 else invisible)
+    cast = {"tt0042179": {"bud", "abbott", "lou", "costello", "patricia", "medina"}, "tt0161045": {"someone", "else"},
+            "tt0043255": {"bud", "abbott", "lou", "costello"}}
+    phrases = {"Title 1": ["BUD ABBOTT COSTELLO FO FORN LEGION", "IN THE FOREIGN LEGION"],
+               "Title 2": ["BUD ABBOTT COSTELLO MEET THE INVISIBLE MAN"]}
+    df = core.films_by_title(None, titles, phrases, {}, [], cast=lambda i: cast.get(i, set()))
+    assert [i["name"] for i in df["items"]] == ["Abbott and Costello in the Foreign Legion",
+                                                 "Bud Abbott and Lou Costello Meet the Invisible Man"]
+
+
+def test_a_film_named_after_its_stars_is_weighed_by_the_rest(monkeypatch):
+    """Comin' Round the Mountain's page reads "Bud ABBOTT and COSTELLO COMIN' ROUND THE MOUNTAIN":
+    Abbott and Costello Go to Mars, named after its stars, isn't it for sharing their names (its
+    stars set aside, "Go to Mars" is nothing like it). Found by the whole reading, Bud Abbott and
+    Lou Costello Meet the Invisible Man is weighed by "Meet the Invisible Man"."""
+    titles = [{"id": "Title 1", "role": "feature", "duration": 77 * 60}, {"id": "Title 2", "role": "feature", "duration": 82 * 60}]
+    film = lambda iid, name, rt, score, ns: {"kind": "movie", "name": name, "year": 1951, "imdb_id": iid, "runtime": rt,
+                                             "score": score, "name_score": ns}
+    mars = film("tt1", "Abbott and Costello Go to Mars", 77, 95, 0.8)
+    comin = film("tt2", "Comin' Round the Mountain", 77, 85, 0.7)
+    invisible = film("tt3", "Bud Abbott and Lou Costello Meet the Invisible Man", 82, 93, 0.83)
+    stripes = film("tt4", "Invisible Stripes", 81, 83, 0.79)
+    monkeypatch.setattr(core, "imdb_candidates", lambda con, q, k, f: [mars, comin] if f["feature_minutes"] == 77
+                        else [invisible, stripes])
+    leads = {"tt1": {"bud", "abbott", "lou", "costello"}, "tt3": {"bud", "abbott", "lou", "costello"},
+             "tt2": {"bud", "abbott", "lou", "costello"}, "tt4": {"george", "raft"}}
+    phrases = {"Title 1": ["Bud ABBOTT and COSTELLO COMIN' ROUND THE MOUNTAIN"],
+               "Title 2": ["ABBOTT COSTELLO MEET Invisible mAn"]}
+    df = core.films_by_title(None, titles, phrases, {}, [], leads=lambda i: leads.get(i, set()))
+    assert [i["name"] for i in df["items"]] == ["Comin' Round the Mountain", "Bud Abbott and Lou Costello Meet the Invisible Man"]

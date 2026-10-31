@@ -34,8 +34,8 @@ The app then shows the poster or box art so you can confirm at a glance.
 
 ## Install
 
-Needs Python 3.9+ with Tkinter (included in the python.org installer for Windows
-and macOS).
+Needs Python 3.9 to 3.14 with Tkinter (included in the python.org installer for Windows
+and macOS). Python 3.15 isn't supported yet: some of what it uses doesn't run on it.
 
 ```
 pip install "git+https://github.com/b-town-bit/disc-detective"
@@ -47,8 +47,8 @@ double-click **Disc Detective.pyw** (Windows) or run `python -m disc_detective`.
 
 Optional: **MakeMKV** for ripping,
 **tesseract** for reading text off cover art, a free **TMDB** key (in Settings) for
-extra posters. Menu buttons are read best by **RapidOCR** (any system; Python 3.14 or
-older for now), then Windows' own OCR, then tesseract, whichever are installed:
+extra posters. Menu buttons are read best by **RapidOCR** (any system), then Windows'
+own OCR, then tesseract, whichever are installed:
 `pip install "disc-detective[rapid-ocr,windows-ocr] @ git+https://github.com/b-town-bit/disc-detective"`
 (or, from a copy of the repo, `pip install -e ".[rapid-ocr,windows-ocr]"`; leave out what your
 system can't have).

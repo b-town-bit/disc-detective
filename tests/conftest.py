@@ -1,4 +1,5 @@
-"""Every test gets its own empty Disc Detective home and no route to the real internet."""
+"""Every test gets its own empty Disc Detective home, no route to the real internet, and no
+MakeMKV or VLC of this machine's."""
 import os
 import sys
 
@@ -29,6 +30,18 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "IMDB_BASE", DEAD + "imdb/")
     monkeypatch.setattr(core, "TMDB_API", DEAD + "tmdb")
     monkeypatch.setattr(core, "TVMAZE_API", DEAD + "tvmaze")
+    # nor to this machine's own MakeMKV and VLC: a test's fake disc would set them reading it (and
+    # left running, a real drive waits on them); a test wanting them sets its own
+    from disc_detective import menus
+    monkeypatch.setattr(core, "find_makemkvcon", lambda: None)
+    monkeypatch.setattr(menus, "VLC_DIRS", [])
+    try:                                  # (nor its drives asked what they are)
+        from disc_detective import app
+        monkeypatch.setattr(app, "drive_models", lambda drives=None: {})
+        monkeypatch.setattr(app, "optical_drives", lambda: [])      # (its drives aren't watched)
+        monkeypatch.setattr(app, "volume_serial", lambda d: None)
+    except ImportError:                   # (no Tk here: no app tests either)
+        pass
     monkeypatch.setattr(core, "log", lambda msg: None)
     monkeypatch.setattr(core, "status_hook", None)
     monkeypatch.setattr(core, "progress", None)

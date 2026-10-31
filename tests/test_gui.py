@@ -1,6 +1,7 @@
 """The app, driven headlessly: first-run download, Settings, a scan, the rip plan."""
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -169,6 +170,71 @@ def test_type_the_answer_in(gui, tmp_path, monkeypatch):
     assert got == ["Justified (2010) S1 D2", "Hercules (1997)"]
 
 
+def test_enter_it_myself_as_several_films(gui, monkeypatch):
+    """Enter it myself… > Multi-film: a list of the disc's films, not tied to titles yet. It starts
+    from the films the scan suspects; Add a film… searches for one more, Remove takes one out.
+    Use this matches each film to a title by length and saves it as your answer, no more asked
+    (a mix-up is put right in Edit titles: each film's title, FILM)."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    opened, searches = [], []
+    monkeypatch.setattr(app, "use_answer", opened.append)
+    app.rep = {"kind": "movie", "titles": [{"id": "Title 1", "role": "junk", "duration": 30},
+                                           {"id": "Title 3", "role": "feature", "duration": 5862},
+                                           {"id": "Title 5", "role": "extra", "duration": 5396},
+                                           {"id": "Title 7", "role": "extra", "duration": 4500}],
+               "candidates": [{"kind": "movie", "name": "Rush Hour", "year": 1998, "imdb_id": "tt0120812",
+                               "runtime": 98, "score": 58}]}
+    d = dd_app.MatchDialog(root, app, title="Rush Hour", year=1998, multi=True)
+    root.update()
+    assert not d.results.winfo_ismapped() and d.film_box.winfo_ismapped()
+    assert [c["name"] for c in d.films] == ["Rush Hour"]          # the one the scan suspects
+    d.ok()                                                        # one film isn't several
+    assert "at least two" in d.note.cget("text") and not opened
+    real = dd_app.MatchDialog
+    monkeypatch.setattr(dd_app, "MatchDialog", lambda root, app, on_pick=None, **kw: searches.append(on_pick))
+    d.add_film()
+    searches[-1]({"imdb_id": "tt0266915", "name": "Rush Hour 2", "year": 2001, "runtime": 90, "kind": "movie"})
+    searches[-1]({"imdb_id": "tt0293564", "name": "Rush Hour 3", "year": 2007, "runtime": 91, "kind": "movie"})
+    searches[-1]({"imdb_id": "tt0293564", "name": "Rush Hour 3", "year": 2007, "runtime": 91, "kind": "movie"})
+    assert [c["name"] for c in d.films] == ["Rush Hour", "Rush Hour 2", "Rush Hour 3"]   # no doubles
+    d.remove_film(2)                                              # a mistake
+    monkeypatch.setattr(dd_app, "MatchDialog", real)
+    d.ok()
+    assert not d.top.winfo_exists()
+    assert opened == ["Rush Hour & Rush Hour 2 {films:Title 3=tt0120812|Title 5=tt0266915}"]
+
+
+def test_multi_film_has_a_place_for_each_feature(gui, monkeypatch):
+    """Two features on the disc (October Collections: 90 and 102 minutes), taken for one film:
+    Multi-film starts with a place for each, the film the scan found in one, the other to search
+    for. Use this waits for both; Search… fills its own row, Change… replaces a film."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    opened, searches = [], []
+    monkeypatch.setattr(app, "use_answer", opened.append)
+    app.rep = {"kind": "movie", "titles": [{"id": "Title 1", "role": "feature", "duration": 5386},
+                                           {"id": "Title 2", "role": "version", "duration": 6120}],
+               "candidates": [{"kind": "movie", "name": "You Wish!", "year": 2003, "imdb_id": "tt0346176",
+                               "runtime": 90, "score": 80}]}
+    d = dd_app.MatchDialog(root, app, multi=True)
+    assert [c and c["name"] for c in d.films] == ["You Wish!", None]
+    rows = [w.cget("text") for w in d.film_list.winfo_children() if w.winfo_class() in ("TLabel", "TButton")]
+    assert "Film 2: not chosen yet" in rows and "Search…" in rows and "Change…" in rows
+    d.ok()
+    assert "Search for each film" in d.note.cget("text") and not opened
+    monkeypatch.setattr(dd_app, "MatchDialog", lambda root, app, on_pick=None, **kw: searches.append(on_pick))
+    d.add_film(1)
+    searches[-1]({"imdb_id": "tt2", "name": "Second Film", "year": 2004, "runtime": 102, "kind": "movie"})
+    d.add_film(0)                                                 # not You Wish! after all
+    searches[-1]({"imdb_id": "tt1", "name": "First Film", "year": 2005, "runtime": 89, "kind": "movie"})
+    assert [c["name"] for c in d.films] == ["First Film", "Second Film"]
+    d.ok()
+    assert opened == ["First Film & Second Film {films:Title 1=tt1|Title 2=tt2}"]
+
+
 def test_type_ahead_picks_an_exact_imdb_entry(gui, imdb_dir, monkeypatch, tmp_path):
     root, made, pump = gui
     monkeypatch.setenv("DISC_DETECTIVE_IMDB", imdb_dir)
@@ -190,7 +256,7 @@ def test_type_ahead_picks_an_exact_imdb_entry(gui, imdb_dir, monkeypatch, tmp_pa
     iid = next(i for i, t in rows.items() if "Hercules (1998)" in t)
     d.results.selection_set(iid)
     d.pick()
-    assert d.tv.get() and d.picked["kind"] == "tv" and d.pick_lbl.cget("text").startswith("Using IMDb tt")
+    assert d.tv() and d.picked["kind"] == "tv" and d.pick_lbl.cget("text").startswith("Using IMDb tt")
     d.ok()                                                # TV without a season: asks for it
     assert "season" in d.note.cget("text") and not got
     d.season.set("1")
@@ -255,7 +321,7 @@ def test_short_film_disc_confirm_and_fix_titles(gui, tmp_path, imdb_dir, monkeyp
     labels = [app.match_popup.entrycget(i, "label") for i in range(app.match_popup.index("end") + 1)
               if app.match_popup.type(i) == "command"]
     app.match_popup.unpost()
-    assert "Change the films…" in labels and "It's one film or TV show instead…" in labels
+    assert "It's one film or TV show instead…" in labels
     scans = []
     app.scan = lambda: scans.append(1)                              # (an instance attribute: del restores)
     app.confirm()                                                   # ✓ That's right: saved, no rescan
@@ -264,16 +330,19 @@ def test_short_film_disc_confirm_and_fix_titles(gui, tmp_path, imdb_dir, monkeyp
     assert not scans and app.rep.get("personal_hit")
     assert app.standing_full == "Saved to your case files"
     assert app.rep["kind"] == "collection" and app.confirmed_lbl.winfo_ismapped()
-    # Change the films: swap two, drop one
-    d = dd_app.CollectionDialog(root, app)
-    rows = [t["id"] for t in d.rows]
-    assert rows[:4] == ["00001.mpls", "00002.mpls", "00003.mpls", "00004.mpls"]
-    shave = dict(d.assign["00003.mpls"])
-    d.set(next(t for t in d.rows if t["id"] == "00002.mpls"), shave)
-    d.clear(next(t for t in d.rows if t["id"] == "00003.mpls"))
-    texts = [w.cget("text") for w in d.grid.winfo_children() if w.winfo_class() == "TLabel" and w.cget("text")]
-    assert any(x.endswith("A Close Shave (1995)") for x in texts) and "not a film (extra)" in texts
-    d.name_var.set("Wallace & Gromit: Three Amazing Adventures")    # the name is editable too
+    # Edit titles: which film each title is (FILM): give one another's film (they swap), make
+    # one not a film, and rename the collection
+    d = dd_app.TitlesDialog(root, app, app.rep["content_hash"], "Wallace & Gromit", rep=app.rep)
+    assert d.collection and "FILM" in d.cols
+    assert set(d.films) >= {"00001.mpls", "00002.mpls", "00003.mpls"}
+    shave, trousers = dict(d.films["00003.mpls"]), dict(d.films["00002.mpls"])
+    d.set_film("00002.mpls", shave)
+    assert d.films["00002.mpls"] == shave and d.films["00003.mpls"] == trousers    # swapped
+    texts = [w.cget("text") for w in d.film_cells["00002.mpls"].winfo_children()]
+    assert texts[0].endswith("A Close Shave (1995)") and texts[1] == "Change…"
+    d.vars["00003.mpls"]["type"].set("Extra")                      # not a film after all
+    assert "00003.mpls" not in d.films and not d.film_cells["00003.mpls"].winfo_children()
+    d.coll_name.set("Wallace & Gromit: Three Amazing Adventures")   # the name is editable too
     d.save()
     app.rep = None
     wait(lambda: app.rep.get("personal_hit"))
@@ -349,9 +418,15 @@ def test_long_title_list_scrolls_and_keeps_the_buttons_on_screen(gui, tmp_path, 
     assert picker.area.canvas.yview()[0] > 0
     picker.area.canvas.yview_moveto(0)
     root.update()
-    # Windows may deliver the wheel to the focused widget elsewhere: the pointer decides
-    ok[0].event_generate("<MouseWheel>", delta=-120, rootx=row.winfo_rootx() + 5, rooty=row.winfo_rooty() + 5,
-                         x=0, y=0)
+    # Windows may deliver the wheel to the focused widget elsewhere: the pointer decides. What's
+    # under it is asked of the screen, so keep the list in front of any other program's window
+    top.attributes("-topmost", True)
+    top.lift()
+    root.update()
+    x, y = row.winfo_rootx() + 5, row.winfo_rooty() + 5
+    assert str(row.winfo_containing(x, y) or "").startswith(str(picker.area)), \
+        "another window covers the test's window (a desktop in use): run the GUI tests again"
+    ok[0].event_generate("<MouseWheel>", delta=-120, rootx=x, rooty=y, x=0, y=0)
     root.update()
     assert picker.area.canvas.yview()[0] > 0
     picker.top.destroy()
@@ -393,6 +468,40 @@ def test_ticked_version_is_an_edition():
     both = dd_app.plan_rip(rep, dd_app.preview_titles(rep), False, selected={"Title 1", "Title 2"})
     assert [p["dest"] for p in both] == ["Film (1999) {imdb-tt0000009}/Film (1999).mkv",
                                          "Film (1999) {imdb-tt0000009}/Film (1999) {edition-Fullscreen}.mkv"]
+    # Rush Hour 3: both copies labelled the main film (Fullscreen, Widescreen), so both features:
+    # the fullscreen one is still left for you to tick; a film only on disc in 4:3 is ripped
+    wide = {"standard": "NTSC", "aspect": "16:9", "letterboxed": False}
+    rep["titles"] = [{"id": "Title 1", "role": "feature", "duration": 5442, "video_info": dict(wide, aspect="4:3")},
+                     {"id": "Title 20", "role": "feature", "duration": 5442, "video_info": wide}]
+    rep["plex_names"] = []
+    assert [p["title_id"] for p in dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)] == ["Title 20"]
+    rep["titles"][1]["video_info"] = dict(wide, aspect="4:3")
+    assert len(dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)) == 2
+    rep["titles"][1]["video_info"] = wide                  # Settings > Ripping: Prefer widescreen off
+    assert len(dd_app.plan_rip(rep, dd_app.preview_titles(rep), False, prefer_wide=False)) == 2
+
+
+def test_rip_preferences_in_settings(gui, monkeypatch):
+    """Settings > Ripping > What to rip: Include extras is the rip menu's own tick (either one
+    changes both, remembered); Prefer widescreen is saved as you go, on unless turned off."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    d = dd_app.SettingsDialog(root, app)
+    assert d.wide.get() and not app.extras.get()
+    ticks = {w.cget("text"): w for w in made_widgets(d.top) if w.winfo_class() == "TCheckbutton"}
+    ticks["Include extras"].invoke()
+    assert app.extras.get() and dd_app.load_settings()["extras"]
+    d.wide.set(False)
+    assert dd_app.load_settings()["prefer_widescreen"] is False
+    d.close()
+    assert dd_app.SettingsDialog(root, app).wide.get() is False
+
+
+def made_widgets(w):
+    for c in w.winfo_children():
+        yield c
+        yield from made_widgets(c)
 
 
 def test_a_discdb_hit_needs_no_confirming(gui, monkeypatch):
@@ -1556,3 +1665,555 @@ def test_a_menu_picture_shows_the_words_read_on_demand(tmp_path):
         assert v.photo is v.photos[0] and "point at it" not in v.read.cget("text")
     finally:
         root.destroy()
+
+
+def test_the_progress_bar_keeps_the_pictures_on_screen():
+    """The brass progress bar's sliding run takes a new width each frame: its pictures' cache
+    drops the least lately used past its size, never the trough on screen (emptied all at once,
+    it blinked out every few seconds)."""
+    from disc_detective import theme as th
+    cache = {}
+    for n in range(100):
+        th._cached(cache, "trough", lambda: "trough")       # (used every frame)
+        th._cached(cache, ("fill", n), lambda n=n: n)
+        assert "trough" in cache and len(cache) <= 40
+    assert ("fill", 99) in cache and ("fill", 0) not in cache
+
+
+def test_the_menus_put_a_double_features_films_right():
+    """Paired by length the wrong way round, the films' own menus put it right: the corrected
+    pairing becomes the disc's answer. Already right, or headings unclear: nothing to do."""
+    items = [{"title_id": "Title 2", "imdb_id": "tt0059221", "name": "The Ghost and Mr. Chicken"},
+             {"title_id": "Title 1", "imdb_id": "tt0062190", "name": "The Reluctant Astronaut"}]
+    rep = {"candidates": [{"kind": "collection", "name": "The Ghost and Mr. Chicken & The Reluctant Astronaut",
+                           "score": 95, "items": items}]}
+    found = {"features": [{"title": 1, "name": "The Ghost and Chicken"}, {"title": 2, "name": "RELUCTAT ASTRONAUT"}]}
+    assert dd_app.films_by_menus(rep, found) ==         "The Ghost and Mr. Chicken & The Reluctant Astronaut {films:Title 1=tt0059221|Title 2=tt0062190}"
+    items[0]["title_id"], items[1]["title_id"] = "Title 1", "Title 2"
+    assert dd_app.films_by_menus(rep, found) is None
+    assert dd_app.films_by_menus(rep, {"features": [{"title": 1, "name": ""}, {"title": 2, "name": ""}]}) is None
+
+
+def test_a_discs_short_films_put_right_by_their_buttons():
+    """Wallace & Gromit: three short films played off one Shorts page (no menu of their own), the
+    answer a collection of them by release order: The Wrong Trousers on title 3, which the menu
+    calls A Close Shave; its Wrong Trousers plays title 7 (title 6's twin). The buttons' names pair
+    them, each title a film; the gadget shorts beside them (2 minutes) stay extras."""
+    items = [{"title_id": "Title 2", "imdb_id": "tt0104361", "name": "Wallace & Gromit: A Grand Day Out", "runtime": 23},
+             {"title_id": "Title 3", "imdb_id": "tt0108598", "name": "Wallace & Gromit: The Wrong Trousers", "runtime": 30},
+             {"title_id": "Title 6", "imdb_id": "tt0112691", "name": "Wallace & Gromit: A Close Shave", "runtime": 31}]
+    titles = [{"id": "Title %d" % n, "duration": d, "role": r} for n, d, r in
+              ((1, 3392, "play-all"), (2, 1469, "feature"), (3, 1923, "feature"), (6, 1862, "feature"),
+               (7, 1862, "duplicate"), (17, 106, "extra"))]
+    titles[4]["note"] = "same video as Title 6"
+    rep = {"candidates": [{"kind": "collection", "name": "Wallace & Gromit Collection", "score": 95, "items": items}],
+           "titles": titles}
+    found = {"feature": 1, "extras": [{"title": 2, "name": "A Grand Day Out"}, {"title": 3, "name": "Close Have"},
+                                      {"title": 7, "name": "The Rong Trrousers"}, {"title": 17, "name": "The Soccamatic"}]}
+    assert dd_app.films_by_menus(rep, found) == \
+        "Wallace & Gromit Collection {films:Title 2=tt0104361|Title 3=tt0112691|Title 7=tt0108598}"
+    labels = dd_app.detected_for(rep, found)
+    assert [t for t, l in sorted(labels.items()) if l["type"] == "MainMovie"] == ["Title 2", "Title 3", "Title 7"]
+    assert labels["Title 17"]["type"] == "Extra" and "Title 1" not in labels
+    # not a collection's answer (a film, a TV disc): the menus' word as it was
+    rep["candidates"][0]["kind"] = "movie"
+    assert dd_app.short_films(rep, found) == {} and dd_app.films_by_menus(rep, found) is None
+
+
+def test_the_scan_runs_the_discs_program(monkeypatch):
+    """A DVD's scan runs its program (no VLC pressing anything): its menu data kept from before,
+    else read off the disc and kept; its map on the scan. A Blu-ray, or a program that can't be
+    read, leaves the scan as it was."""
+    import types
+    from disc_detective import menus
+    kept, read = {}, []
+    monkeypatch.setattr(menus, "saved_structure", lambda h, home=None, oldest=None: kept.get(h))
+    monkeypatch.setattr(menus, "save_structure", lambda h, s, home=None: kept.__setitem__(h, s))
+    monkeypatch.setattr(menus, "read_structure", lambda root, vlc, log=print: read.append(root) or {"vmgm": []})
+    monkeypatch.setattr(menus, "_pages", lambda s: {})
+    monkeypatch.setattr(menus, "find_vlc", lambda folder=None: None)
+    pmap = {"plays": {7: [{"page": [7, 26, 1], "button": 4, "chapter": 1}]}, "chains": {}, "chained": [6], "opening": []}
+    monkeypatch.setattr(menus, "program_map", lambda root, s: pmap)
+    app = types.SimpleNamespace(settings={})
+    rep = {"format": "DVD", "content_hash": "A" * 32,
+           "titles": [{"id": "Title 6", "role": "feature", "note": ""},
+                      {"id": "Title 7", "role": "duplicate", "note": "same video as Title 6"}]}
+    assert dd_app.App._program_map(app, "E:", rep) is pmap and read == ["E:"] and "A" * 32 in kept
+    assert dd_app.App._program_map(app, "E:", rep) is pmap and read == ["E:"]        # (kept: not read again)
+    dd_app.App._program_seen(app, rep, pmap)
+    assert [t["role"] for t in rep["titles"]] == ["duplicate", "feature"]
+    assert dd_app.App._program_map(app, "E:", dict(rep, format="Blu-ray")) is None
+    monkeypatch.setattr(menus, "program_map", lambda root, s: (_ for _ in ()).throw(OSError("no disc")))
+    assert dd_app.App._program_map(app, "E:", rep) is None                            # (never fails the scan)
+
+
+def test_a_menus_play_alls_put_the_scan_right():
+    """Wallace & Gromit's Play Alls, as their pages have them: the Shorts' title 1 holds 2 and 3
+    (the disc goes on to 7's twin after it), so it plays 2, 3 and 7; the Cracking Contraptions'
+    title 16, taken for an extra (its pieces not lining up with its parts'), plays its page's
+    titles, as long as they are together. Not where the menus and the scan disagree."""
+    from disc_detective import menus
+    btn = lambda n, text, title, secs: {"n": n, "rect": [0, 0, 50, 20], "text": text,
+                                        "plays": {"title": title, "chapter": 1, "seconds": secs}}
+    page = lambda n, buttons: {"domain": 7, "page": n, "program": 1, "heading": "", "route": [], "buttons": buttons}
+    out = {"pages": [page(26, [btn(1, "Play All", 1, 3392), btn(2, "A Grand Day Out", 2, 1469),
+                               btn(3, "Close Shave", 3, 1923), btn(4, "The Wrong Trousers", 7, 1862)]),
+                     page(33, [btn(1, "Play All", 16, 1429)] + [btn(n, "Gadget %d" % n, 15 + n, 140) for n in (2, 3, 4)])],
+           "chapters": {}, "reader": "rapidocr"}
+    found = menus.menu_titles(out)
+    assert found["play_all_parts"] == {1: [2, 3, 7], 16: [17, 18, 19]}
+    titles = [{"id": "Title %d" % n, "duration": d, "role": r, "note": note} for n, d, r, note in
+              ((1, 3392, "play-all", "plays Title 2, Title 3"), (2, 1469, "feature", ""), (3, 1923, "feature", ""),
+               (7, 1862, "duplicate", "same video as Title 6"), (16, 425, "extra", "episode-length"),
+               (17, 140, "junk", ""), (18, 140, "extra", ""), (19, 140, "extra", ""))]
+    dd_app.menu_play_alls(titles, found)
+    assert [(t["role"], t["note"]) for t in titles if t["id"] in ("Title 1", "Title 16")] == \
+        [("play-all", "plays Title 2, Title 3, Title 7"), ("play-all", "plays Title 17, Title 18, Title 19")]
+    # a Play All whose page leaves out a title the scan saw in it, or not as long as its page's: as it was
+    titles[4].update(role="extra", duration=900, note="episode-length")
+    titles[0]["note"] = "plays Title 2, Title 5"
+    dd_app.menu_play_alls(titles, found)
+    assert titles[0]["note"] == "plays Title 2, Title 5" and titles[4]["role"] == "extra"
+
+
+def test_a_double_features_extras_rip_with_their_own_film():
+    """The Shakiest Gun in the West's trailer sits on its own menu: it rips into that film's
+    folder, not the first film's. Kept in your answer ({extras:...}), so it holds next time."""
+    items = [{"title_id": "Title 1", "imdb_id": "tt0064606", "name": "The Love God?", "year": 1969},
+             {"title_id": "Title 2", "imdb_id": "tt0063591", "name": "The Shakiest Gun in the West", "year": 1968}]
+    truth = core.truth_for_collection("The Love God? & The Shakiest Gun in the West",
+                                      [("Title 1", "tt0064606"), ("Title 2", "tt0063591")], {"Title 3": "tt0063591"})
+    assert truth.endswith("{extras:Title 3=tt0063591}")
+    assert core.parse_truth(truth)["extras"] == {"Title 3": "tt0063591"}
+    assert core.strip_tags(truth) == "The Love God? & The Shakiest Gun in the West"
+    cand = {"kind": "collection", "name": "The Love God? & The Shakiest Gun in the West", "score": 100,
+            "items": items, "extras": {"Title 3": "tt0063591"}}
+    rep = {"format": "DVD", "content_hash": "1" * 32, "discdb": {"hit": None}, "candidates": [cand],
+           "plex_names": [], "titles": [{"id": "Title 1", "role": "feature", "duration": 6033},
+                                        {"id": "Title 2", "role": "feature", "duration": 6158},
+                                        {"id": "Title 3", "role": "extra", "duration": 156},
+                                        {"id": "Title 4", "role": "extra", "duration": 90}]}
+    plan = {p["title_id"]: p["dest"] for p in dd_app.plan_rip(rep, dd_app.preview_titles(rep), True)}
+    assert plan["Title 3"].startswith("The Shakiest Gun in the West (1968) {imdb-tt0063591}/")
+    assert plan["Title 4"].startswith("The Love God (1969) {imdb-tt0064606}/") or         plan["Title 4"].startswith("The Love God? (1969)")                  # (unknown: the first film's)
+    # Detect titles on a disc you've answered for: the trailer's film, found on its menu, is kept
+    cand.pop("extras")
+    rep["personal_hit"] = {"truth": "x"}
+    found = {"features": [{"title": 1, "name": "The Love God"}, {"title": 2, "name": "The Shakiest Gun in the West"}],
+             "extras": [{"title": 3, "name": "Trailer", "film": 2}]}
+    assert dd_app.films_by_menus(rep, found) == truth
+    cand["extras"] = {"Title 3": "tt0063591"}
+    assert dd_app.films_by_menus(rep, found) is None                     # nothing new
+
+
+def test_each_labelled_film_rips_to_its_own_folder_and_edition():
+    """Your labels on a double feature's films drop the scan's names for them: each still rips
+    into its own film's folder (Rush Hour 2 isn't Rush Hour). A film's cuts you named ("Signature
+    Edition", "Original Edition": The Iron Giant) are its Plex editions; a label naming the film
+    itself isn't one."""
+    items = [{"title_id": "Title 3", "imdb_id": "tt0120812", "name": "Rush Hour", "year": 1998},
+             {"title_id": "Title 5", "imdb_id": "tt0266915", "name": "Rush Hour 2", "year": 2001}]
+    rep = {"format": "DVD", "content_hash": "2" * 32, "discdb": {"hit": None}, "plex_names": [],
+           "candidates": [{"kind": "collection", "name": "Rush Hour & Rush Hour 2", "score": 100, "items": items}],
+           "labels": {"Title 3": {"type": "MainMovie", "title": "Rush Hour"},
+                      "Title 5": {"type": "MainMovie", "title": "Rush Hour 2"}},
+           "titles": [{"id": "Title 3", "role": "feature", "duration": 5862},
+                      {"id": "Title 5", "role": "feature", "duration": 5396}]}
+    plan = {p["title_id"]: p["dest"] for p in dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)}
+    assert plan == {"Title 3": "Rush Hour (1998) {imdb-tt0120812}/Rush Hour (1998).mkv",
+                    "Title 5": "Rush Hour 2 (2001) {imdb-tt0266915}/Rush Hour 2 (2001).mkv"}
+    rep.update(candidates=[{"kind": "movie", "name": "The Iron Giant", "year": 1999, "imdb_id": "tt0129167", "score": 100}],
+               labels={"Title 1": {"type": "MainMovie", "title": "Signature Edition"},
+                       "Title 2": {"type": "MainMovie", "title": "Original Edition"}},
+               titles=[{"id": "Title 1", "role": "feature", "duration": 5372},
+                       {"id": "Title 2", "role": "feature", "duration": 5176}])
+    plan = {p["title_id"]: p["dest"].split("/")[-1] for p in dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)}
+    assert plan == {"Title 1": "The Iron Giant (1999) {edition-Signature Edition}.mkv",
+                    "Title 2": "The Iron Giant (1999) {edition-Original Edition}.mkv"}
+    rep["labels"]["Title 1"]["title"] = "The Iron Giant"
+    assert dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)[0]["dest"].endswith("/The Iron Giant (1999).mkv")
+
+
+def test_a_guess_for_a_disc_of_two_films_asks_the_menus(gui, monkeypatch):
+    """Abbott and Costello: the label names the pair, so a guess at one of their films; the disc
+    has two films' worth of video. Its menus are read and the disc looked at again: kept when
+    that makes it the two films, else the guess stands. A sure match is asked about too (In the
+    Navy, sure, with Hold That Ghost beside it): it stands unless the menus make it two films, and
+    then you're told there seems to be another film. Your answer isn't second-guessed; nor are
+    cuts of one film (one film's video)."""
+    from disc_detective import menus
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    monkeypatch.setattr(menus, "find_vlc", lambda d=None: "vlc")
+    read = []
+    monkeypatch.setattr(menus, "menu_phrases", lambda drive, vlc, h, log=None, is_word=None: read.append(h) or ["OneNight TROPICS"])
+    film = {"kind": "movie", "name": "Abbott and Costello Meet Frankenstein", "score": 84, "imdb_id": "tt1"}
+    rep = {"format": "DVD", "content_hash": "E00F", "status": "best guess: ...", "films_apart": 2,
+           "candidates": [film, dict(film, name="Hollywood", score=80.6, imdb_id="tt2")], "discdb": {"hit": None}}
+    pair = {"kind": "collection", "name": "One Night in the Tropics & Buck Privates", "score": 95, "items": []}
+    args = SimpleNamespace()
+    monkeypatch.setattr(core, "identify", lambda drive, args: {"candidates": [pair], "status": "best guess: x"})
+    assert app._menus_witness("E:\\", args, rep)["candidates"][0] is pair and read == ["E00F"]
+    monkeypatch.setattr(core, "identify", lambda drive, args: {"candidates": rep["candidates"], "status": "best guess: x"})
+    got = app._menus_witness("E:\\", args, rep)
+    assert got is rep and got["more_films"]                                       # nothing better: the guess stands
+    read.clear()
+    sure = dict(rep, candidates=[dict(film, score=99)])
+    got = app._menus_witness("E:\\", args, sure)
+    assert got is sure and read == ["E00F"] and got["more_films"]                 # asked; it stands, another film?
+    monkeypatch.setattr(core, "identify", lambda drive, args: {"candidates": [pair], "status": "best guess: x"})
+    assert app._menus_witness("E:\\", args, dict(sure))["candidates"][0] is pair  # the menus make it two films
+    read.clear()
+    mine = dict(sure, personal_hit={"truth": "In the Navy (1941)"})
+    mine.pop("more_films")
+    assert app._menus_witness("E:\\", args, mine) is mine and not read and not mine.get("more_films")
+    one = dict(rep, films_apart=1)
+    one.pop("more_films")
+    assert app._menus_witness("E:\\", args, one) is one and not read and not one.get("more_films")   # cuts
+    # Detect titles finds two films on a disc named as one: it's identified again, from the menus
+    scans = []
+    monkeypatch.setattr(app, "scan", lambda: scans.append(app._menus_again))
+    app.rep = sure
+    app.detect_done(sure, {"feature": 2, "features": [{"title": 1, "name": "IN THE NAVY"}, {"title": 2, "name": ""}],
+                           "extras": [], "promos": []}, None)
+    assert scans == ["E00F"]
+
+
+def test_a_drive_that_doesnt_answer(gui, monkeypatch):
+    """A USB drive stuck after a read: Windows lists it, but asking it anything waits. The app
+    opens without waiting on it; the drive shows "Drive not ready", greyed out, Scan with it; it's
+    asked again now and then, and once it answers it's back, its disc named."""
+    import threading
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    monkeypatch.setattr(dd_app.App, "DRIVE_WAIT", 0.2)
+    monkeypatch.setattr(dd_app.App, "DRIVE_RECHECK", 100)
+    monkeypatch.setattr(dd_app, "optical_drives", lambda: ["E:\\"])
+    monkeypatch.setattr(core, "volume_label", lambda d: "ABBOTT_AND_COSTELLO")
+    stuck, asked = threading.Event(), []
+    real = os.path.isdir
+
+    def isdir(p):
+        if p == "E:\\":
+            asked.append(p)
+            stuck.wait(10)
+            return True
+        return real(p)
+    monkeypatch.setattr(os.path, "isdir", isdir)
+    try:
+        t0 = time.time()
+        app = dd_app.App(root)
+        assert time.time() - t0 < 2                                  # opened without waiting on it
+        assert pump(lambda: app.drive_busy(), 5)
+        assert str(app.scan_btn.cget("state")) == "disabled" and "Drive not ready" in app.drive_btn.cget("text")
+        assert app.drive_light() == "busy"                          # red
+        m = app.drive_menu
+        assert m.entrycget(0, "label").endswith("Drive not ready") and m.entrycget(0, "state") == "disabled"
+        app.scan()                                                   # (Scan anyway: it says to wait)
+        assert "isn't ready" in app.status.cget("text")
+        pump(lambda: False, 0.5)
+        assert len(asked) == 1                                       # still stuck: not asked again on top
+        stuck.set()
+        assert pump(lambda: app._drive_state.get("E:\\") == ("ready", "ABBOTT_AND_COSTELLO"), 5)
+        assert str(app.scan_btn.cget("state")) == "normal" and "Drive not ready" not in app.drive_btn.cget("text")
+        assert m.entrycget(0, "label").endswith("ABBOTT_AND_COSTELLO")
+        assert app.drive_light() == "ready"                         # green: a disc in it, free
+        app.set_busy(True)                                           # the app reads it: gold, breathing
+        assert app.drive_light() == "reading" and app._drive_pulse
+        shown = set()
+        pump(lambda: shown.add(str(app.drive_btn.cget("image"))) and False, 1)
+        assert len(shown) > 2                                        # (its shades in turn)
+        app.set_busy(False)
+        assert app.drive_light() == "ready" and not app._drive_pulse
+    finally:
+        stuck.set()
+
+
+def test_drive_names_are_kept(gui, monkeypatch):
+    """Each drive's make and model, once found, is kept: the next start shows it at once, whether
+    or not the drives (or Windows' device inventory) answer then; a drive found since is added."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    monkeypatch.setattr(dd_app.App, "check_drives", lambda self, drives: None)
+    monkeypatch.setattr(dd_app, "optical_drives", lambda: ["E:\\"])
+    dd_app.save_settings({"drive_models": {"E:": "PIONEER BD-RW BDR-XD07U"}})     # (found last time)
+    monkeypatch.setattr(dd_app, "drive_models", lambda drives=None: {})          # nothing answers now
+    app = dd_app.App(root)
+    assert "PIONEER BD-RW BDR-XD07U" in app.drive_btn.cget("text")
+    app._drive_models_found({"D:": "HL-DT-ST BD-RE BU40N"})
+    assert dd_app.load_settings()["drive_models"] == {"E:": "PIONEER BD-RW BDR-XD07U", "D:": "HL-DT-ST BD-RE BU40N"}
+
+
+def navy_and_ghost(first="Title 1"):
+    """In the Navy and Hold That Ghost, paired by length, In the Navy as first (a title id)."""
+    other = "Title 2" if first == "Title 1" else "Title 1"
+    items = [{"title_id": first, "imdb_id": "tt0033754", "name": "In the Navy", "year": 1941},
+             {"title_id": other, "imdb_id": "tt0033723", "name": "Hold That Ghost", "year": 1941}]
+    items.sort(key=lambda it: it["title_id"])
+    return {"content_hash": "05CBCD4B" + "0" * 24, "format": "DVD", "kind": "collection", "labels": {},
+            "titles": [{"id": "Title 1", "role": "feature", "duration": 5130}, {"id": "Title 2", "role": "feature", "duration": 5154},
+                       {"id": "Title 3", "role": "extra", "duration": 98}, {"id": "Title 4", "role": "extra", "duration": 188}],
+            "candidates": [{"kind": "collection", "name": " & ".join(it["name"] for it in items), "score": 95,
+                            "items": items}],
+            "menu_found": {"features": [{"title": 1, "name": "BUD ABBOTT LOU COSTELLO IN THE NAVY"},
+                                        {"title": 2, "name": "BUD ABBOTT LOU COSTELLO"}],
+                           "extras": [{"title": 3, "name": "Theatrical Trailer", "film": 2},
+                                      {"title": 4, "name": "Theatrical Trailer", "film": 1}]}}
+
+
+def test_a_double_features_name_follows_its_films_order():
+    """Paired the wrong way round by length, put right by the films' menus: a name made of the
+    films' names follows them ("Hold That Ghost & In the Navy" becomes "In the Navy & Hold That
+    Ghost"); a name you gave it stays."""
+    rep = navy_and_ghost(first="Title 2")
+    assert rep["candidates"][0]["name"] == "Hold That Ghost & In the Navy"
+    truth = dd_app.films_by_menus(rep, rep["menu_found"])
+    assert truth.startswith("In the Navy & Hold That Ghost {films:Title 1=tt0033754|Title 2=tt0033723}")
+    rep["candidates"][0]["name"] = "Abbott and Costello Double Feature"
+    assert dd_app.films_by_menus(rep, rep["menu_found"]).startswith("Abbott and Costello Double Feature {films:")
+
+
+def test_edit_titles_shows_each_films_extras_and_follows_a_rescan(gui, monkeypatch):
+    """Edit titles on a double feature: each extra says whose film it is, under FILM (its film's
+    menu; no choosing); a film corrected here, its extras go with it (they're its title's); films
+    swapped here, a name made of theirs follows; rescanned while open (Detect titles put the films
+    right), it shows the disc as the new scan has it."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    rep = navy_and_ghost(first="Title 2")
+    d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Abbott and Costello", rep=rep)
+    words = lambda tid: [w.cget("text") for w in d.film_cells[tid].winfo_children()]
+    # the extras' films, as their menus say: title 3's on title 2's film's menu (In the Navy, here)
+    assert words("Title 3") == ["In the Navy"] and words("Title 4") == ["Hold That Ghost"]
+    # Detect titles run with the window open: the extras' films as it says, then and there
+    rep["menu_found"]["extras"][0]["film"] = 1                  # (title 3 now on title 1's film's menu)
+    d.detected()
+    assert words("Title 3") == ["Hold That Ghost"]
+    rep["menu_found"]["extras"][0]["film"] = 2
+    d.detected()
+    assert d.coll_name.get() == "Hold That Ghost & In the Navy"
+    # title 2's film corrected: its extra (title 3, on its menu) goes with the film it is now
+    saved_was = dict(d.films["Title 2"])
+    d.set_film("Title 2", {"imdb_id": "tt0036004", "name": "Hit the Ice", "year": 1943})
+    assert words("Title 3") == ["Hit the Ice"] and words("Title 4") == ["Hold That Ghost"]
+    assert "{extras:Title 3=tt0036004|Title 4=tt0033723}" in d.films_answer()
+    d.set_film("Title 2", saved_was)
+    d.coll_name.set("Hold That Ghost & In the Navy")
+    d.set_film("Title 1", d.films["Title 2"])                       # swapped by hand
+    assert d.coll_name.get() == "In the Navy & Hold That Ghost"
+    d.coll_name.set("Bud and Lou")                                  # named by you: kept from now on
+    d.set_film("Title 1", d.films["Title 2"])
+    assert d.coll_name.get() == "Bud and Lou"
+    app.rep = rep
+    fixed = navy_and_ghost(first="Title 1")
+    app.titles_dialog = d
+    d.rescanned(fixed)
+    assert d.films["Title 1"]["name"] == "In the Navy" and d.coll_name.get() == "In the Navy & Hold That Ghost"
+    assert words("Title 1")[0].startswith("In the Navy") and words("Title 4") == ["In the Navy"]
+    d.close()
+
+
+def test_a_rescan_keeps_what_the_menus_said(gui, monkeypatch, tmp_path):
+    """Detect titles before confirming: it puts the films in order and the disc is looked at
+    again; a scan clears the desk first, but what the menus found (the extras, their films, the
+    menu pictures) carries over to the new case."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    monkeypatch.setattr(app, "run_bg", lambda fn, *a: None)        # (the scan itself: below)
+    app.source.set(str(tmp_path))
+    before = navy_and_ghost(first="Title 2")
+    app.rep = before
+    app.scan()
+    assert app.rep is None
+    after = navy_and_ghost(first="Title 1")
+    after.pop("menu_found")
+    app.scan_done(after, None)
+    assert app.rep is after and after["menu_found"] is before["menu_found"]
+    assert after["detected"]["Title 4"]["type"] == "Trailer"            # the menus' extras, labelled
+
+
+def test_detect_titles_during_the_scan(gui, monkeypatch):
+    """Settings > Ripping: Detect titles during a scan. "When the film isn't certain": a guess
+    (or nothing named, or a second feature unnamed), not a sure film, yours or TheDiscDB's.
+    "Every disc whose titles aren't known": a sure film too, unless TheDiscDB or your labels name
+    its titles. The stakeout's pictures then help name the disc; its titles are named for the film
+    the scan settles on, and wait for you in Edit titles."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    film = {"kind": "movie", "name": "Keep 'Em Flying", "score": 99, "imdb_id": "tt0033781"}
+    sure = {"format": "DVD", "kind": "movie", "path": "E:\\", "content_hash": "676F", "status": "probable: x",
+            "candidates": [film], "discdb": {"hit": None}, "labels": {}, "films_apart": 1}
+    guess = dict(sure, status="best guess: x", candidates=[dict(film, score=70), dict(film, imdb_id="tt2", score=66)])
+    ask = lambda rep: app.stakeout_in_scan(rep, "vlc")
+    assert not ask(guess)                                                # Detect titles is off
+    app.settings.update(menu_detect=True, detect_in_scan="weak")
+    assert ask(guess) and not ask(sure) and not ask(dict(guess, personal_hit={"truth": "x"}))
+    assert not ask(dict(guess, format="Blu-ray"))                       # (DVDs only, for now)
+    app.settings["detect_in_scan"] = "unknown"
+    assert ask(sure) and not ask(dict(sure, labels={"Title 1": {"type": "MainMovie"}}))
+    assert not ask(dict(sure, discdb={"hit": {"titles": [{"source": "01"}]}}))
+    app.settings["detect_in_scan"] = "never"
+    assert not ask(guess)
+    # the scan with it: the stakeout's pictures read for the name, its titles named for that film
+    app.settings["detect_in_scan"] = "weak"
+    from disc_detective import menus
+    monkeypatch.setattr(menus, "find_vlc", lambda d=None: "vlc")
+    calls = []
+    raw = {"found": {"feature": 1, "extras": [], "promos": []}, "pages": [], "suspects": 2}
+    monkeypatch.setattr(app, "_stakeout", lambda rep, vlc: calls.append("stakeout") or raw)
+    monkeypatch.setattr(app, "_menus_witness", lambda drive, args, rep, staked=False: calls.append(("read", staked)) or rep)
+    monkeypatch.setattr(app, "_name_titles", lambda r, rep: dict(r["found"], named_for=rep["candidates"][0]["name"]))
+    got = app._menus_seen("E:\\", SimpleNamespace(), dict(guess))
+    assert calls == ["stakeout", ("read", True)] and got["staked_out"] and got["menu_raw"] is raw
+    assert got["menu_found"]["named_for"] == "Keep 'Em Flying"
+    calls.clear()
+    app._before = dict(got)                                              # the same disc again: kept
+    again = app._menus_seen("E:\\", SimpleNamespace(), dict(guess))
+    assert "stakeout" not in calls and again["menu_raw"] is raw and again["staked_out"]
+    # what it named waits in Edit titles: the footer says so
+    app._before = None
+    titles = [{"id": "Title 1", "role": "feature", "duration": 5160}, {"id": "Title 3", "role": "extra", "duration": 100}]
+    done = dict(got, titles=titles, menu_found={"feature": 1, "extras": [{"title": 3, "name": "Trailer"}],
+                                                "promos": [], "suspects": 2})
+    app.scan_done(done, None)
+    root.update()
+    assert app.confirm_tag.winfo_ismapped() and app.confirm_badge.cget("text") == "2 UNCONFIRMED"
+    opened = []
+    monkeypatch.setattr(app, "edit_titles", lambda: opened.append(1))
+    app.confirm_badge.event_generate("<Button-1>")                        # a click: Edit titles
+    assert opened
+    app.set_outcome("Saved to your case files", dd_app.th.GREEN_DOT)       # (✓ That's right: the match saved)
+    app.show_plan_summary()
+    root.update()
+    assert app.confirm_tag.winfo_ismapped()                               # still waiting: still there
+    app.rep["labels"] = {"Title 1": {"type": "MainMovie"}}
+    app.show_waiting()                                                    # one confirmed: one to go
+    assert app.confirm_badge.cget("text") == "1 UNCONFIRMED"
+    app.rep["titles"].append({"id": "Title 9", "role": "junk", "duration": 3})
+    app.rep["detected"]["Title 9"] = {"type": "Promo", "title": None, "note": "the menus: nothing plays it"}
+    app.show_waiting()                                                    # (one Edit titles doesn't list: not counted)
+    assert app.confirm_badge.cget("text") == "1 UNCONFIRMED"
+    app.rep["labels"]["Title 3"] = {"type": "Trailer"}
+    app.show_waiting()                                                    # all confirmed in Edit titles: gone
+    root.update()
+    assert not app.confirm_tag.winfo_ismapped()
+
+
+def test_the_menus_add_extras_films_without_a_new_scan(gui, monkeypatch):
+    """Your answer for a double feature, and the menus say whose film each extra is: kept in the
+    answer, the case as it is (no new scan: the lab, just started, isn't stopped for it). Films
+    put in another order are looked at again."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    saved, scans = [], []
+    monkeypatch.setattr(core, "set_truth", lambda db, h, truth: saved.append(truth))
+    monkeypatch.setattr(app, "use_answer", scans.append)
+    rep = navy_and_ghost(first="Title 1")
+    rep["personal_hit"] = {"truth": "In the Navy & Hold That Ghost {films:Title 1=tt0033754|Title 2=tt0033723}"}
+    answer = dd_app.films_by_menus(rep, rep["menu_found"])
+    assert answer.endswith("{extras:Title 3=tt0033723|Title 4=tt0033754}")
+    assert app.films_answer(rep, answer) is False and saved == [answer] and not scans
+    assert rep["candidates"][0]["extras"] == {"Title 3": "tt0033723", "Title 4": "tt0033754"}
+    assert dd_app.films_by_menus(rep, rep["menu_found"]) is None              # nothing new now
+    flipped = navy_and_ghost(first="Title 2")
+    flipped["personal_hit"] = {"truth": "x"}
+    assert app.films_answer(flipped, dd_app.films_by_menus(flipped, flipped["menu_found"])) and scans
+
+
+def test_a_disc_taken_out_clears_the_desk(gui, monkeypatch):
+    """The case on the desk goes with its disc: taken out (the drive empty: its light grey), or
+    another in its place (another volume serial number: discs of one label, ABBOTT_AND_COSTELLO,
+    told apart), and the desk is blank again, saying why, so nothing is done to the next disc with
+    this one's answers. Not while the app reads the drive itself."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    monkeypatch.setattr(dd_app, "optical_drives", lambda: ["E:\\"])
+    monkeypatch.setattr(dd_app.App, "check_drives", lambda self, drives: None)
+    app = dd_app.App(root)
+    assert app.source.get() == "E:\\" and str(app.scan_btn.cget("state")) == "disabled"   # (no word from it yet)
+    case = lambda: dict(navy_and_ghost(), path="E:\\", status="best guess: x", label="ABBOTT_AND_COSTELLO")
+    app.rep = case()
+    app._drives_checked({"E:\\": ("ready", "ABBOTT_AND_COSTELLO", "00C3B411")})
+    assert app.rep is not None and app._case_serial == "00C3B411"           # (its disc, as the drive says)
+    app._drives_checked({"E:\\": ("ready", "ABBOTT_AND_COSTELLO", "00C3B411")})
+    assert app.rep is not None
+    app._drives_checked({"E:\\": ("ready", "ABBOTT_AND_COSTELLO", "1B2C3D4E")})   # another disc, one label
+    assert app.rep is None and "A different disc" in app.status.cget("text")
+    app.rep, app._case_serial = case(), None
+    app.busy = True                                                          # (a scan reading it: not now)
+    app._drives_checked({"E:\\": ("empty", None, None)})
+    assert app.rep is not None
+    app.busy = False
+    app._drives_checked({"E:\\": ("empty", None, None)})
+    assert app.rep is None and app.status.cget("text") == ""                # (done with it: nothing to say)
+    app.source.set("E:\\")
+    assert app.drive_light() == "none"                                       # the grey light: no disc
+    assert not app.scan_ready()                                              # Scan off: nothing to scan
+    app.set_busy(False)
+    assert str(app.scan_btn.cget("state")) == "disabled"
+    app._drives_checked({"E:\\": ("ready", "ABBOTT_AND_COSTELLO", "08C3A4B4")})   # a disc in: Scan on
+    assert str(app.scan_btn.cget("state")) == "normal"
+    app._drives_checked({"E:\\": ("busy", None, None)})                     # stuck: off again
+    assert str(app.scan_btn.cget("state")) == "disabled"
+    app._drives_checked({"E:\\": ("empty", None, None)})
+    # the watcher: the source drive asked again while it's free, not while the app reads it
+    asked = []
+    monkeypatch.setattr(app, "check_drives", asked.append)
+    app.source.set("E:\\")
+    app._watch_asking = False
+    app.watch_drive()
+    assert asked == [["E:\\"]]
+    app._watch_asking, app.busy = False, True
+    app.watch_drive()
+    assert len(asked) == 1
+    app.busy = False
+
+
+def test_a_disc_taken_out_mid_job_is_said_plainly(gui, monkeypatch):
+    """Taken out mid-scan, mid-stakeout or mid-rip: no error to read, the job called off, saying
+    the disc was taken out (and how much of a rip was done); the stakeout's VLC let go of."""
+    from disc_detective import menus
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    app.scan_done(None, "OSError: [WinError 21] The device is not ready", gone=True)
+    assert app.rep is None and app.status.cget("text") == "The disc was removed: scan aborted"
+    errors = []
+    monkeypatch.setattr(dd_app.messagebox, "showerror", lambda *a, **k: errors.append(a))
+    app.rip_done(["a.mkv"], 3, None, gone=True)
+    assert app.standing_full == "The disc was removed: rip aborted (1 of 3 titles ripped)" and not errors
+    closed = []
+    fake = type("C", (), {"close": lambda self: closed.append(1)})()
+
+    def lost(*a):
+        menus._crawlers.append(fake)
+        raise OSError("the device is not ready")
+    monkeypatch.setattr(menus, "_crawl", lost)
+    with pytest.raises(OSError):
+        menus.crawl("E:\\", "vlc", {}, ".")
+    assert closed == [1] and not menus._crawlers
+
+
+def test_the_menus_put_a_guess_in_order_without_saving_it(gui, monkeypatch):
+    """Detect titles' films put a guess's pairing right (their menus' headings): on the desk as it
+    stands, not saved as your answer (a wrong guess mustn't become yours: Go to Mars & Mexicana);
+    saved when you confirm it."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    saved, scans = [], []
+    monkeypatch.setattr(core, "set_truth", lambda db, h, truth: saved.append(truth))
+    monkeypatch.setattr(app, "use_answer", scans.append)
+    rep = dict(navy_and_ghost(first="Title 2"), status="best guess: x", match={"name": "x"}, discdb={"hit": None})
+    app.rep = rep
+    answer = dd_app.films_by_menus(rep, rep["menu_found"])
+    assert app.films_answer(rep, answer) is False and not saved and not scans
+    assert [(i["title_id"], i["name"]) for i in rep["candidates"][0]["items"]] == [("Title 1", "In the Navy"),
+                                                                                   ("Title 2", "Hold That Ghost")]
+    assert rep["candidates"][0]["name"] == "In the Navy & Hold That Ghost"
+    assert any("In the Navy (1941)" in n and n.startswith("Title 1") for n in rep["plex_names"])

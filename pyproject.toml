@@ -9,13 +9,13 @@ description = "Identify which movie or show is on a DVD or Blu-ray, and what eve
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "THIRD_PARTY.md"]
-requires-python = ">=3.9"
+# 3.15 once our dependencies support it (RapidOCR's onnxruntime): then a new release
+requires-python = ">=3.9,<3.15"
 dependencies = ["Pillow"]  # posters and box art (Tk can't show JPEGs by itself)
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-timeout"]
-# RapidOCR for menu buttons, the best reader (read first): its runtime needs Python 3.14 or older
-# for now (a packaged release brings its own Python)
+# RapidOCR for menu buttons, the best reader (read first)
 rapid-ocr = ["rapidocr", "onnxruntime"]
 # Windows' own OCR for menu buttons (after RapidOCR; tesseract when neither finds words)
 windows-ocr = [
