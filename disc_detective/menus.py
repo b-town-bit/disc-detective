@@ -1949,6 +1949,17 @@ def _ad_text(text):
     return bool(text) and bool(AD_RE.search(text) or MENU_AD_RE.search(text) or _says(text, AD_WORDS))
 
 
+def _ads_page(way, heading, buttons):
+    """Whether a page is a page of ads, by the buttons pressed on the way to it and its heading. Not
+    for the words of one of its own ad buttons, read into the heading: Rush Hour 3's page of a trailer
+    and "SNEAK PEEKS", its heading read "THEATRICAL TRAILE SNEAK PEEI". (Those buttons are ads by
+    their own words.)"""
+    ours = {w for b in buttons if _ad_text(b.get("text"))
+            for w in re.findall(r"[a-z]+", (b.get("text") or "").lower())}
+    rest = " ".join(w for w in re.findall(r"[A-Za-z]+", heading or "") if not any(_near(w.lower(), o) for o in ours))
+    return any(_ad_text(w) for w in way) or _ad_text(rest)
+
+
 def _skip_text(text):
     if not text or EXTRA_SCENES_RE.search(text):
         return False
@@ -3135,6 +3146,8 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
     log("the disc opens on %s page %s (program %s)" % start)
     length = {t["index"]: t["seconds"] for t in titles}
     routes, tries, known, pressed = {start: []}, {}, {}, {}
+    # buttons staying in the menus, on a page depending on the way they were reached (known_outright)
+    menus_by_route = {}
     if engine:
         if began.get("goes_to") and tuple(began["goes_to"]) != start:
             log("  the disc's program starts on %s, VLC on %s" % (began.get("goes_to"), start))
@@ -3158,6 +3171,8 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
                 known[(s, n)] = {"plays": one, "engine": True}
                 continue
             if any(same(x) != same(a) for x in answers) or "unsure" in a:
+                if not any("plays" in x or "unsure" in x for x in answers):
+                    menus_by_route[(s, n)] = {tuple(x["goes_to"]) for x in answers if "goes_to" in x}
                 continue
             if "goes_to" in a and a["goes_to"] != s:
                 c.learned[(s, n)] = tuple(a["goes_to"])
@@ -3202,7 +3217,13 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
         return "scenes" if scene_page(s) else "no title there that isn't named elsewhere"
 
     def known_outright():
-        """What the buttons themselves say they do, so they needn't be pressed."""
+        """What the buttons themselves say they do, so they needn't be pressed. And one whose page
+        depends on the way it was reached, when there's another way to each of them: nothing to find
+        by it (Rush Hour 3's BACK, from a version chooser to whichever scene page led there: half a
+        minute's press). A page only it leads to, it's pressed for (Father of the Bride Part II's)."""
+        for k, there in menus_by_route.items():
+            if k not in known and all(x in routes for x in there):
+                known[k] = {"menus": True, "engine": True}
         for s in routes:
             for b in _state_buttons(pages, s):
                 if not b["auto"] and not _goes(pages, s, b, c.learned, known) and (s, b["n"]) not in known:
@@ -3561,6 +3582,7 @@ def menu_titles(out):
                 break
             kind = heading_kind(w)
         singles = {b["plays"]["title"] for b in p["buttons"] if b.get("plays")}
+        ads = _ads_page(way, p.get("heading"), p["buttons"])
         for b in p["buttons"]:
             if b.get("plays"):
                 reel = bool(re.search(r"\btrailer", b["text"], re.I)) and \
@@ -3571,7 +3593,7 @@ def menu_titles(out):
                 # its reels repeat the sneak peeks, copies the scan sets aside). Not a run from a
                 # page of other things (The Sorcerer's Apprentice's Sneak Peeks, by Play Movie)
                 whole = bool(run) and len(singles - {b["plays"]["title"]} - set(run)) >= 2
-                promo = _ad_text(via) or _ad_text(b["text"]) or reel
+                promo = ads or _ad_text(b["text"]) or reel
                 place = [r["button"] for r in p["route"]] + [b["n"]]
                 plays.append(dict(b["plays"], text=b["text"], promo=promo, kind=kind, via=via, play_all=whole, page=s,
                                   place=place))
@@ -4152,7 +4174,7 @@ def tv_titles(out):
                 break
             kind = heading_kind(w)
         bonus = bool(TV_BONUS_RE.search(way[-1] if way else "") or TV_BONUS_RE.search(p.get("heading") or ""))
-        ads = _ad_text(via)
+        ads = _ads_page(way, p.get("heading"), p["buttons"])
         for b in p["buttons"]:
             text = b.get("text") or ""
             plays = b.get("plays") or scene_title(s[0], b.get("goes_to"))

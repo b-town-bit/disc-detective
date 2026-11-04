@@ -325,6 +325,36 @@ def test_the_crawl_follows_its_plan_and_a_failed_reading_changes_it(monkeypatch,
     assert FakeCrawler.made[0].visited == [MAIN, BONUS, AUDIO]
 
 
+def test_a_button_leading_to_menus_by_route_needs_no_press_if_they_can_be_reached(monkeypatch, tmp_path):
+    from disc_detective import dvdvm
+    monkeypatch.setattr(menus, "_Crawler", FakeCrawler)
+    monkeypatch.setattr(menus, "_scan_titles", lambda drive, log: [])
+    monkeypatch.setattr(menus, "title_pictures", lambda out, out_dir: {})
+    monkeypatch.setattr(menus, "keeping_test_data", lambda: False)
+    monkeypatch.setattr(dvdvm, "Disc", lambda drive, structure: None)
+    monkeypatch.setattr(dvdvm, "Engine", lambda disc: None)
+    monkeypatch.setattr(dvdvm, "opening", lambda eng: [])
+
+    def crawl(there):
+        # Bonus's "Set Up", by route, to the pages given. Title 7 has no button: a press might find it
+        engine = dict(ENGINE)
+        engine[(1, 2, 1, 3)] = [{"goes_to": x} for x in there]
+        engine[(1, 2, 1, 4)] = [{"menus": True}]
+        pages = dict(EE_PAGES)
+        pages[(1, 9)] = {"buttons": [_b(1), _b(2)]}
+        monkeypatch.setattr(menus, "_pages", lambda structure: pages)
+        monkeypatch.setattr(dvdvm, "explore", lambda eng: ({"goes_to": MAIN}, engine, []))
+        FakeCrawler.made.clear()
+        menus._crawl("E:\\", "vlc", {}, str(tmp_path), log=lambda m: None)
+        return FakeCrawler.made[0]
+    # both pages have a way to them: no press, and no page read to get to it
+    c = crawl([(1, 4, 1), (1, 5, 1)])
+    assert c.presses == [] and c.visited == [MAIN, BONUS, AUDIO]
+    # one only it leads to, the disc deciding as it runs: pressed
+    c = crawl([(1, 4, 1), (1, 9, 1)])
+    assert c.presses == [(BONUS, 3)]
+
+
 def test_the_crawl_searches_for_titles(monkeypatch, tmp_path):
     from disc_detective import dvdvm
     monkeypatch.setattr(menus, "_Crawler", FakeCrawler)

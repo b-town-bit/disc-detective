@@ -1384,6 +1384,21 @@ def test_a_trailers_page_of_other_films_is_ads():
     assert menus.trailer_ads(found, None, films.get) is found                 # (no film known: as found)
 
 
+def test_an_ad_buttons_words_read_into_the_heading_dont_make_its_page_all_ads():
+    trailer = {"text": "THEATRICAL TRAILER"}
+    peeks = {"text": "SNEAK PEEKS"}
+    # (Rush Hour 3's: the heading's the buttons' words, the last cut short)
+    assert not menus._ads_page(["SPECIAL FEATURES", ""], "THEATRICAL TRAILE SNEAK PEEI SpEcIAl FATURES AIN MENU", [trailer, peeks])
+    assert not menus._ads_page([], "SNEAK PEEKS", [trailer, peeks])
+    # its own heading, the buttons naming films: a page of ads
+    assert menus._ads_page([], "Sneak Peeks", [{"text": "Hitch"}, {"text": "xXx"}])
+    assert menus._ads_page([], "Coming Soon", [trailer, peeks])     # (words no button has)
+    # the way there says so, whatever the page's own words
+    assert menus._ads_page(["Special Features", "Sneak Peeks"], "", [trailer, peeks])
+    assert menus._ads_page(["Previews"], None, [{"text": "Hitch"}])
+    assert not menus._ads_page(["Bonus"], "Deleted Scenes", [{"text": "Hitch"}])
+
+
 def test_a_discs_menus_as_phrases(tmp_path, monkeypatch):
     """What a disc's menus show, to name it: a kept stakeout's page pictures read as cover art
     (no drive needed); the menus' own words left out ("PLAY", "WITH ENGLISH SUBTITLES": films
