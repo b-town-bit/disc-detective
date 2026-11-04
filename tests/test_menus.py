@@ -683,6 +683,7 @@ def test_two_cuts_play_alls_and_a_button_that_says_what_a_page_holds():
               {"id": "Title 15", "role": "play-all"}, {"id": "Title 16", "role": "extra"},
               {"id": "Title 19", "role": "extra"}]
     labels = menus.detected_labels(found, titles)
+    assert labels["Title 1"].pop("place")                       # (where its button is, for reading them in order)
     assert labels["Title 1"] == {"type": "MainMovie", "title": "Signature Edition", "note": "the menus: the feature"}
     assert labels["Title 2"]["type"] == "MainMovie" and labels["Title 2"]["title"] == "Original Edition"
     assert labels["Title 16"]["type"] == labels["Title 19"]["type"] == "DeletedScene"
@@ -737,7 +738,7 @@ def test_an_ad_is_named_as_an_ad():
         assert found["promo_names"] == {11: lead, 17: "%s - Hitch" % lead}
     titles = [{"id": "Title 1", "role": "feature"}, {"id": "Title 11", "role": "extra"}, {"id": "Title 17", "role": "extra"}]
     assert menus.detected_labels(found, titles)["Title 17"] == {"type": "Promo", "title": "Sneak Peeks - Hitch",
-                                                                 "note": "the menus: an ad"}
+                                                                 "note": "the menus: an ad", "place": [2, 1]}
     # its own words unreadable: just the ad words
     junk = menus.plain_names(dict(found, promo_names={17: "Previews - Qxzv Wrrt"}), lambda w: w.lower() == "previews")
     assert junk["promo_names"] == {17: "Previews"}

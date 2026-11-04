@@ -262,4 +262,5 @@ def test_the_titles_that_play_on_after_a_buttons_title():
     # a run going on into a film (Wallace & Gromit's Play All: title 1, then title 6, The Wrong
     # Trousers): not part of the run, but noted as what it goes on into
     disc.title_pgcs[1][4] = pgc(90, post=[jump(1)])
-    assert dvdvm.answer(eng.press(p, 1)) == {"plays": 2, "chapter": 1, "before": [], "after": [3, 4], "into": 1}
+    assert dvdvm.answer(eng.press(p, 1)) == {"plays": 2, "chapter": 1, "before": [], "after": [3, 4], "into": 1,
+                                       "run": [3, 4, 1]}

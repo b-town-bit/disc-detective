@@ -477,25 +477,31 @@ def test_ticked_version_is_an_edition():
     assert [p["title_id"] for p in dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)] == ["Title 20"]
     rep["titles"][1]["video_info"] = dict(wide, aspect="4:3")
     assert len(dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)) == 2
-    rep["titles"][1]["video_info"] = wide                  # Settings > Ripping: Prefer widescreen off
-    assert len(dd_app.plan_rip(rep, dd_app.preview_titles(rep), False, prefer_wide=False)) == 2
+    # the better picture whatever the shape: a 4K copy over its 1080p one; two cuts in one
+    # picture (The Iron Giant's editions) are both kept, and so are copies far apart in length
+    hd = {"height": 1080, "aspect": "16:9"}
+    rep["titles"] = [{"id": "00800.mpls", "role": "feature", "duration": 5376, "video_info": dict(hd, height=2160, hdr=True)},
+                     {"id": "00801.mpls", "role": "feature", "duration": 5376, "video_info": hd}]
+    assert [p["title_id"] for p in dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)] == ["00800.mpls"]
+    rep["titles"][0]["video_info"] = hd
+    assert len(dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)) == 2
+    rep["titles"][1].update(duration=8000, video_info=dict(hd, aspect="4:3"))
+    assert len(dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)) == 2
 
 
 def test_rip_preferences_in_settings(gui, monkeypatch):
     """Settings > Ripping > What to rip: Include extras is the rip menu's own tick (either one
-    changes both, remembered); Prefer widescreen is saved as you go, on unless turned off."""
+    changes both, remembered). No Prefer widescreen: the better picture is always the default."""
     root, made, pump = gui
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
     app = dd_app.App(root)
     d = dd_app.SettingsDialog(root, app)
-    assert d.wide.get() and not app.extras.get()
+    assert not app.extras.get() and not hasattr(d, "wide")
     ticks = {w.cget("text"): w for w in made_widgets(d.top) if w.winfo_class() == "TCheckbutton"}
     ticks["Include extras"].invoke()
     assert app.extras.get() and dd_app.load_settings()["extras"]
-    d.wide.set(False)
-    assert dd_app.load_settings()["prefer_widescreen"] is False
+    assert "Prefer widescreen" not in ticks
     d.close()
-    assert dd_app.SettingsDialog(root, app).wide.get() is False
 
 
 def made_widgets(w):
@@ -1151,6 +1157,47 @@ def test_a_window_is_kept_above_the_taskbar(gui, monkeypatch):
     top.destroy()
 
 
+def test_the_copy_whose_button_was_read_is_the_one_to_confirm():
+    # (Psych S6 D3's commentaries: title 6's button read on its episode's page, title 5's page not looked at)
+    def rep():
+        return {"titles": [{"id": "Title 5", "role": "extra", "duration": 192},
+                           {"id": "Title 6", "role": "duplicate", "duration": 192, "note": "same video as Title 5"},
+                           {"id": "Title 13", "role": "episode", "duration": 2580}], "labels": {}}
+    found = {"tv": True, "episodes": [{"title": 13, "season": 6, "episode": 9, "name": "Neil Simon's Lover's Retreat",
+                                       "read": "9. Neil Simon's", "by": "name"}],
+             "extras": [{"title": 6, "name": "Neil Simon's Lover's Retreat Video Commentary", "seconds": 192, "kind": None,
+                         "season": 6, "episode": 9, "place": [2, 4]}]}
+    r = rep()
+    labels = dd_app.detected_for(r, found)
+    by = {t["id"]: t for t in r["titles"]}
+    assert labels["Title 6"]["title"] == "Neil Simon's Lover's Retreat Video Commentary" and "Title 5" not in labels
+    assert by["Title 6"]["role"] == "extra" and (by["Title 5"]["role"], by["Title 5"]["note"]) == ("duplicate", "same video as Title 6")
+    assert [t["id"] for t in core.without_lost_copies(r["titles"])] == ["Title 5", "Title 6", "Title 13"]
+    # both read (Read menus for copies...): as the scan has it, the name on the title it kept
+    r = rep()
+    both = dict(found, extras=found["extras"] + [{"title": 5, "name": "Neil Simon's Lover's Retreat Video Commentary And More", "seconds": 192,
+                                                  "kind": None}])
+    labels = dd_app.detected_for(r, both)
+    assert "Title 6" not in labels and labels["Title 5"]["title"].endswith("And More") and r["titles"][0]["role"] == "extra"
+    # yours stays yours
+    r = rep()
+    r["labels"] = {"Title 5": {"type": "Extra", "title": "Mine"}}
+    dd_app.detected_for(r, found)
+    assert r["titles"][0]["role"] == "extra" and r["titles"][1]["role"] == "duplicate"
+    # a film's disc: its page passed by, that title's button has no words, so its copy's the one
+    r = {"titles": [{"id": "Title 5", "role": "extra", "duration": 192},
+                    {"id": "Title 6", "role": "duplicate", "duration": 192, "note": "same video as Title 5"}], "labels": {}}
+    core.prefer_played(r, {"Title 5", "Title 6"}, {"Title 5"})
+    assert r["titles"][0]["role"] == "duplicate" and r["titles"][1]["role"] == "extra"
+    # neither read, or the original alone: as the scan has it
+    r = {"titles": [{"id": "Title 5", "role": "extra", "duration": 192},
+                    {"id": "Title 6", "role": "duplicate", "duration": 192, "note": "same video as Title 5"}], "labels": {}}
+    core.prefer_played(r, {"Title 5", "Title 6"}, {"Title 5", "Title 6"})
+    assert r["titles"][0]["role"] == "extra"
+    core.prefer_played(r, {"Title 5"})
+    assert r["titles"][0]["role"] == "extra"
+
+
 def test_a_copy_is_shown_as_one(gui, tmp_path, monkeypatch):
     """Edit titles: a title the scan found the same video as another is shown as its copy, with
     nothing to fill in (labelling the other is what counts)."""
@@ -1281,7 +1328,7 @@ def test_detect_titles_button(gui, tmp_path, monkeypatch):
     assert d.detect_btn.cget("text") == "Detect titles"
     app.edit_titles()
     assert app.titles_dialog is d                               # one Edit titles at a time
-    assert not app.can_detect.__func__(type("A", (), {"settings": app.settings, "rep": dict(rep, kind="tv")})())
+    assert app.can_detect.__func__(type("A", (), {"settings": app.settings, "rep": dict(rep, kind="tv")})())
     # while it works, its news shows in Edit titles, not the main window
     app.show_plan_summary()
     app.detecting = True
@@ -1667,6 +1714,32 @@ def test_a_menu_picture_shows_the_words_read_on_demand(tmp_path):
         root.destroy()
 
 
+def test_edit_titles_puts_episodes_first_then_extras_as_the_menus_have_them():
+    rows = {"Title 30": {"type": "Promo"},
+            "Title 21": {"type": "Extra"},
+            "Title 22": {"type": "DeletedScene", "season": "6", "episode": "9"},
+            "Title 5": {"type": "Extra", "season": "6", "episode": "9"},
+            "Title 40": {"type": "Extra"},
+            "Title 16": {"type": "Episode", "season": "6", "episode": "12"},
+            "Title 13": {"type": "Episode", "season": "6", "episode": "9"},
+            "Title 2": {"type": "MainMovie"}}
+    detected = {"Title 21": {"place": [3, 3]}, "Title 22": {"place": [3, 1, 2]}, "Title 5": {"place": [3, 4, 1]}}
+    got = sorted(rows, key=lambda t: dd_app.found_order(t, rows[t], detected))
+    assert got == ["Title 2", "Title 13", "Title 16", "Title 22", "Title 21", "Title 5", "Title 40", "Title 30"]
+    # a film's extras and ads as its menus have them, whatever their numbers
+    rows = {"Title 3": {"type": "Extra"}, "Title 9": {"type": "Trailer"}, "Title 4": {"type": "Promo"},
+            "Title 8": {"type": "Promo"}, "Title 1": {"type": "MainMovie"}}
+    detected = {"Title 3": {"place": [2, 5]}, "Title 9": {"place": [2, 1, 3]},
+                "Title 8": {"place": [3, 1]}, "Title 4": {"place": [3, 2]}}
+    got = sorted(rows, key=lambda t: dd_app.found_order(t, rows[t], detected))
+    assert got == ["Title 1", "Title 3", "Title 9", "Title 8", "Title 4"]
+    # by type first, wherever the menus have them: deleted scenes before extras
+    rows = {"Title 5": {"type": "Extra"}, "Title 6": {"type": "DeletedScene"}, "Title 7": {"type": "DeletedScene"}}
+    detected = {"Title 5": {"place": [1]}, "Title 6": {"place": [9, 2]}, "Title 7": {"place": [9, 1]}}
+    got = sorted(rows, key=lambda t: dd_app.found_order(t, rows[t], detected))
+    assert got == ["Title 7", "Title 6", "Title 5"]
+
+
 def test_the_progress_bar_keeps_the_pictures_on_screen():
     """The brass progress bar's sliding run takes a new width each frame: its pictures' cache
     drops the least lately used past its size, never the trough on screen (emptied all at once,
@@ -1745,6 +1818,38 @@ def test_the_scan_runs_the_discs_program(monkeypatch):
     assert dd_app.App._program_map(app, "E:", dict(rep, format="Blu-ray")) is None
     monkeypatch.setattr(menus, "program_map", lambda root, s: (_ for _ in ()).throw(OSError("no disc")))
     assert dd_app.App._program_map(app, "E:", rep) is None                            # (never fails the scan)
+
+
+def test_a_blu_rays_menus_own_words_are_saved_as_known(monkeypatch, tmp_path):
+    """Muppets from Space's Blu-ray: a title named by its menu button's own words (its code),
+    linked to its playlist by the menu project, is known: saved as your labels are (TheDiscDB's
+    submission takes them too), nothing to confirm. What rests on a judgement (an ad by its
+    frame rate, a project's shorthand) waits for you; a title you'd labelled stays yours."""
+    import types
+    from disc_detective import bdmenus
+    monkeypatch.setattr(bdmenus, "menu_project", lambda root: [{"name": "x", "playlist": "p", "fps": 1, "seconds": 1}])
+    monkeypatch.setattr(bdmenus, "menu_texts", lambda root, entries: {})
+    monkeypatch.setattr(bdmenus, "project_pieces", lambda titles, labels: {})
+    monkeypatch.setattr(bdmenus, "project_play_alls", lambda titles, entries: [])
+    labels = {"00004.mpls": {"type": "MainMovie", "title": None, "exact": True},
+              "00745.mpls": {"type": "Extra", "title": "Cardshark Serenade", "exact": True},
+              "00751.mpls": {"type": "Extra", "title": "Eyes Wide Shut", "exact": True},
+              "00802.mpls": {"type": "Promo", "title": "Previews - Smurfs"},
+              "00002.mpls": {"type": "Extra", "title": "Easter Egg", "exact": False}}
+    monkeypatch.setattr(bdmenus, "project_labels", lambda *a, **k: dict(labels))
+    monkeypatch.setattr(core, "imdb_open", lambda *a, **k: types.SimpleNamespace(close=lambda: None))
+    con = core.library_open(str(tmp_path / "lib.sqlite"))
+    h = "D8A7ED9A" + "0" * 24
+    core.set_label(con, h, "00751.mpls", "Extra", "Eyes Wide Shut (mine)")            # yours: stays
+    args = types.SimpleNamespace(library=con, imdb_dir=str(tmp_path))
+    rep = {"format": "Blu-ray", "content_hash": h, "kind": "movie", "candidates": [],
+           "labels": core.get_labels(con, h), "titles": [{"id": k, "role": "extra"} for k in labels]}
+    dd_app.App._bd_menus_seen(types.SimpleNamespace(settings={}), "E:\\", args, rep)
+    saved = core.get_labels(con, h)
+    assert sorted(saved) == ["00004.mpls", "00745.mpls", "00751.mpls"]
+    assert saved["00745.mpls"]["title"] == "Cardshark Serenade" and saved["00751.mpls"]["title"] == "Eyes Wide Shut (mine)"
+    assert rep["labels"] == saved and rep["staked_out"]            # (the ad and the shorthand wait for you)
+    assert {k for k in rep["detected"] if k not in saved} == {"00802.mpls", "00002.mpls"}
 
 
 def test_a_menus_play_alls_put_the_scan_right():

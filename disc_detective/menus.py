@@ -20,6 +20,7 @@ press the buttons like a remote, which also says where each button really goes.
 """
 import argparse
 import ctypes
+import difflib
 import glob
 import json
 import os
@@ -1380,9 +1381,15 @@ class Vlc:
         self.lock = threading.Lock()
         self.mp = None
 
-    def open(self, mrl):
+    def open(self, mrl, options=()):
+        """Play mrl; options: VLC's media options (":no-bluray-menu": a Blu-ray's titles, its
+        menus not run)."""
         L = self.lib
         media = L.libvlc_media_new_location(self.inst, mrl.encode("utf-8"))
+        if options:
+            L.libvlc_media_add_option.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            for o in options:
+                L.libvlc_media_add_option(media, o.encode("utf-8"))
         self.mp = L.libvlc_media_player_new_from_media(media)
         L.libvlc_media_release(media)
 
@@ -1873,9 +1880,10 @@ def _scene_page(structure, pages, page, known=None):
     return False
 
 
-# what a crawl for the feature and its extras passes by: buttons (and the pages behind them)
-# for settings, commentaries, scenes, and the way back; and ads, by core.AD_RE ("Sneak Peeks",
-# "Previews"). A film's own trailer ("theatrical trailer") is an extra, so it's kept.
+# what a crawl looks at last: buttons (and the pages behind them) for settings, commentaries, scenes,
+# and the way back; and ads, by core.AD_RE ("Sneak Peeks", "Previews"). A film's own trailer
+# ("theatrical trailer") is an extra, so it isn't one. Words only order the search (_search_rank):
+# what's skipped is skipped for its titles.
 SKIP_RE = re.compile(r"\b(set ?up|settings|options|languages?|audio|subtitles?|captions|commentar\w*|"
                      r"scenes?|scene selection|chapters?|main ?menu|register\w*|dvd-?rom|web ?links?|"
                      # pages of stills to flip through, nothing that plays (Muppets from Space's
@@ -1978,6 +1986,176 @@ def _routes(pages, start, learned=None, known=None):
                 routes[nxt] = routes[st] + [(st, b["n"])]
                 queue.append(nxt)
     return routes
+
+
+# The search is for titles, since titles are what's being labelled. The disc's program says what most
+# buttons play, whatever they say. So a page is read for a title no button read so far names, and a
+# button is pressed while a title has no known way to it; a title with one already is left be.
+NAMED_WORDY = 3         # (_wordy: "OFF" or more; not "On", "Vi", a stray mark)
+
+
+def _named_titles(pages, visited, known, learned, pressed, word):
+    """The titles named so far: a button with words, on a page read, that plays one from its start
+    or leads to a page of its scenes. (Only its own: what plays on after it may have a button too.)
+    Words badly read don't count, so the search goes on to the title's other buttons, or its copies'."""
+    found = set()
+    for s in visited:
+        for b in _state_buttons(pages, s):
+            if _wordy(word(s, b["n"]) or "") < NAMED_WORDY:
+                continue
+            k = (s, b["n"])
+            plays = known.get(k, {}).get("plays")
+            if plays and plays.get("chapter") in (1, None):
+                found.add(plays["title"])
+            chain = [x["title"] for x in (pressed.get(k) or {}).get("chain", []) if x["title"] > 0]
+            if chain:
+                found.add(chain[-1])
+            nxt = _goes(pages, s, b, learned, known)
+            scene = nxt and _scene_state(pages, nxt, known)
+            if scene:
+                found.add(scene)
+    return found
+
+
+def _titles_with_a_way(routes, known, pressed, opening=()):
+    """The titles some button on a page there's a way to plays, read yet or not, or that play on
+    after one, or before the menu."""
+    have = set(opening)
+    for (s, _), k in known.items():
+        plays = k.get("plays")
+        if plays and s in routes:
+            have.add(plays["title"])
+            have.update(plays.get("after") or [])
+            if plays.get("into"):
+                have.add(plays["into"])
+            have.update(o["title"] for o in k.get("others") or [])
+    for r in pressed.values():
+        have.update(x["title"] for x in r.get("chain", []) if x["title"] > 0)
+    return have
+
+
+def _leads_to_title(pages, s, visited, found, known, learned, pressed, unknown_matter):
+    """Whether a page is worth reading: a button there, or on a page past it, plays a title not named
+    yet; or, while a title has no way to it (unknown_matter), nobody knows what the button does. Only
+    pages not visited yet count: a button already read, its words unreadable, won't read any better
+    for reading another page. Spider-Man's Character Files: cast bios leading only to each other."""
+    if s in visited:
+        return False
+    seen, todo = {s}, [s]
+    while todo:
+        x = todo.pop()
+        for b in _state_buttons(pages, x):
+            k = (x, b["n"])
+            plays = known.get(k, {}).get("plays")
+            if plays and plays["title"] not in found:
+                return True
+            nxt = _goes(pages, x, b, learned, known)
+            if unknown_matter and not nxt and not b["auto"] and k not in known and k not in pressed:
+                return True
+            if nxt and nxt not in seen and nxt not in visited:
+                seen.add(nxt)
+                todo.append(nxt)
+    return False
+
+
+def _page_plan(pages, routes, done, found, known, learned, copies=None, rank=None):
+    """The pages to read, in order, from what the disc's program says plays what, before a word is
+    read: few, by taking the page that names the most titles still unnamed for each page it costs
+    (the pages on the way to it count, and what they name). A copy's video counts once, whichever of
+    its titles' buttons is read. done: pages read or given up on. found: the titles named (or hoped
+    to be: then a page that fails them plans the way to their other buttons, when it's asked again).
+    A button leading to a title's scene page names it as well as one playing it (Smallville's Episodes
+    page). rank(page): ties go to the lowest (_search_rank: words only order the search)."""
+    copies = copies or {}
+    video = lambda t: copies.get(t, t)
+    named = {video(t) for t in found}
+    holds = {}
+    for s in routes:
+        if s in done:
+            continue
+        for b in _state_buttons(pages, s):
+            plays = known.get((s, b["n"]), {}).get("plays")
+            if plays:
+                title = plays["title"] if plays.get("chapter") in (1, None) else None
+            else:
+                nxt = _goes(pages, s, b, learned, known)
+                title = nxt and _scene_state(pages, nxt, known)
+            if title and title not in found and video(title) not in named:
+                holds.setdefault(s, set()).add(video(title))
+    plan, chosen = [], set(done)
+    left = set().union(*holds.values()) if holds else set()
+
+    def worth(s):
+        new = [x for x in [y for y, _ in routes[s]] + [s] if x not in chosen]
+        return set().union(*(holds.get(x, set()) for x in new)) & left, new
+    while left:
+        def score(s):
+            gained, new = worth(s)
+            return (len(gained) / len(new) if new else 0, -(rank(s) if rank else 0), -len(new))
+        gained, new = worth(max(holds, key=score))
+        plan += new
+        chosen.update(new)
+        left -= gained
+    return plan
+
+
+def _search_rank(route, start, word, scenes):
+    """What's looked at first: ordinary pages, then those behind words like Audio or Commentary, then
+    scene pages (the film's Play button will usually have named it by then). route: [(state, button)]."""
+    words = [word(x, n) for x, n in route]
+    words = [w for (x, _), w in zip(route, words) if not (x == start and _main_menu_text(w))]
+    # (not pages of ads: reading them is quick, and their pictures name the ads, posters often:
+    # Spider-Man 2's previews, Hitch among them. Pressing their buttons is another matter)
+    return 2 if scenes else 1 if any(_skip_text(w) and not _ad_text(w) for w in words) else 0
+
+
+def _scan_titles(drive, log=print):
+    """The disc's titles as the scan compares them ([] if they can't be read: then nothing's known of
+    them, and they're all looked for)."""
+    from . import core
+    try:
+        _, base = core.detect_format(drive)
+        if not base:
+            return []
+        scanned = core.parse_dvd(base)["titles"]
+        core.classify(scanned, "DVD")
+        return scanned
+    except (OSError, ValueError, IndexError, struct.error) as e:
+        log("  couldn't compare the disc's titles (%s)" % e)
+        return []
+
+
+def _titles_sought(scanned, length):
+    """The titles worth pressing buttons for: all but the too short and what the scan already says
+    isn't a title of its own (a copy, a play-all, its parts, a loop), which may well have no button."""
+    from . import core
+    apart = {int(t["id"].split()[1]) for t in scanned if t.get("role") in HIDDEN_ROLES and t["role"] != "junk"}
+    return {t for t, seconds in length.items() if (seconds or 0) >= core.PART_MIN and t not in apart}
+
+
+def _copies_of(scanned):
+    """{title: the title the scan found it the same video as}, as numbers."""
+    out = {}
+    for t in scanned:
+        m = re.match(r"same video as Title (\d+)\s*$", t.get("note") or "") if t.get("role") == "duplicate" else None
+        if m:
+            out[int(t["id"].split()[1])] = int(m.group(1))
+    return out
+
+
+def _with_copies(found, copies):
+    """The titles named, and every copy of them, whichever of a video's titles was read: no page need
+    be read for the others. Psych S6 D3's episodes again behind Audio Commentaries, titles 18-20; its
+    commentaries, each named on its episode's page and on a page of them. (The one read is then the
+    one you confirm: core.prefer_played.)"""
+    videos = {o for c, o in copies.items() if c in found or o in found}
+    return set(found) | videos | {c for c, o in copies.items() if o in videos}
+
+
+def _play_alls_of(scanned):
+    """The titles the scan knows for play-alls, as numbers: nothing to name them by, and their order
+    comes from the disc's program and its cells, not from reading their pages."""
+    return {int(t["id"].split()[1]) for t in scanned if t.get("role") == "play-all"}
 
 
 def _moves(buttons, frm, to):
@@ -2850,15 +3028,16 @@ class _Crawler:
         return chain
 
 
-def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, is_word=None):
+def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, is_word=None, tv=False, every_title=False):
     """_crawl, with is_word (a dictionary: core.word_checker) to judge Windows' OCR readings by
-    (WORDS) while it runs."""
+    (WORDS) while it runs. tv: a TV disc's, its episode pages read too. every_title: the pages of
+    copies and Play Alls too, for a picture of each."""
     global WORDS
     WORDS = is_word
     with _sure_lock:
         _sure.clear()                           # (this stakeout's readings: how sure of each)
     try:
-        return _crawl(drive, vlc_dir, structure, out_dir, log, everything)
+        return _crawl(drive, vlc_dir, structure, out_dir, log, everything, tv, every_title)
     finally:
         WORDS = None
         # VLC let go of, however it ended (an error, the disc taken out mid-stakeout): no player
@@ -2870,16 +3049,19 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, is_wo
 _crawlers = []        # the stakeout's VLC sessions (_Crawler), closed when it's over
 
 
-def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
+def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=False, every_title=False):
     """The menu buttons that matter: their words (OCR) and where they go, a page or what they
     play. In rounds: a tour through the pages there's a way to, reading their buttons; then each
     button whose result the disc doesn't state outright is pressed, from a fresh start, and what
     plays is watched. A button that stays in the menus has gone to a page the disc decides on
     as it runs ("bonus material" on Father of the Bride Part II): which one is seen, and the
-    next round reads it and presses its buttons. Only the feature and the extras matter, so
-    scene pages, and buttons for trailers, settings and the like (and the pages behind them),
-    are passed by, unless everything. Writes crawl.json, crawl.txt and a picture of each page
-    read into out_dir, and, kept as test data, the disc's menu data (keep_disc_data)."""
+    next round reads it and presses its buttons. The titles decide what's needed (_leads_to_title),
+    and a page is passed by once its titles are named some other way; words only say what to look at
+    first (_search_rank). Copies of a title found and the scan's play-alls have nothing to tell, so no
+    page is read for them, unless every_title (a picture for each). Unless everything: then every page
+    and button. Writes crawl.json, crawl.txt
+    and a picture of each page read into out_dir, and, kept as test data, the disc's menu data
+    (keep_disc_data)."""
     os.makedirs(out_dir, exist_ok=True)
     for f in glob.glob(os.path.join(out_dir, "page_*.png")):
         os.remove(f)
@@ -2957,7 +3139,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
         if began.get("goes_to") and tuple(began["goes_to"]) != start:
             log("  the disc's program starts on %s, VLC on %s" % (began.get("goes_to"), start))
         # (a clip first or not: the same; so is the button highlighted on arrival, kept apart)
-        same = lambda a: {k: v for k, v in a.items() if k not in ("before", "select", "intro", "after", "into")}
+        same = lambda a: {k: v for k, v in a.items() if k not in ("before", "select", "intro", "after", "into", "run")}
         for (d, pgc, prog, n), answers in engine.items():
             s, a = (d, pgc, prog), answers[0]
             if all("plays" in x for x in answers) and len({x["plays"] for x in answers}) > 1:
@@ -2994,62 +3176,78 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
         answered = sum(1 for k in engine if (k[:3], k[3]) in known or (k[:3], k[3]) in c.learned)
         log("the disc's program answers %d of %d buttons" % (answered, len(engine)))
 
+    def scene_page(s):
+        # (a TV disc's, program by program: Smallville's Episodes page and its episodes' scene
+        # pages are one page of the disc, and only the latter are scenes)
+        return _scene_state(pages, s, known) if tv else _scene_page(structure, pages, s[:2], known)
+
+    def named(hoping=False):
+        # (hoping: as if the words still being read will name what their buttons play)
+        word = (lambda s, n: c.word_now(s, n) or ("" if c.read(s) else "Being Read")) if hoping else c.word_now
+        found = _named_titles(pages, c.reading, known, c.learned, pressed, word)
+        return found if every_title else _with_copies(found, copies) | _play_alls_of(scanned)
+
+    def no_way():
+        """The titles sought that no button is known to play yet."""
+        return sought - _titles_with_a_way(routes, known, pressed, opening)
+
     def passed_by(s):
-        """Why a state isn't worth a visit, or None."""
+        """Why a state wasn't worth a visit, or None."""
         if everything or s == start:
             return None
-        if _scene_page(structure, pages, s[:2], known):
-            return "scenes"
-        if engine and not plays_beyond(s):
-            return "nothing plays from there"
-        # (Main Menu on the page the disc opens on leads into the menus, not back: a FastPlay chooser).
-        # On a page that plays on, words still being read don't hold VLC up: it can time out while
-        # they're read (The Sorcerer's Apprentice's FastPlay chooser takes FastPlay after 12 s), and
-        # unread, they skip nothing. A page that waits for the viewer waits for them (Muppets from
-        # Space's "Talent Files": its pages of cast bios, passed by)
-        words = [c.first_words(x).get(n, "") if _waits_for_viewer(pages, x) else c.word_now(x, n)
-                 for x, n in routes[s]]
-        words = [w for (x, _), w in zip(routes[s], words) if not (x == start and _main_menu_text(w))]
-        # (not pages of ads: reading them is quick, and their pictures name the ads, posters often:
-        # Spider-Man 2's previews, Hitch among them. Pressing their buttons is another matter)
-        return next(("via \"%s\"" % w for w in words if _skip_text(w) and not _ad_text(w)), None)
+        found = named()
+        visited = set(c.reading) | {x for x, _ in routes[s]} | {start}
+        if _leads_to_title(pages, s, visited, found, known, c.learned, pressed, bool(no_way())):
+            return None
+        return "scenes" if scene_page(s) else "no title there that isn't named elsewhere"
 
-    def plays_beyond(s):
-        """Whether anything plays from s, or from a page past it (not back the way it came): a
-        button the disc's program says plays a title, or one nobody knows yet. Spider-Man's
-        Character Files: pages of cast bios leading only to each other and back, nothing to name."""
-        back = {x for x, _ in routes[s]} | {start}
-        seen, todo = {s}, [s]
-        while todo:
-            x = todo.pop()
-            for b in _state_buttons(pages, x):
-                k = (x, b["n"])
-                if "plays" in known.get(k, {}) or (k not in known and k not in c.learned):
-                    return True
-                nxt = _goes(pages, x, b, c.learned, known)
-                if nxt and nxt not in seen and nxt not in back:
-                    seen.add(nxt)
-                    todo.append(nxt)
-        return False
+    def known_outright():
+        """What the buttons themselves say they do, so they needn't be pressed."""
+        for s in routes:
+            for b in _state_buttons(pages, s):
+                if not b["auto"] and not _goes(pages, s, b, c.learned, known) and (s, b["n"]) not in known:
+                    k = _known(structure, pages, s, b)
+                    if k:
+                        known[(s, b["n"])] = k
 
-    def ready(s):
-        """Whether the words of the buttons on the way to s have been read (no waiting on OCR)."""
-        return all(c.read(x) for x, n in routes[s] if n in c.reading.get(x, {}))
+    def page_rank(s):
+        return _search_rank(routes[s], start, c.word_now, scene_page(s))
+
+    def beyond_the_plan(done):
+        """Pages the plan can't know of: all of them (everything), or, while a title has no way to
+        it, those with buttons nobody knows, the disc's program not answering them."""
+        cands = [s for s in routes if s not in done and all(x in c.reading for x, _ in routes[s])]
+        if not everything:
+            if not no_way():
+                return []
+            played = {k["plays"]["title"] for k in known.values() if "plays" in k}
+            cands = [s for s in cands if _leads_to_title(pages, s, set(c.reading), played, known, c.learned, pressed, True)]
+        return sorted(cands, key=lambda s: (page_rank(s), len(routes[s])))
 
     def tour(st, sel):
-        """One session, page to page, reading each page there's a way to (and that matters).
-        Pages whose way there has been read go first: VLC moves on while OCR catches up."""
+        """One session, page to page, by the plan (_page_plan). VLC moves on while OCR catches up, the
+        words being read taken to name what their buttons play. At the plan's end they're waited for:
+        a reading that failed plans the way to that title's other buttons."""
         goal = None
         try:
             while True:
-                # the next pages: their way there visited (its words may say "Sneak Peeks")
-                cands = [s for s in routes if s not in c.reading and tries.get(s, 0) < 2
-                         and all(x in c.reading for x, _ in routes[s])]
-                todo = [s for s in cands if ready(s) and not passed_by(s)] or \
-                    [s for s in cands if not passed_by(s)]          # (none ready: wait for the words)
-                c.expect = len(c.reading) + len(todo)
-                if not todo:
+                done = set(c.reading) | {s for s in routes if tries.get(s, 0) >= 2}
+                plan = [] if everything else _page_plan(pages, routes, done, named(hoping=True), known, c.learned,
+                                                        {} if every_title else copies, page_rank)
+                if not plan and not everything and not all(c.read(x) for x in c.reading):
+                    for x in list(c.reading):
+                        c.first_words(x)
+                    continue
+                plan = plan or beyond_the_plan(done)
+                c.expect = len(c.reading) + len(plan)
+                if not plan:
                     return
+                # (the nearest of those it's on the way to already)
+                todo = [s for s in plan if all(x in c.reading for x, _ in routes[s])]
+                if not todo:                    # (the way to them given up on)
+                    for s in plan:
+                        tries[s] = 2
+                    continue
                 here = _routes(pages, st, c.learned, known)
                 reach = [s for s in todo if s in here]
                 try:
@@ -3077,8 +3275,11 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
     played = None           # the title Play played, once a Play button has been pressed: the others reuse it
     stalled = 0             # presses in a row VLC got no picture for: the drive has stopped answering
     stop = False
+    scanned = _scan_titles(drive, log) if not everything else []
+    sought, copies = _titles_sought(scanned, length) if not everything else set(), _copies_of(scanned)
     while not stop:
         routes = _routes(pages, start, c.learned, known)
+        known_outright()
         try:
             if session is None:
                 c.open()
@@ -3102,13 +3303,8 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
         if sum(c.placed[:2]):
             log("  the disc's program placed the highlight right %d of %d times%s" % (
                 c.placed[0], sum(c.placed[:2]), " (and %d moved by our keys)" % c.placed[2] if c.placed[2] else ""))
-        # the presses: only what the disc doesn't say, on pages read, and not passed by
-        for s in routes:
-            for b in _state_buttons(pages, s):
-                if not b["auto"] and not _goes(pages, s, b, c.learned, known) and (s, b["n"]) not in known:
-                    k = _known(structure, pages, s, b)
-                    if k:
-                        known[(s, b["n"])] = k
+        # the presses: only what the disc doesn't say, on pages read
+        known_outright()
         # the feature, when scene buttons say it: then "Play" needn't be pressed (it may well run
         # trailers first)
         chapters = {}
@@ -3126,12 +3322,17 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
                     continue
                 if feature and not everything and _play_text(text):
                     known[(s, b["n"])] = {"plays": {"title": feature, "chapter": 1}, "assumed": True}
-                elif everything or (s in c.reading and not _skip_text(text)):
+                elif everything or s in c.reading:
                     tasks.append((s, b["n"]))
-        if not tasks:
+        # (the likeliest first: as soon as every title has its way, the rest needn't be pressed)
+        tasks.sort(key=lambda t: _skip_text(c.words(t[0]).get(t[1], "")))
+        if not tasks or not (everything or no_way()):
             break
         log("%d buttons to press (%d answered by the disc itself)" % (len(tasks), len(known)))
         for i, (s, n) in enumerate(tasks, 1):
+            if not (everything or no_way()):
+                log("  every title has a way to it now: the last %d left unpressed" % (len(tasks) - i + 1))
+                break
             text = c.words(s).get(n, "")
             if played and not everything and _play_text(text):     # every page's Play Movie: the same film
                 known[(s, n)] = {"plays": {"title": played, "chapter": 1}, "assumed": "play"}
@@ -3175,7 +3376,8 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
     result = []
     for s in routes:
         page = {"domain": s[0], "page": s[1], "program": s[2],
-                "image": "page_%s_%d_%d.png" % s if s in c.reading else None, "passed_by": passed_by(s),
+                "image": "page_%s_%d_%d.png" % s if s in c.reading else None,
+                "passed_by": None if s in c.reading else passed_by(s),
                 "heading": c.heading(s),
                 "route": [{"page": x[1], "program": x[2], "button": n} for x, n in routes[s]], "buttons": []}
         for b in _state_buttons(pages, s):
@@ -3221,6 +3423,18 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False):
         with _sure_lock:
             out["sure"] = dict(_sure)
     out["found"] = menu_titles(out)
+    out["tv"] = tv_titles(out)
+    if tv:
+        # what plays on after what (the disc's program) and what holds what (its cells): the order
+        # of the episodes, by a Play All
+        runs = [[x["plays"]] + list(x.get("run") or x.get("after") or [])
+                for answers in engine.values() for x in answers if x.get("plays")]
+        try:
+            from . import core
+            fmt, base = core.detect_format(drive)
+            out["tv"]["play_order"] = core.play_all_order(core.parse_dvd(base)["titles"], runs)
+        except (OSError, ValueError, IndexError, struct.error) as e:
+            log("  couldn't read the disc's titles for its Play All (%s)" % e)
     if _rapid:
         out["found"]["reader"] = "rapidocr"
     out["found"]["pictures"] = title_pictures(out, out_dir)
@@ -3296,7 +3510,9 @@ def nice_name(text):
 
 # what a page's heading says its titles are, in TheDiscDB's types (Spider-Man: "TRAILERS",
 # "MUSIC VIDEOS", "TV SPOTS"); TV spots are trailers to TheDiscDB
-HEADING_KINDS = (("Music", r"\bmusic\s*videos?\b"), ("DeletedScene", r"\bdeleted\s*scenes?\b"),
+# ("Deleted Extended Scene", "Deleted and Extended Scenes": Psych's; "Extended Scenes" alone too)
+DELETED_WORDS = r"\bdeleted(?:\s+\w+){0,2}?\s*scenes?\b|\bextended\s+scenes?\b"
+HEADING_KINDS = (("Music", r"\bmusic\s*videos?\b"), ("DeletedScene", DELETED_WORDS),
                  ("Featurette", r"\bfeaturettes?\b"), ("Interview", r"\binterviews?\b"),
                  ("Trailer", r"\btrailers?\b|\bspots\b"), ("Short", r"\bshort\s*films?\b|\bshorts\b"))
 HUB_RE = re.compile(r"\b(bonus|special)\s*(features?|materials?)\b|\bextras\b", re.I)
@@ -3356,14 +3572,16 @@ def menu_titles(out):
                 # page of other things (The Sorcerer's Apprentice's Sneak Peeks, by Play Movie)
                 whole = bool(run) and len(singles - {b["plays"]["title"]} - set(run)) >= 2
                 promo = _ad_text(via) or _ad_text(b["text"]) or reel
-                plays.append(dict(b["plays"], text=b["text"], promo=promo, kind=kind, via=via, play_all=whole, page=s))
+                place = [r["button"] for r in p["route"]] + [b["n"]]
+                plays.append(dict(b["plays"], text=b["text"], promo=promo, kind=kind, via=via, play_all=whole, page=s,
+                                  place=place))
                 # an ad button's run of titles: ads, all of them (The Sorcerer's Apprentice's Sneak
                 # Peeks: 66, then 70, 74, 78, 84, 88, 92, 94). Not another button's: FastPlay's sneak
                 # peeks and film are what their own buttons say; a Play All's, its own titles
                 if promo or whole:
-                    for t in run:
+                    for k, t in enumerate(run, 1):      # (each in its turn, after the button's own)
                         plays.append({"title": t, "chapter": 1, "seconds": None, "text": b["text"], "promo": promo,
-                                      "kind": kind, "via": via, "after": True, "play_all": whole})
+                                      "kind": kind, "via": via, "after": True, "play_all": whole, "place": place + [k]})
                 for o in b["plays"].get("others") or []:
                     plays.append(dict(o, text=b["text"], promo=promo, kind=kind, via=via, other=True))
     if not plays:
@@ -3469,8 +3687,17 @@ def menu_titles(out):
         sib = sorted({y["title"] for t2, ys in by.items() if t2 != t for y in ys if mine(y) and y["page"] == page})
         if page and len(sib) >= 2:
             parts[t] = sib
+    # where each title is in the menus, for reading them in that order: by its button that names it,
+    # else its first (not a commentary version's, nor a Play All's)
+    def named_place(xs):
+        own = [x for x in xs if x.get("place") and not x.get("other")] or [x for x in xs if x.get("place")]
+        whole = [x for x in own if not x.get("play_all") and not PLAY_ALL_RE.search(x["text"] or "")] or own
+        best = max(whole, key=lambda x: _wordy(x["text"]), default=None)
+        return best and best["place"]
+    places = {t: named_place(xs) for t, xs in by.items()}
     return dict({"feature": feature, "feature_name": feature_name, "extras": extras, "promos": promos,
-                 "promo_names": promo_names, "play_alls": play_alls, "opening": opening},
+                 "promo_names": promo_names, "play_alls": play_alls, "opening": opening,
+                 "places": {t: p for t, p in places.items() if p}},
                 **({"features": features} if features else {}), **({"play_all_parts": parts} if parts else {}))
 
 
@@ -3820,6 +4047,321 @@ def title_pictures(out, out_dir):
     return {t: v for t, (_, v) in sorted(best.items())}
 
 
+# A TV disc's menus. A film's reading (menu_titles) looks for the one title everything points to;
+# on a TV disc most titles are episodes, and only the show's episode list can say which words name one.
+TV_BONUS_RE = re.compile(r"\b(bonus|extras?|features?|materials?)\b", re.I)
+TV_PLAY_RE = re.compile(r"\b(resume|continue)\b|^\W*play(\s+(the\s+)?(episodes?|show|season))?\W*$|^\W*start\W*$", re.I)
+TV_SWITCH_RE = re.compile(r"^\W*(on|off)\W*$|\bcommentar", re.I)
+# (a commentary you watch: a real extra, not the episode with its audio switched)
+VIDEO_COMMENTARY_RE = re.compile(r"\bvideo\s+commentar\w*", re.I)
+
+
+def _scene_state(pages, s, known=None):
+    """The one title a page's program jumps into by chapters (an episode's scene page: Smallville's
+    Episodes page leads to one each, no button there playing the episode itself), or None."""
+    hits = [(known or {}).get((s, b["n"])) for b in _state_buttons(pages, s)]
+    chapters = {(h["plays"]["title"], h["plays"]["chapter"]) for h in hits if h and "plays" in h}
+    return next(iter(chapters))[0] if len(chapters) >= 2 and len({t for t, _ in chapters}) == 1 else None
+
+
+def _kind_alone(text):
+    """Words saying only what kind of thing a button plays ("deleted scene"), no name for it."""
+    rest = text or ""
+    for _, rx in HEADING_KINDS:
+        rest = re.sub(rx, "", rest, flags=re.I)
+    return bool(heading_kind(text)) and not re.search(r"[A-Za-z]{2}", rest)
+
+
+def _episode_named(words, episodes):
+    """Of a disc's episodes, the one a few words name, by all of its name or a part (a deleted
+    scene's button: "Real Girl", the name's first line unread, for Shawn and the Real Girl), or None;
+    none either when two fit as well."""
+    from . import core
+    ratio = lambda a, b: difflib.SequenceMatcher(None, a, b).ratio()
+    r = core._menu_key(words)
+    if len(r) < 4:
+        return None
+    scored = []
+    for e in episodes:
+        n = core._menu_key(e["name"])
+        whole = ratio(r, n)
+        part = max((ratio(r, n[i:i + len(r)]) for i in range(len(n) - len(r) + 1)), default=0) * 0.95
+        scored.append((max(whole, part), e))
+    scored.sort(key=lambda x: -x[0])
+    if not scored or scored[0][0] < 0.8 or (len(scored) > 1 and scored[1][0] >= scored[0][0] - 0.02):
+        return None
+    return scored[0][1]
+
+
+def _two_versions(p):
+    """A page's buttons, by what they play and whatever they say: [{"title", "seconds", "place"}]
+    when they play exactly two titles from their start, of about one length, or None. Most commentary
+    pages switch the audio of one title, or have a button per episode."""
+    titles = {}
+    for b in p["buttons"]:
+        plays = b.get("plays")
+        if plays and plays.get("chapter") in (1, None) and not _nav_only(b.get("text") or ""):
+            titles.setdefault(plays["title"], {"title": plays["title"], "seconds": plays.get("seconds"),
+                                               "place": [r["button"] for r in p["route"]] + [b["n"]]})
+    two = list(titles.values())
+    if len(two) != 2 or abs((two[0]["seconds"] or 0) - (two[1]["seconds"] or 0)) > 60:
+        return None
+    return two
+
+
+def _episode_above(r, placed):
+    """The episode a button sits under on its page ("Video Commentary", its words naming nothing):
+    the nearest above it that it shares the most width with. placed: [(reading, pick)]."""
+    x0, y0, x1, _ = r["rect"]
+    best = None
+    for other, pick in placed:
+        if other.get("page") != r.get("page"):
+            continue
+        ox0, oy0, ox1, _ = other["rect"]
+        width = min(x1, ox1) - max(x0, ox0)
+        if width > 0 and oy0 < y0 and (best is None or (width, oy0) > best[0]):
+            best = ((width, oy0), pick)
+    return best[1] if best else None
+
+
+def tv_titles(out):
+    """What a TV disc's menus say, before anyone asks the show: {"readings": [{"title", "text",
+    "seconds", "bonus", "kind", "page", "rect", "image"}], one for each title with words of its own,
+    in the menus' order; "promos", "promo_names", "play_alls", "opening"}. A button stands for the
+    title it plays from its start, or the title of the scene page it leads to. "bonus": found only
+    on a page of bonus materials (Psych's International Pilot, as long as an episode). A title with
+    any other button isn't a bonus: Smallville's Special Features play its episodes, audio switched."""
+    pages = {(p["domain"], p["page"], p["program"]): p for p in out["pages"]}
+    words = {(s, b["n"]): b["text"] for s, p in pages.items() for b in p["buttons"]}
+
+    def scene_title(domain, goes):
+        """The title of the scene page a button leads to."""
+        p = pages.get((domain, goes.get("page"), goes.get("program"))) if isinstance(goes, dict) else None
+        plays = [b["plays"] for b in (p or {}).get("buttons", []) if b.get("plays")]
+        titles = {x["title"] for x in plays}
+        return plays[0] if len(titles) == 1 and len({x.get("chapter") for x in plays}) >= 2 else None
+
+    seen, promos, promo_names, runs, versions = {}, [], {}, [], []
+    for s, p in pages.items():
+        on_way = [(s[0], r["page"], r["program"]) for r in p["route"]]
+        way = [words.get((x, r["button"]), "") for x, r in zip(on_way, p["route"])]
+        via = " ".join(way + [p.get("heading") or ""])
+        kind = heading_kind(p.get("heading"))
+        for w in reversed(way):
+            if kind or HUB_RE.search(w) or MAIN_MENU_RE.search(w):
+                break
+            kind = heading_kind(w)
+        bonus = bool(TV_BONUS_RE.search(way[-1] if way else "") or TV_BONUS_RE.search(p.get("heading") or ""))
+        ads = _ad_text(via)
+        for b in p["buttons"]:
+            text = b.get("text") or ""
+            plays = b.get("plays") or scene_title(s[0], b.get("goes_to"))
+            if not plays or (b.get("plays") and b["plays"].get("chapter") not in (1, None)):
+                continue
+            t = plays["title"]
+            if ads or _ad_text(text):
+                promos.extend(x for x in [t] + list(plays.get("after") or []) if x not in promos)
+                promo_names.setdefault(t, promo_name([{"text": text, "via": via}]))
+                continue
+            if PLAY_ALL_RE.search(text) or TV_PLAY_RE.search(text) or _play_text(text):
+                runs.append(t)
+                continue
+            if not re.search(r"[A-Za-z]{2}", text) or _nav_only(text):
+                continue
+            x = seen.get(t)
+            # where it is in the menus: the buttons pressed to reach it, this one last (a page's
+            # extras come where the button to that page is on the page before)
+            place = [r["button"] for r in p["route"]] + [b["n"]]
+            if x is None:
+                seen[t] = dict(title=t, text=text, seconds=plays.get("seconds"), bonus=bonus, kind=kind,
+                               page=list(s), rect=list(b["rect"]), place=place,
+                               image=p.get("image"),
+                               switch=bool(TV_SWITCH_RE.search(text)) and not VIDEO_COMMENTARY_RE.search(text),
+                               # (only its kind: "Deleted Scenes" isn't Smallville's "Delete")
+                               only_kind=_kind_alone(text),
+                               # (a page of them: its buttons say only whose)
+                               commentaries=bool(VIDEO_COMMENTARY_RE.search(via)))
+            elif x["bonus"] and not bonus:        # (its own button, over a commentary's)
+                seen[t] = dict(x, text=text, bonus=False, kind=kind, page=list(s), rect=list(b["rect"]),
+                               image=p.get("image"), switch=False, place=place)
+            elif not bonus:
+                x["bonus"] = False
+        # an episode again with a commentary for its audio, stored as its own title (Boy Meets World
+        # S1 D1: no cells shared, so the scan can't tell). Its page's words need only say commentary
+        if not ads and re.search(r"\bcommentar", via, re.I) and not VIDEO_COMMENTARY_RE.search(via):
+            versions.append(_two_versions(p))
+    offered = set(seen) | set(promos)
+    play_alls = sorted(set(runs) - offered)
+    return {"readings": list(seen.values()), "promos": promos, "promo_names": promo_names,
+            "play_alls": play_alls, "commentary_versions": [v for v in versions if v],
+            "opening": [t for t in out.get("opening") or [] if t not in offered and t not in play_alls]}
+
+
+def tv_found(tv, picks=None):
+    """tv_titles, with the show's answer (core.menu_episodes' picks: {index in tv's readings:
+    {"season", "number", "name", "score", "by"}}): {"episodes": [{"title", "season", "episode",
+    "name", "read", "by"}], "extras": [...], and tv_titles' promos, play_alls, opening}. A reading
+    no episode took is an extra only when the menus file it under their bonus materials or it's too
+    short for an episode; else nothing is said of it (the scan's guess stands)."""
+    picks = picks or {}
+    longest = max((r["seconds"] or 0 for i, r in enumerate(tv["readings"]) if i in picks), default=0)
+    placed = [(r, picks[i]) for i, r in enumerate(tv["readings"]) if i in picks and r.get("rect")]
+    picked = {r["title"]: picks[i] for i, r in enumerate(tv["readings"]) if i in picks}
+    # of a commentary page's two titles, the one that isn't the episode, unless its button names it
+    said = {r["title"]: r for r in tv["readings"]}
+    versions = {}
+    for two in tv.get("commentary_versions") or []:
+        known = [v for v in two if v["title"] in picked]
+        other = [v for v in two if v["title"] not in picked]
+        r = said.get(other[0]["title"]) if other else None
+        if len(known) == 1 and (not r or r.get("switch") or len(re.findall(r"[A-Za-z]", r["text"])) < 4):
+            versions[other[0]["title"]] = dict(other[0], of=picked[known[0]["title"]])
+    episodes, extras = [], []
+    for i, r in enumerate(tv["readings"]):
+        if i in picks:
+            e = picks[i]
+            episodes.append({"title": r["title"], "season": e["season"], "episode": e["number"], "name": e["name"],
+                             "read": r["text"], "by": e.get("by") or "name"})
+        elif r["title"] not in versions and r["text"] and not r.get("switch") and (r["bonus"] or r.get("kind") or
+                                                    (longest and (r["seconds"] or 0) < 0.5 * longest)):
+            extras.append({"title": r["title"], "name": nice_name(LISTED_RE.sub("", r["text"])),
+                           "seconds": r["seconds"], "kind": r.get("kind") or heading_kind(r["text"])})
+            if r.get("place"):
+                extras[-1]["place"] = r["place"]
+            # a button saying only that it's a deleted scene: the episode it sits under's (Psych S1 D3's)
+            if r.get("only_kind") and extras[-1]["kind"] == "DeletedScene" and r.get("rect"):
+                extras[-1]["under"] = _episode_above(r, placed)
+            said = VIDEO_COMMENTARY_RE.search(r["text"])
+            # whose: the words before it ("Shawn and the Real Girl Video Commentary with Writer Andy
+            # Berman"), else the episode it sits under. What it says from there on is its name:
+            # the line above a button runs into it when read ("Extended Version Video Commentary")
+            ep = said and (_episode_named(r["text"][:said.start()], list(picks.values()))
+                           or (r.get("rect") and _episode_above(r, placed)))
+            if ep:
+                extras[-1].update(season=ep["season"], episode=ep["number"],
+                                  name="%s %s" % (ep["name"], nice_name(r["text"][said.start():])))
+            elif r.get("commentaries"):
+                ep = _episode_named(r["text"], list(picks.values()))
+                if ep:
+                    extras[-1].update(season=ep["season"], episode=ep["number"],
+                                      name="%s Video Commentary" % ep["name"])
+    for v in versions.values():
+        e = v["of"]
+        extras.append({"title": v["title"], "name": "%s Audio Commentary" % e["name"], "seconds": v["seconds"],
+                       "kind": None, "season": e["season"], "episode": e["number"], "place": v["place"]})
+    # a button saying only its kind ("deleted scene", under an episode's name), and the same length
+    # named on the bonus page: one scene, reached twice (Psych S1 D3's), its kind from the one, its
+    # name from the other
+    for bare in [e for e in extras if _kind_alone(e["name"])]:
+        twin = next((e for e in extras if e is not bare and not _kind_alone(e["name"])
+                     and abs((e["seconds"] or 0) - (bare["seconds"] or 0)) <= 1), None)
+        if twin:
+            twin["kind"], twin["name"] = heading_kind(bare["name"]), "%s %s" % (twin["name"], bare["name"])
+            extras.remove(bare)
+    # a deleted scene whose words name one of this disc's episodes: that episode's, named for it
+    for e in extras:
+        if e["kind"] == "DeletedScene":
+            said = re.search(DELETED_WORDS, e["name"], re.I)
+            ep = _episode_named(re.sub(DELETED_WORDS, " ", e["name"], flags=re.I), episodes)
+            under = e.pop("under", None)
+            if not ep and under:
+                ep = {"season": under["season"], "episode": under["number"], "name": under["name"]}
+            if ep:
+                e.update(season=ep["season"], episode=ep["episode"], name="%s %s" % (
+                    ep["name"], nice_name(said.group(0)) if said else "Deleted Scene"))
+    return dict({k: tv.get(k) for k in ("promos", "promo_names", "play_alls", "opening")},
+                tv=True, episodes=episodes, extras=extras)
+
+
+def detected_tv_labels(found, titles, keep=()):
+    """tv_found as labels for a scan's titles, the shape of core.get_labels. Only what the menus
+    say: a title they say nothing of keeps the scan's guess (never an ad for that alone, as on a
+    film's disc: a TV disc's own episodes may have no button). Titles in keep (your labels,
+    TheDiscDB's names) and those the scan sets aside as copies are left be."""
+    out = {}
+    episodes = {"Title %d" % e["title"]: e for e in found.get("episodes") or []}
+    extras = {"Title %d" % e["title"]: e for e in found.get("extras") or []}
+    promos = {"Title %d" % n for n in found.get("promos") or []}
+    names = {"Title %d" % int(n): v for n, v in (found.get("promo_names") or {}).items()}
+    opening = {"Title %d" % n for n in found.get("opening") or []}
+    labelled = set()
+    # copies, as the scan has them (a title's cells don't outlast it): one label, on the title it
+    # kept, with the most any of their buttons said
+    copy_of = {}
+    for t in titles:
+        m = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t.get("role") == "duplicate" else None
+        if m:
+            copy_of[t["id"]] = m.group(1)
+    for tid, e in list(extras.items()):
+        home = copy_of.get(tid, tid)
+        if home != tid:
+            del extras[tid]
+            own = extras.get(home) or {}
+            if home not in extras or len(e["name"] or "") > len(own["name"] or ""):
+                # (its own place in the menus, if it has one: the page of them, not a copy's button)
+                extras[home] = dict(own, **e)
+                if own.get("place"):
+                    extras[home]["place"] = own["place"]
+    for t in titles:
+        tid = t["id"]
+        if tid in keep or t.get("role") in ("duplicate", "segment"):
+            continue
+        if tid in episodes:
+            e = episodes[tid]
+            read = " (read as \"%s\")" % e["read"] if e["read"] else " (no name read)"
+            out[tid] = {"type": "Episode", "title": e["name"], "season": e["season"], "episode": e["episode"],
+                        "note": "the menus: \"%s\"" % e["read"] if e["by"] == "name"
+                        else "the menus: its place in the disc's Play All" + read if e["by"] == "play-all"
+                        else "the menus: between its neighbours on their episode page" + read}
+        elif tid in extras and extras[tid]["name"]:
+            e = extras[tid]
+            # (the same scene by two buttons, the scan not having said: one label)
+            same = (e["name"], round((e["seconds"] or 0) / 2))
+            if same in labelled:
+                continue
+            labelled.add(same)
+            out[tid] = {"type": e.get("kind") or "Extra", "title": e["name"], "note": "the menus: an extra"}
+            if e.get("place"):
+                out[tid]["place"] = e["place"]
+            if e.get("episode"):
+                out[tid].update(season=e["season"], episode=e["episode"], note="the menus: this episode's")
+        elif tid in promos:
+            out[tid] = {"type": "Promo", "title": names.get(tid), "note": "the menus: an ad"}
+        elif tid in opening:
+            out[tid] = {"type": "Promo", "title": "Previews",
+                        "note": "plays before the menu on a player (VLC skips it): previews, as a rule"}
+    return out
+
+
+def tv_pictures(tv, out_dir, pictures=None):
+    """title_pictures, with each reading's own button over it: the button that names the title, one
+    leading to its scene page too (no button there plays it: Smallville's Episodes page)."""
+    out = dict(pictures or {})
+    for r in tv.get("readings") or []:
+        if r.get("image"):
+            out[r["title"]] = {"image": os.path.join(out_dir, r["image"]), "rect": list(r["rect"]),
+                               "button": list(r["rect"]), "text": r["text"]}
+    return out
+
+
+def found_tv_text(found):
+    """tv_found in words, for the log and the command line."""
+    how = {"name": "", "neighbours": ", by its neighbours", "play-all": ", by the Play All"}
+    lines = ["Episode:  title %d  S%sE%s %s (read \"%s\"%s)" % (
+        e["title"], e["season"], e["episode"], e["name"], e["read"], how.get(e["by"], ""))
+        for e in found.get("episodes") or []]
+    lines += ["%-9s title %d  %s%s" % ("Deleted:" if e.get("kind") == "DeletedScene" else "Extra:", e["title"], e["name"],
+                                       " (S%sE%s)" % (e["season"], e["episode"]) if e.get("episode") else "")
+              for e in found.get("extras") or []]
+    if found.get("promos"):
+        lines.append("Ads:      titles " + ", ".join(map(str, found["promos"])))
+    if found.get("play_alls"):
+        lines.append("Play All: titles " + ", ".join(map(str, found["play_alls"])))
+    if found.get("opening"):
+        lines.append("Previews: titles " + ", ".join(map(str, found["opening"])))
+    return "\n".join(lines)
+
+
 HIDDEN_ROLES = ("duplicate", "play-all", "segment", "promo", "loop", "junk", "decoy")
 # set aside by the scan as copies of something else: the menus naming one doesn't change that
 # (a short "junk" clip the menus offer is real content: an outtake, a teaser)
@@ -3899,6 +4441,10 @@ def detected_labels(found, titles, keep=()):
                         "note": "plays before the menu on a player (VLC skips it): previews, as a rule"}
         else:
             out[tid] = {"type": "Promo", "title": None, "note": "the menus: nothing plays it"}
+    places = {"Title %d" % int(n): p for n, p in (found.get("places") or {}).items()}
+    for tid, label in out.items():
+        if tid in places:
+            label["place"] = places[tid]
     return out
 
 
@@ -4009,6 +4555,7 @@ def main(argv=None):
     ap.add_argument("--out", help="where to write the results (default: ~/.disc_detective/menus/<fingerprint>)")
     ap.add_argument("--no-vlc", action="store_true", help="the menu structure only")
     ap.add_argument("--probe", action="store_true", help="a short VLC probe instead of the crawl")
+    ap.add_argument("--tv", action="store_true", help="a TV disc: its episode pages read too")
     ap.add_argument("--all", action="store_true",
                     help="press every button, scenes, trailers and settings too (slow; for checking a disc)")
     a = ap.parse_args(argv)
@@ -4055,7 +4602,8 @@ def main(argv=None):
         probe(root, vlc, out)
         print("probe written to", os.path.join(out, "probe.json"))
         return 0
-    result = crawl(root, vlc, s, out, everything=a.all, is_word=core.word_checker(core.default_imdb_dir()))
+    result = crawl(root, vlc, s, out, everything=a.all, is_word=core.word_checker(core.default_imdb_dir()),
+                   tv=a.tv)
     result["found"] = plain_names(result["found"], _dictionary())
     print()
     print(crawl_text(result))

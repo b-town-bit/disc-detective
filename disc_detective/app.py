@@ -233,8 +233,14 @@ def menu_played(found):
     found = found or {}
     nums = {found.get("feature")} | {f["title"] for f in found.get("features") or []} | \
         {e["title"] for e in found.get("extras") or []} | set(found.get("promos") or []) | \
-        set(found.get("play_alls") or [])
+        set(found.get("play_alls") or []) | {e["title"] for e in found.get("episodes") or []}
     return {"Title %d" % n for n in nums if n}
+
+
+def menu_unread(found):
+    """Of those, the extras whose buttons' words weren't read (a page passed by, its title known by
+    another way, or its copy's), as title ids."""
+    return {"Title %d" % e["title"] for e in (found or {}).get("extras") or [] if not e.get("name")}
 
 
 PLAY_ALL_FIT = 0.05     # a Play All the scan didn't see is as long as its page's titles, to this
@@ -263,7 +269,10 @@ def detected_for(rep, found):
     """What the menus found (menus.menu_titles()) as labels for this scan's titles: the titles you
     or TheDiscDB named are left be."""
     from . import menus
-    di.prefer_played(rep, menu_played(found))
+    keep = set(rep.get("labels") or {}) | discdb_named(rep)
+    di.prefer_played(rep, menu_played(found), menu_unread(found), keep)
+    if found.get("tv"):
+        return menus.detected_tv_labels(found, rep.get("titles") or [], keep=keep)
     menu_play_alls(rep.get("titles") or [], found)
     # (a disc of short films: the ones its answer has, each a film, as a film's own menu makes it)
     cands = rep.get("candidates") or []
@@ -274,8 +283,7 @@ def detected_for(rep, found):
         films = set(pairs.values()) or films
         found = dict(found, features=[{"title": int(t.split()[1]), "name": shorts.get(t) or ""}
                                       for t in sorted(films, key=di._natural)])
-    return menus.detected_labels(found, rep.get("titles") or [],
-                                 keep=set(rep.get("labels") or {}) | discdb_named(rep))
+    return menus.detected_labels(found, rep.get("titles") or [], keep=keep)
 
 
 def short_films(rep, found):
@@ -374,6 +382,23 @@ ROLE_TYPES = {"feature": "MainMovie", "version": "MainMovie", "episode": "Episod
               "promo": "Promo"}
 
 
+# Edit titles' order of what the menus found: by type first
+FOUND_TYPES = ("MainMovie", "Episode", "DeletedScene", "Extra", "Featurette", "Interview", "Trailer", "Short", "Music",
+               "Scene", "Other", "Promo")
+
+
+def found_order(tid, was, detected):
+    """Where a title the menus have a word on goes in Edit titles: by type (the film, the episodes,
+    the deleted scenes...), the episodes in their order, the rest as the menus have them, a page's
+    from button to button, so that checking them doesn't jump about the page."""
+    kind = was.get("type")
+    rank = FOUND_TYPES.index(kind if kind in FOUND_TYPES else "Other")
+    place = (detected.get(tid) or {}).get("place")
+    # (an extra may have an episode too: it goes by its place all the same)
+    season, episode = (di._int(was.get("season")) or 0, di._int(was.get("episode")) or 0) if kind == "Episode" else (0, 0)
+    return (rank, season, episode, place is None, place or [], di._natural(tid))
+
+
 def title_word(t, mine, items, detected, guesses):
     """The best word on what a title is, and whose it is: yours, then TheDiscDB's, then the
     menus' (Detect titles), then the scan's guess. ({"type", "title", "season", "episode"}, source)
@@ -429,7 +454,9 @@ def suspect_report(found):
     """Detect titles' answer, in the case's words: "The suspects named the film and 3 extras"
     (each button pressed: a suspect; a trailer of the film's own counts among the extras)."""
     n = len(found.get("extras") or [])
+    eps = len(found.get("episodes") or [])
     named = [w for w in ("the film" if found.get("feature") else "",
+                         "%d episode%s" % (eps, "" if eps == 1 else "s") if eps else "",
                          "%d extra%s" % (n, "" if n == 1 else "s") if n else "") if w]
     return "The %s named %s" % ("suspect" if found.get("suspects", 0) == 1 else "suspects", " and ".join(named))
 
@@ -445,9 +472,10 @@ def discdb_named(rep):
     return out
 
 
-def plan_rip(rep, mk_titles, include_extras, selected=None, prefer_wide=True):
-    """Which MakeMKV titles to rip and what to call them (Plex layout). prefer_wide (Settings >
-    Ripping): a fullscreen copy of the film is left out unless ticked, when there's a wider one."""
+def plan_rip(rep, mk_titles, include_extras, selected=None):
+    """Which MakeMKV titles to rip and what to call them (Plex layout). Of the film's copies in
+    other pictures, the best by default (higher resolution, then HDR, then widescreen: a
+    fullscreen copy is left out); the others are yours to tick."""
     ours = [{"title_id": t["id"], "role": t["role"], "duration": t["duration"],
              "clips": t.get("clip_list"), "episode_index": t.get("episode_index"), "edition": t.get("edition"),
              "interactive": t.get("interactive"), "special_name": t.get("special_name"),
@@ -532,12 +560,20 @@ def plan_rip(rep, mk_titles, include_extras, selected=None, prefer_wide=True):
         else:   # hand-picked play-alls, alternate versions, duplicates
             dest = "%s/Other/%s - %s.mkv" % (base, show, (t["title_id"] if t else m["source"]).replace(".", "_"))
         plan.append({"mk": m["index"], "title_id": t["title_id"] if t else m["source"], "role": role,
-                     "length": m["duration_text"], "dest": dest, "full": fullscreen(t, item)})
+                     "length": m["duration_text"], "dest": dest, "full": fullscreen(t, item),
+                     "picture": (t or {}).get("video_info"), "seconds": m.get("duration") or (t or {}).get("duration") or 0})
     copies = [p for p in plan if p["role"] in ("feature", "version", "longest")]
-    if prefer_wide and selected is None and any(p["full"] for p in copies) and not all(p["full"] for p in copies):
-        plan = [p for p in plan if p not in copies or not p["full"]]   # the fullscreen copy: only if ticked
+    if selected is None and len(copies) > 1:
+        # the better picture, by default: a copy of about the same length (the same film) in a
+        # better one leaves this one for you to tick (Rush Hour 3's fullscreen; a 4K disc's 1080p
+        # copy). Cuts in one picture are both kept (The Iron Giant's editions)
+        rank = lambda p: (di.video_rank(p["picture"]), not p["full"])
+        near = lambda a, b: min(a["seconds"], b["seconds"]) > 0 and \
+            max(a["seconds"], b["seconds"]) <= 1.15 * min(a["seconds"], b["seconds"])
+        worse = [p for p in copies if any(q is not p and near(p, q) and rank(q) > rank(p) for q in copies)]
+        plan = [p for p in plan if p not in worse]
     for p in plan:
-        del p["full"]
+        del p["full"], p["picture"], p["seconds"]
     if not plan and mk_titles and selected is None:   # nothing classified: the longest title (never a loop)
         real = [x for x in mk_titles if (pairs.get(x["index"], (None, None))[0] or {}).get("role")
                 not in ("loop", "junk", "duplicate", "decoy", "play-all", "segment")] or mk_titles
@@ -2330,6 +2366,7 @@ class App:
                 pmap = self._program_map(drive, rep)
                 rep = self._menus_seen(drive, args, rep)
                 self._program_seen(rep, pmap)
+                self._bd_menus_seen(drive, args, rep)
             args.library.close()
             self.post(self.tell, lambda: self.scan_done(rep, None))   # once the story has been told
         except SystemExit as exc:
@@ -2367,6 +2404,60 @@ class App:
                            time.time() - t0)
         return pmap
 
+    def _bd_menus_seen(self, drive, args, rep):
+        """A Blu-ray's menus as its own files name its titles (bdmenus: Sony's BD-J framework's
+        menu project, Muppets from Space): the menus' word on each, waiting for you in Edit titles
+        as Detect titles' is on a DVD. Read off the disc's files in a moment; no VLC, no Java."""
+        from . import bdmenus
+        if not rep or rep.get("format") != "Blu-ray" or rep.get("kind") == "tv":
+            return
+        try:
+            entries = bdmenus.menu_project(drive)
+            if not entries:
+                return
+            cands = rep.get("candidates") or []
+            film = cands[0]["name"] if cands and di.adopt_guess(cands) and cands[0].get("kind") == "movie" else None
+            con = di.imdb_open(getattr(args, "imdb_dir", None) or di.default_imdb_dir(), allow_download=False,
+                               log=lambda m: None)
+            try:
+                labels = bdmenus.project_labels(rep.get("titles") or [], entries, film,
+                                                lambda n: di.known_film(con, n), bdmenus.menu_texts(drive, entries))
+            finally:
+                con.close()
+        except Exception as exc:          # (a nicety: never fail a scan over it)
+            di.logger.info("the disc's menu project couldn't be read (%s: %s)", type(exc).__name__, exc)
+            return
+        by = {t["id"]: t for t in rep.get("titles") or []}
+        for piece, whole in bdmenus.project_pieces(rep.get("titles") or [], labels).items():
+            # (a piece of another named title: not ripped twice, nor its label waiting for you)
+            labels.pop(piece, None)
+            by[piece]["role"] = "segment"
+            by[piece]["note"] = "a piece of %s (%s), which plays it whole" % (whole, (labels.get(whole) or {}).get("title"))
+        for pid in bdmenus.project_play_alls(rep.get("titles") or [], entries):
+            if by[pid].get("role") in ("extra", "junk", None):
+                by[pid]["role"], by[pid]["note"] = "play-all", "the menus' Play All (its menu project says)"
+        # (a name off its menu button, linked to its playlist through the project: known, not a
+        # guess; saved as yours are, for TheDiscDB too. What rests on a judgement (an ad by its
+        # frame rate, a project's own shorthand) waits for you in Edit titles)
+        mine = dict(rep.get("labels") or {})
+        saved = []
+        con = getattr(args, "library", None)
+        h = rep.get("content_hash")
+        for tid, lab in sorted(labels.items()):
+            if lab.get("exact") and tid not in mine and con is not None and h:
+                di.set_label(con, h, tid, lab["type"], lab.get("title"))
+                mine[tid] = {"type": lab["type"], "title": lab.get("title"), "season": None, "episode": None}
+                saved.append(tid)
+        if saved:
+            rep["labels"] = mine
+            di.logger.info("the disc's menus name %d of its titles exactly (their buttons' words): saved", len(saved))
+        waiting = {tid: lab for tid, lab in labels.items() if tid not in mine}
+        if labels:
+            rep["detected"], rep["bd_project"] = labels, len(entries)
+            rep["staked_out"] = bool(waiting)          # (titles waiting for you, if any)
+            di.logger.info("the disc's menu project names %d of its titles (%d entries; %d waiting for you)",
+                           len(labels), len(entries), len(waiting))
+
     def _program_seen(self, rep, pmap):
         """The program map on the scan (core.apply_program_map): the title each button plays the
         original of its copies, a play-all's chain whole."""
@@ -2394,6 +2485,7 @@ class App:
             rep = self._menus_witness(drive, args, rep, staked=True)
             rep["menu_raw"] = raw
             rep["menu_found"] = self._name_titles(raw, rep)
+            rep = self._settle_by_menus(drive, args, rep, raw)
             if before is not None and before.get("staked_out"):
                 rep["staked_out"] = True          # (its titles still wait for you in Edit titles)
             return rep
@@ -2411,6 +2503,7 @@ class App:
         rep = self._menus_witness(drive, args, rep, staked=True)   # (reads the stakeout's pictures, kept)
         rep["menu_raw"] = raw
         rep["menu_found"] = self._name_titles(raw, rep)
+        rep = self._settle_by_menus(drive, args, rep, raw)
         rep["staked_out"] = True
         return rep
 
@@ -2419,7 +2512,7 @@ class App:
         the film isn't certain (not yours, not TheDiscDB's: unnamed, a guess, a second feature
         unnamed), or also on every disc whose titles aren't known (TheDiscDB's, your labels)."""
         mode = self.settings.get("detect_in_scan", "never") if self.settings.get("menu_detect") else "never"
-        if mode == "never" or not vlc or rep.get("format") != "DVD" or rep.get("kind") == "tv" or \
+        if mode == "never" or not vlc or rep.get("format") != "DVD" or \
                 rep.get("from_sample") or not rep.get("path"):
             return False
         hit = (rep.get("discdb") or {}).get("hit")
@@ -2427,7 +2520,9 @@ class App:
             str(rep.get("status", "")).startswith("unidentified") or not di.is_probable(rep.get("candidates"))
             or self.more_films(rep))
         known = bool(hit and hit.get("titles")) or bool(rep.get("labels"))
-        return weak or (mode == "unknown" and not known)
+        # (a show's disc that doesn't say its season, yours too: its menus may)
+        no_season = rep.get("kind") == "tv" and not known and not (rep.get("match") or {}).get("season")
+        return weak or no_season or (mode == "unknown" and not known)
 
     def _menus_witness(self, drive, args, rep, staked=False):
         """Nothing named the disc (a number for a label, no cover art), or only a guess for a disc
@@ -2499,8 +2594,11 @@ class App:
             # the same disc scanned again (an answer saved): what its menus said still holds
             rep["menu_found"] = old["menu_found"]
             rep["menu_raw"] = old.get("menu_raw")
-        if rep.get("menu_found") and rep.get("kind") != "tv":     # (carried over, or this scan's stakeout)
+        if rep.get("menu_found"):                                 # (carried over, or this scan's stakeout)
             rep["detected"] = detected_for(rep, rep["menu_found"])
+            di.apply_labels(rep.get("titles") or [], all_labels(rep))
+            di.labels_over_guess(rep)
+        elif rep.get("bd_project") and rep.get("detected"):        # (a Blu-ray's menu project's names)
             di.apply_labels(rep.get("titles") or [], all_labels(rep))
             di.labels_over_guess(rep)
         self.rep = rep
@@ -2628,8 +2726,7 @@ class App:
         """Must run on the Tk thread unless extras/selected are passed in (Tk variables aren't thread-safe)."""
         titles = mk_titles if mk_titles is not None else preview_titles(self.rep)
         return plan_rip(self.rep, titles, self.extras.get() if extras is None else extras,
-                        self.selected if selected == "current" else selected,
-                        prefer_wide=self.settings.get("prefer_widescreen", True))
+                        self.selected if selected == "current" else selected)
 
     def show_plan_summary(self):
         plan = self.current_plan()
@@ -2678,11 +2775,11 @@ class App:
 
     def can_detect(self):
         """Detect titles is on offer (Edit titles): switched on in Settings, and a DVD (a real one, not a
-        saved sample) that looks like a film; TV discs aren't handled yet."""
+        saved sample)."""
         rep = self.rep
         # (rep's path was a disc when it was scanned: not asked again, the drive may be busy)
         return bool(self.settings.get("menu_detect") and rep and rep.get("format") == "DVD"
-                    and rep.get("kind") != "tv" and not rep.get("from_sample") and rep.get("path"))
+                    and not rep.get("from_sample") and rep.get("path"))
 
     def detect_titles(self):
         """Read the disc's menus (VLC plays them and presses their buttons) for its feature and
@@ -2753,7 +2850,8 @@ class App:
         log("reading the menus of %s with VLC %s" % (root, vlc))
         args = self.scan_args()
         # (the IMDb index as a dictionary: which of Windows OCR's two readings has real words)
-        result = menus.crawl(root, vlc, structure, out, log=log, is_word=di.word_checker(args.imdb_dir))
+        result = menus.crawl(root, vlc, structure, out, log=log, is_word=di.word_checker(args.imdb_dir),
+                             tv=rep.get("kind") == "tv", every_title=bool(self.settings.get("menu_every_title")))
         result["suspects"] = sum(1 for p in result["pages"] for b in p["buttons"] if "chain" in b)
         return result
 
@@ -2765,6 +2863,8 @@ class App:
         from . import menus
         args = self.scan_args()
         log = lambda line: di.logger.info("menus: %s", line.strip())
+        if rep.get("kind") == "tv":
+            return self._name_episodes(raw, rep, args, log)
         found = raw["found"]
         try:                             # names OCR made up out of the backdrop: plain names
             titles = di.imdb_open(args.imdb_dir, allow_download=False, log=lambda m: None)
@@ -2793,6 +2893,70 @@ class App:
             log(line)
         return dict(found, suspects=raw.get("suspects", 0))
 
+    def _name_episodes(self, raw, rep, args, log):
+        """A TV disc's stakeout: the menus' words read against the show's episode list. Off the
+        Tk thread (TVmaze)."""
+        from . import menus
+        tv = raw.get("tv") or menus.tv_titles(raw)
+        # (in the order a Play All has them, where the disc has one)
+        tv = dict(tv, readings=di.menu_play_order(tv["readings"], tv.get("play_order")))
+        match = rep.get("match") or {}
+        orders = di.show_episodes(match.get("imdb_id"), getattr(args, "tvmaze_dir", None),
+                                  online=not args.offline, imdb_dir=args.imdb_dir)
+        got = di.menu_episodes(tv["readings"], orders, match.get("season"),
+                               getattr(args, "episode_order", "aired")) if orders else None
+        found = menus.tv_found(tv, (got or {}).get("picks"))
+        for line in menus.found_tv_text(found).splitlines():
+            log(line)
+        settles = self._tv_settles(rep, tv["readings"], got, args)
+        if settles:
+            found["settles"] = settles
+            log("the menus say: %s" % settles)
+        return dict(found, suspects=raw.get("suspects", 0),
+                    pictures=menus.tv_pictures(tv, menus.menu_dir(rep["content_hash"]),
+                                               (raw.get("found") or {}).get("pictures")))
+
+    @staticmethod
+    def _tv_settles(rep, readings, got, args):
+        """What the menus' episodes change in the scan's answer, or None: {"season": n}, your answer
+        naming the show but no season; {"answer": a truth}, nothing confirmed (a show they name
+        better than the scan's guess, or a season the guess hasn't or has wrong). Yours and
+        TheDiscDB's show stands, whatever the menus read. Never saved: it's asked for again each scan."""
+        match = rep.get("match") or {}
+        named = sum(1 for p in (got or {"picks": {}})["picks"].values() if p["by"] == "name")
+        if rep.get("personal_hit") or (rep.get("discdb") or {}).get("hit"):
+            return {"season": got["season"]} if got and not match.get("season") else None
+        if got and named and match.get("imdb_id"):             # the scan's show it is
+            if got["season"] == match.get("season"):
+                return None
+            return {"answer": di.truth_for(match, got["season"], match.get("disc"))}
+        try:
+            con = di.imdb_open(args.imdb_dir, allow_download=False, log=lambda m: None)
+            show = di.shows_by_episodes(con, readings)
+        except Exception:
+            di.logger.exception("searching IMDb's episodes for the menus' names failed")
+            return None
+        if show and show["imdb_id"] != match.get("imdb_id"):
+            return {"answer": di.truth_for(show, show["season"])}
+        if show and show["season"] != match.get("season"):
+            return {"answer": di.truth_for(match, show["season"], match.get("disc"))}
+        return None
+
+    def _settle_by_menus(self, drive, args, rep, raw):
+        """The disc identified again with what its menus' episodes settled, and its titles named for
+        that. Off the Tk thread."""
+        settles = (rep.get("menu_found") or {}).get("settles")
+        if not settles:
+            return rep
+        di.step("menus")
+        args.menu_answer, args.menu_season = settles.get("answer"), settles.get("season")
+        again = di.identify(drive, args)
+        args.menu_answer = args.menu_season = None
+        again["menu_raw"] = raw
+        again["menu_found"] = self._name_titles(raw, again)
+        again["menu_found"].pop("settles", None)                # (once: it's been heard)
+        return again
+
     GONE_STAKEOUT = "The disc was removed: stakeout aborted"
 
     def detect_outcome(self, text, colour):
@@ -2816,6 +2980,11 @@ class App:
             self.post(d.detected)         # (after the labels below are in)
         if rep.get("personal_hit"):      # the lab, stopped for the stakeout, picks up again
             self.prescan(rep)
+        if found and found.get("settles"):
+            # the show or the season, by its episodes: the scan again, the stakeout kept (_menus_seen)
+            self.detect_outcome(suspect_report(found), th.GREEN_DOT)
+            self.scan()
+            return
         if found:
             rep["menu_found"] = found
             answer = films_by_menus(rep, found)
@@ -3553,8 +3722,7 @@ class TitlePicker:
         you hadn't changed follow the new plan; ones you had stay)."""
         rep = self.app.rep
         old_default = getattr(self, "default", None)
-        self.default = {p["title_id"] for p in plan_rip(rep, preview_titles(rep), self.app.extras.get(),
-                                                        prefer_wide=self.app.settings.get("prefer_widescreen", True))}
+        self.default = {p["title_id"] for p in plan_rip(rep, preview_titles(rep), self.app.extras.get())}
         if self.current is None:
             self.current = set(self.app.selected if self.app.selected is not None else self.default)
         else:
@@ -3563,7 +3731,7 @@ class TitlePicker:
             if self.current == old_default:
                 self.current = set(self.default)
         self.vars = {}
-        rows = [t for t in rep["titles"] if t["role"] in self.ORDER]
+        rows = di.without_lost_copies([t for t in rep["titles"] if t["role"] in self.ORDER])
         self.names = {}
         for p in plan_rip(rep, preview_titles(rep), True, selected={t["id"] for t in rows}):
             self.names[p["title_id"]] = p["dest"].split("/")[-1]
@@ -3692,6 +3860,12 @@ class TitlesDialog:
         if rep is not None and rep.get("format") == "DVD" and rep.get("path") and not rep.get("from_sample"):
             from . import menus
             self.vlc = menus.find_vlc(app.settings.get("vlc") or None)
+        # a Blu-ray's: in ffmpeg's ffplay, each playlist by its number (no VLC: no title list to
+        # look up, and its short titles too)
+        self.ffplay = None
+        if rep is not None and rep.get("format") == "Blu-ray" and rep.get("path") and not rep.get("from_sample"):
+            from . import bdmenus
+            self.ffplay = bdmenus.find_ffplay(app.settings.get("ffplay") or None)
         # {title id: {"type", "title", "season", "episode", "from", "was": what it started as, "ok": confirmed}}
         self.state = {}
         self.locked = False                       # while Detect titles is under way
@@ -3787,8 +3961,8 @@ class TitlesDialog:
                        "clips": (t["clips"] or "").split(",") if t.get("clips") else [],
                        "episode_index": t.get("episode_index"), "sub": tracks_text(t.get("tracks"))}
                       for t in stored.values() if t["role"] in self.ORDER and (t["duration"] or 0) >= self.MIN_SECONDS]
-        self.rows = sorted(titles, key=lambda t: (self.ORDER[t["role"]], t.get("episode_index") or 0,
-                                                  di._natural(t["id"])))
+        self.rows = sorted(di.without_lost_copies(titles), key=lambda t: (self.ORDER[t["role"]], t.get("episode_index") or 0,
+                                                                          di._natural(t["id"])))
         guesses = self.scan_names()
         # the menu pages Detect titles saw: for each title a button plays, that button (this
         # session's pictures: gone when the app closes, unless kept as test data)
@@ -3834,12 +4008,11 @@ class TitlesDialog:
             else:
                 self.heads[head] = ttk.Label(g, text=head, style="Cap.TLabel")
             self.heads[head].grid(row=0, column=c, sticky="w", padx=(0, 8), pady=(0, 4))
-        # what the menus found, to confirm, comes first and always shows (the ads too): the film,
-        # then the extras together, then the promos
+        # what the menus found, to confirm, comes first and always shows (the ads too)
         found = set(self.found())
-        rank = {"MainMovie": 0, "Promo": 2}
+        detected = (self.rep or {}).get("detected") or {}
         first = sorted((t for t in self.rows if t["id"] in found),
-                       key=lambda t: (rank.get(self.state[t["id"]]["was"]["type"], 1), di._natural(t["id"])))
+                       key=lambda t: found_order(t["id"], self.state[t["id"]]["was"], detected))
         rest = [t for t in self.rows if t["id"] not in found]
         hidden = [t for t in rest if t["role"] in self.HIDDEN]
         shown = first + [t for t in rest if self.show_all.get() or t["role"] not in self.HIDDEN]
@@ -3876,10 +4049,10 @@ class TitlesDialog:
             see = th.link(line, "", lambda: self.show_picture(tid), style="DeskLink.TLabel", icon="picture")
             see.pack(side="left", padx=(6, 0))
             th.Tooltip(see, lambda: "The menu button that plays it")
-        if self.vlc and re.fullmatch(r"Title \d+", tid):     # to see what it is
+        if (self.vlc and re.fullmatch(r"Title \d+", tid)) or (self.ffplay and re.fullmatch(r"\d+\.mpls", tid)):
             watch = th.link(line, "", lambda: self.watch(tid), style="DeskLink.TLabel", icon="play")
             watch.pack(side="left", padx=(6, 0))
-            th.Tooltip(watch, lambda: "Watch it in VLC")
+            th.Tooltip(watch, lambda: "Watch it" if tid.endswith(".mpls") else "Watch it in VLC")
         if t.get("sub"):
             ttk.Label(cell, text=t["sub"], style="Sub.TLabel").pack(anchor="w")
         ttk.Label(g, text=di.hms(t["duration"])).grid(row=r, column=col["LENGTH"], sticky="w", padx=(0, 8))
@@ -4113,6 +4286,14 @@ class TitlesDialog:
         from . import menus
         if self.app.busy or getattr(self.app, "mkv_scan", None):
             self.show_outcome("The disc is busy: watch it once the scan or rip is done", th.WAX)
+            return
+        if tid.endswith(".mpls"):                 # (a Blu-ray's playlist: ffplay)
+            from . import bdmenus
+            t = next((x for x in self.rep.get("titles") or [] if x["id"] == tid), {})
+            name = ((self.state.get(tid) or {}).get("title") or "").strip()
+            if not bdmenus.watch_playlist(self.rep["path"], tid, self.ffplay, title="%s  %s" % (tid, name) if name else tid,
+                                          video=t.get("video_info")):
+                self.show_outcome("ffmpeg's player (ffplay) wasn't found: install ffmpeg to watch Blu-ray titles", th.WAX)
             return
         if not menus.watch_title(self.vlc, self.rep["path"], int(tid.split()[1])):
             self.show_outcome("VLC's player wasn't found beside it: reinstall VLC, or set its folder in Settings",
@@ -5482,13 +5663,6 @@ class SettingsDialog:
         ttk.Checkbutton(f, text="Include extras", variable=self.app.extras,
                         command=self.app.options_changed).grid(row=r, column=0, columnspan=3, sticky="w")
         r += 1
-        self.wide = tk.BooleanVar(value=st.get("prefer_widescreen", True))
-        ttk.Checkbutton(f, text="Prefer widescreen", variable=self.wide).grid(row=r, column=0, columnspan=3, sticky="w")
-        r += 1
-        ttk.Label(f, text="When a disc has the film in both widescreen and fullscreen, only the widescreen "
-                          "copy is ticked to rip. You can still tick the other.",
-                  style="Sub.TLabel", wraplength=420, justify="left").grid(row=r, column=0, columnspan=3, sticky="w")
-        r += 1
 
         head("TV episodes")
         self.order = tk.StringVar(value=st.get("episode_order", "aired"))
@@ -5546,6 +5720,12 @@ class SettingsDialog:
                   style="Sub.TLabel", wraplength=420, justify="left").grid(row=r, column=0, columnspan=3, sticky="w",
                                                                            padx=(18, 0))
         r += 1
+        self.every_title = tk.BooleanVar(value=st.get("menu_every_title", False))
+        every = ttk.Checkbutton(f, text="Read menus for copies and Play Alls too (slower: a picture for every title)",
+                                variable=self.every_title)
+        every.grid(row=r, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self.in_scan_btns.append(every)
+        r += 1
         self.detect.trace_add("write", lambda *a: self.show_in_scan())
         self.show_in_scan()
 
@@ -5558,7 +5738,7 @@ class SettingsDialog:
         self.refresh_mkv()
         self.refresh_vlc()
         for var in (self.online, self.pictures, self.key, self.gkey, self.mkv, self.vlc, self.order,
-                    self.detect, self.credits, self.wide, self.in_scan):   # saved as you go
+                    self.detect, self.credits, self.in_scan, self.every_title):   # saved as you go
             var.trace_add("write", lambda *a: self.save())
 
     def refresh_status(self):
@@ -5674,12 +5854,12 @@ class SettingsDialog:
         st["vlc"] = self.vlc.get().strip()
         st["menu_detect"] = bool(self.detect.get())
         st["episode_order"] = self.order.get()
-        st["prefer_widescreen"] = bool(self.wide.get())
         st["detect_in_scan"] = self.in_scan.get()
+        st["menu_every_title"] = bool(self.every_title.get())
         save_settings(st)
 
     def show_in_scan(self):
-        """Detect titles during a scan: a choice only while Detect titles is on."""
+        """Detect titles during a scan, and how much it reads: a choice only while Detect titles is on."""
         for b in self.in_scan_btns:
             b.config(state="normal" if self.detect.get() else "disabled")
 

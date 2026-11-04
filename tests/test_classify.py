@@ -60,6 +60,23 @@ def test_play_all_with_an_intro_of_its_own():
     assert ts[0]["role"] != "play-all"
 
 
+def test_the_film_in_two_screens_a_few_minutes_apart():
+    """The Muppet Christmas Carol: widescreen at 85.8 minutes, 4:3 at 88.9 (another transfer, no
+    video shared, and no button of its own naming an edition). One film in two screens: the
+    widescreen one is the film, the 4:3 one its fullscreen version (left out under Prefer
+    widescreen); not two cuts. Two of one screen that far apart stay cuts."""
+    wide = T(1, 1, (1, 25, 51), 20, [A])
+    full = T(3, 2, (1, 28, 56), 20, [B])
+    wide["video_info"], full["video_info"] = {"standard": "NTSC", "aspect": "16:9"}, {"standard": "NTSC", "aspect": "4:3"}
+    wide["video"], full["video"] = "NTSC 16:9", "NTSC 4:3"
+    ts = [wide, full]
+    classify(ts, "DVD")
+    assert (wide["role"], full["role"], full.get("edition")) == ("feature", "version", "Fullscreen")
+    same = [dict(wide, role=None), dict(full, role=None, video_info=dict(wide["video_info"]), video="NTSC 16:9")]
+    classify(same, "DVD")
+    assert [t["role"] for t in same] == ["feature", "feature"]
+
+
 def test_movie_with_alternate_version():
     ts = [T(1, 5, (1, 34, 2), 37, [F], 4), T(2, 4, (1, 34, 2), 37, [G], 4), T(3, 3, (0, 0, 0), 2, [])]
     ts[0]["video"] = "NTSC 4:3 letterboxed"
@@ -521,6 +538,17 @@ def test_picture_in_picture_mode_is_never_the_feature():
     roles = {t["id"]: (t["role"], t.get("edition")) for t in ts}
     assert kind == "movie" and roles["00100.mpls"] == ("feature", None)
     assert roles["00200.mpls"] == ("version", "Picture-in-Picture")
+    # Part 2's: the overlay drawn into the picture, no PiP stream, but English only where the film
+    # has four languages, and 37 minutes longer (+15% or more): the same, not a longer cut
+    four = [{"lang": x, "kind": ""} for x in ("en", "fr", "es", "pt")]
+    long_mmm = [seg if k % 2 else ("%05d" % (60 + k), seg[1], seg[2] + 5 * n) for k, seg in enumerate(film)]
+    ts = [dict(bd(100, film), audio=four), bd(200, long_mmm)]
+    classify(ts, "Blu-ray")
+    assert [(t["role"], t.get("edition")) for t in ts] == [("feature", None), ("version", "Picture-in-Picture")]
+    # a longer cut with the film's languages stays a cut (The Iron Giant's Signature Edition)
+    ts = [dict(bd(100, film), audio=four), dict(bd(200, long_mmm), audio=four)]
+    classify(ts, "Blu-ray")
+    assert [t["role"] for t in ts] == ["feature", "feature"]
 
 
 def test_a_box_set_disc_from_thediscdb_is_a_collection(imdb):

@@ -340,6 +340,25 @@ def test_a_double_feature_from_the_scans_own_guesses():
     # a confident single match isn't split up because another film happens to fit a long extra
     sure = [dict(cands[0], score=92)] + cands[1:]
     assert core.double_feature([t3, t5], sure) is None
+    # Anastasia: its 4:3 copy (the scan's fullscreen version, its own video) isn't a second film,
+    # though Anastasa (1962) is as long, and named almost the same
+    wide = {"id": "Title 2", "role": "feature", "duration": 5643, "segments": ((2, 0, 999),)}
+    full = {"id": "Title 1", "role": "version", "edition": "Fullscreen", "duration": 5643, "segments": ((1, 0, 999),)}
+    ana = [{"kind": "movie", "name": "Anastasia", "year": 1997, "imdb_id": "tt0118617", "runtime": 94, "score": 60},
+           {"kind": "movie", "name": "Anastasa", "year": 1962, "imdb_id": "tt0252874", "runtime": 90, "score": 55}]
+    assert core.double_feature([full, wide], ana) is None and core.films_apart([full, wide]) == 1
+    # a version by its other credits is no copy: two films a second apart can look like that
+    credits = dict(full, edition="Alternate Credits")
+    assert core.films_apart([credits, wide]) == 2
+    # The Muppet Christmas Carol: its theatrical cut widescreen (85.8), its extended cut only 4:3
+    # (88.9), two transfers: one film's two presentations. Two 4:3 films that long are two films
+    # (Abbott and Costello's), and a widescreen one half as long again isn't a presentation
+    v = lambda aspect, lb=False: {"aspect": aspect, "letterboxed": lb}
+    theatrical = {"id": "Title 1", "role": "feature", "duration": 5151, "segments": ((1, 0, 9),), "video_info": v("16:9")}
+    extended = {"id": "Title 3", "role": "feature", "duration": 5336, "segments": ((2, 0, 9),), "video_info": v("4:3")}
+    assert core.films_apart([theatrical, extended]) == 1
+    assert core.films_apart([dict(theatrical, video_info=v("4:3")), extended]) == 2
+    assert core.films_apart([dict(theatrical, duration=8000), extended]) == 2
 
 
 def test_films_you_name_matched_to_titles_by_length():

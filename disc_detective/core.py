@@ -1180,6 +1180,17 @@ def content_cells(segments):
     return real or tuple(segments)
 
 
+def without_lost_copies(listed):
+    """A list of titles, less the copies of titles not on it: a studio logo isn't listed, so neither
+    is a second title of that logo (Boy Meets World S1 D1's titles 12 and 13)."""
+    ids = {t["id"] for t in listed}
+
+    def lost(t):
+        m = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t.get("role") == "duplicate" else None
+        return m and m.group(1) not in ids
+    return [t for t in listed if not lost(t)]
+
+
 def classify(titles, fmt):
     """Label each title: junk / duplicate / play-all / version / feature / episode / extra."""
     for t in titles:
@@ -1200,6 +1211,16 @@ def classify(titles, fmt):
         else:
             first_by_sig[sig] = t
     uniq = [t for t in real if t["role"] is None]
+
+    # short titles of one video too (Psych S6 D3's deleted scene, titles 22 and 23: a 7-second stub
+    # apart), or of a longer one's. Not stubs alone: logos and blanks may look alike
+    has_video = lambda sig: any(len(s) != 3 or not isinstance(s[1], int) or s[2] - s[1] >= STUB_SECTORS for s in sig)
+    first_short = dict(first_by_sig)
+    for t in titles:
+        if t["role"] == "junk" and t.get("segments") and t["duration"] >= PART_MIN and has_video(content[t["id"]]):
+            first = first_short.setdefault(content[t["id"]], t)
+            if first is not t:
+                t["role"], t["note"] = "duplicate", "same video as %s" % first["id"]
 
     # play-all: segments are the concatenation of 2+ other titles' segments. Its parts may be
     # short enough to count as junk on their own (Enchanted's deleted scenes: 43-88 seconds)
@@ -1361,9 +1382,22 @@ def classify(titles, fmt):
             return share >= 0.85 and where in ("start", "end", None) and abs(t["duration"] - ref["duration"]) <= 240
         # A picture-in-picture mode runs longer than the film when it pauses for its extra segments
         # (Warner's Maximum Movie Mode: +22 min). Measure copies against the plain film.
+        # (Its overlay can be drawn into the picture, no stream of its own: Deathly Hallows Part 2's
+        # Maximum Movie Mode, 167 min to the film's 130, half its scenes its own, English only to
+        # the film's four languages. A cut keeps the film's: The Iron Giant's Signature Edition, six
+        # of six. Marked as a PiP mode, as one with its stream is)
+        langs = lambda t: {a.get("lang") for a in t.get("audio") or [] if a.get("lang")}
+        for t in long_:
+            plain = next((x for x in long_ if x is not t and len(langs(t)) == 1 < len(langs(x)) and
+                          t["duration"] >= 1.15 * x["duration"] and
+                          max(shared_video(t, x)[0], shared_video(x, t)[0]) >= 0.3), None)
+            if plain and not (t.get("video_info") or {}).get("pip"):
+                t["video_info"] = dict(t.get("video_info") or {}, pip=True, pip_drawn=True)
+                t["video"] = video_text(t["video_info"])
         pip = lambda t: bool((t.get("video_info") or {}).get("pip"))
         ref = next((t for t in long_ if not pip(t) and t["duration"] >= 0.6 * long_[0]["duration"]), long_[0])
-        twins = [t for t in long_ if close(ref, t) or same_film(t, ref)]
+        # (and its other screens a few minutes apart: the widescreen one the film, presentations)
+        twins = [t for t in long_ if close(ref, t) or same_film(t, ref) or presentations(ref, t)]
         num = lambda t: int(re.sub(r"\D", "", t["id"]) or 0)
         # DVD players start with the lowest title (usually the original-language one)
         first_lang = lambda t: (t.get("audio") or [{}])[0].get("lang")
@@ -1419,6 +1453,15 @@ def classify(titles, fmt):
                 else:
                     t["note"] = "same length as %s%s" % (main["id"], (" (%s vs %s)" % (main["video"], t["video"]))
                                                          if main["video"] != t["video"] else "")
+            elif presentations(main, t) and version_label(t.get("video_info"), main.get("video_info")):
+                # the film in another screen, a few minutes apart (another transfer): a screen
+                # version, not an edition, unless a button of its own names it (Detect titles:
+                # The Iron Giant's "Signature Edition"). The Muppet Christmas Carol's 4:3, 88.9
+                # min, beside its widescreen 85.8
+                what = version_label(t.get("video_info"), main.get("video_info"))
+                t["role"], t["edition"] = "version", what
+                t["note"] = "%s version of %s (%s vs %s, %+d min)" % (what.lower(), main["id"], t["video"],
+                                                                    main["video"], round(gap / 60))
             else:
                 t["role"] = "feature"
         for t in eps:
@@ -2993,16 +3036,41 @@ def films_to_titles(titles, films):
     return pairs, [f for k, f in enumerate(films) if k not in got]
 
 
+def picture_copy(t):
+    """Whether a title is the film's copy in another picture (the scan's version of it: fullscreen,
+    widescreen, 4K): its own video but the same film (Anastasia's 4:3 and letterboxed, 94.0
+    minutes each, made "Anastasia & Anastasa (1962)"). Not one with other opening titles or
+    credits: two films a second apart look like that (Abbott and Costello Go to Mars and Meet Dr.
+    Jekyll and Mr. Hyde)."""
+    return t.get("role") == "version" and bool(t.get("edition")) and not str(t["edition"]).startswith("Alternate")
+
+
 def films_apart(titles):
     """How many feature-length titles of a disc are their own video (not cuts or copies of one
-    another, which share most of it): two or more, it may hold several films (Abbott and
-    Costello's One Night in the Tropics and Buck Privates, a label naming neither)."""
+    another, which share most of it; nor its copies in another picture, picture_copy): two or
+    more, it may hold several films (Abbott and Costello's One Night in the Tropics and Buck
+    Privates, a label naming neither)."""
     kept = []
     for t in sorted((t for t in titles if t.get("duration", 0) >= SEVERAL_FILMS_MIN and t.get("segments")
-                     and t.get("role") in ("feature", "version", "longest", "extra")), key=lambda t: -t["duration"]):
-        if not any(max(shared_video(t, k)[0], shared_video(k, t)[0]) >= SEVERAL_FILMS_SHARED for k in kept):
+                     and t.get("role") in ("feature", "version", "longest", "extra") and not picture_copy(t)),
+                    key=lambda t: -t["duration"]):
+        if not any(max(shared_video(t, k)[0], shared_video(k, t)[0]) >= SEVERAL_FILMS_SHARED or
+                   presentations(t, k) for k in kept):
             kept.append(t)
     return len(kept)
+
+
+def presentations(a, b):
+    """Whether two film-length titles are one film's two presentations: one widescreen (or
+    letterboxed), one 4:3, about as long (within 15%): The Muppet Christmas Carol's theatrical
+    cut in widescreen, 85.8 min, and its extended cut (the song back in) only in 4:3, 88.9; two
+    transfers, no video shared. (No double feature in the library mixes them: Abbott and
+    Costello's are 4:3 both, Rush Hour's 16:9 both.)"""
+    wide = lambda t: (t.get("video_info") or {}).get("aspect") == "16:9" or (t.get("video_info") or {}).get("letterboxed")
+    if not (a.get("video_info") and b.get("video_info")) or bool(wide(a)) == bool(wide(b)):
+        return False
+    lo, hi = sorted((a.get("duration") or 0, b.get("duration") or 0))
+    return lo > 0 and hi <= 1.15 * lo
 
 
 HEADING_MATCH = 0.6     # a film's name this near its menu's heading (as read) is that film's menu...
@@ -3077,7 +3145,7 @@ def double_feature(titles, cands):
                (c.get("name_score", 0) >= SEVERAL_FILMS_SURE and c.get("score", 0) >= GUESS_MIN))]
     seen = set()
     named_apart = [c for c in strong if not (_plain_name(c["name"]) in seen or seen.add(_plain_name(c["name"])))]
-    pairs = several_films(titles, named_apart)
+    pairs = several_films([t for t in titles if not picture_copy(t)], named_apart)
     if len(pairs) >= 2 and not any(max(shared_video(a, b)[0], shared_video(b, a)[0]) >= SEVERAL_FILMS_SHARED
                                    for (a, _), (b, _) in itertools.combinations(pairs, 2)):
         return films_on_disc(titles, pairs, "%d films, each as long as its own title on the disc" % len(pairs),
@@ -4933,6 +5001,311 @@ def match_episode_names(hints, seq):
     return out
 
 
+def _menu_key(text):
+    """A menu's words for an episode, letters and digits only, the menu's own number off the front
+    ("3Hothead", "MISSING 9. Forget Me Not" keeps its stray word: _menu_score looks inside)."""
+    t = re.sub(r"^(\W*\d+\W*)+(?=[^\W\d_])", "", text or "")
+    t = re.sub(r"\bvs\b\.?", "versus", t.lower())           # (Chuck vs. the Ring, Chuck Versus the Ring)
+    return re.sub(r"[^a-z0-9]", "", t)
+
+
+NAME_COMMON_SHARE = 0.1    # an opening this many of a show's names share says nothing of which it is
+NAME_COMMON_WORDS = 6
+
+
+def name_commons(names):
+    """The openings a show's episode names share, as runs of words: Friends' "the one with", "the
+    one where"; Chuck's "chuck versus the". A lone "the" or "a" is no such thing: too little to matter,
+    and part of a name as often as not."""
+    split = [re.findall(r"[a-z0-9']+", re.sub(r"\bvs\b\.?", "versus", (n or "").lower())) for n in names]
+    counts = {}
+    for words in split:
+        for k in range(1, min(len(words), NAME_COMMON_WORDS + 1)):      # (never a whole name)
+            counts[tuple(words[:k])] = counts.get(tuple(words[:k]), 0) + 1
+    least = max(3, NAME_COMMON_SHARE * len(names))
+    return {p for p, n in counts.items() if n >= least and not (len(p) == 1 and p[0] in ("the", "a", "an"))}
+
+
+def _name_parts(name, commons):
+    """(an episode name's common opening, the rest), each as _menu_key has it."""
+    words = re.findall(r"[a-z0-9']+", re.sub(r"\bvs\b\.?", "versus", (name or "").lower()))
+    k = max((k for k in range(1, len(words)) if tuple(words[:k]) in commons), default=0)
+    squash = lambda w: re.sub(r"[^a-z0-9]", "", "".join(w))
+    return squash(words[:k]), _menu_key(" ".join(words[k:]))
+
+
+def _past_opening(reading, opening):
+    """A reading without the common opening it starts with, or has after stray words: what's after
+    the last letters matching it, misreadings and all. As it was, when it doesn't have it (a menu
+    may leave it off: "The Prom Video")."""
+    if not opening:
+        return reading
+    sm = difflib.SequenceMatcher(None, opening, reading, autojunk=False)
+    blocks = [b for b in sm.get_matching_blocks() if b.size]
+    if sum(b.size for b in blocks) < 0.7 * len(opening):
+        return reading
+    return reading[blocks[-1].b + blocks[-1].size:]
+
+
+def _menu_score(reading, name, commons=()):
+    """How well a menu's words read as an episode's name, 0 to 1, by the part of the name that's its
+    own (commons: name_commons; "The One with the Prom Video" is "the Prom Video"; a reading of the
+    opening alone, a wrapped name's first line, names nothing): the whole of that; or its start, a
+    wrapped name's first line ("Kommandant" for Kommandant of the Year); or it inside words read
+    around it, off a thumbnail ("MISSING 9. Forget Me Not", "play domestic pilot"). A few letters
+    leave little to go on: one wrong in five, no more ("Ring" isn't "King")."""
+    opening, n = _name_parts(name, commons)
+    r = _past_opening(_menu_key(reading), opening)
+    if not n or not r:
+        return 0.0
+    if r == n:
+        return 1.0
+    if len(r) < 3:
+        return 0.0
+    ratio = lambda a, b: difflib.SequenceMatcher(None, a, b).ratio()
+    best = ratio(r, n)
+    if len(n) > len(r) >= 6:
+        best = max(best, ratio(r, n[:len(r)]) * 0.95)
+    if len(r) > len(n) >= 4:
+        best = max(best, max(ratio(r[i:i + len(n)], n) for i in range(len(r) - len(n) + 1))
+                   * (0.95 if len(n) >= 8 else 0.85))
+    return best if len(n) >= 6 or best >= 0.8 else 0.0
+
+
+MENU_NAME_FLOOR = 0.72     # a menu's words this close to an episode's name: may be it
+MENU_NAME_SURE = 0.85      # and this close: it is, whatever its neighbours
+
+
+PLAY_ALL_PART_MIN = 600     # shorter than this, a Play All's title isn't an episode (a page of ads, of scenes)
+
+
+def play_all_order(titles, runs):
+    """The order of a disc's episodes by its Play All, no reading needed: {"order": title numbers,
+    "seconds": theirs, "twins": {title: titles of the same video}}, or None. titles: parse_dvd's.
+    runs: what the disc's program plays on after what (dvdvm), each [first, then, ...]; a title in
+    a run may hold others, by its cells. Psych S1 D3's: title 4 (its cells: 1, 2, 3), then 14 (the
+    video of 12, the one the menu's button plays) and 5."""
+    num = lambda t: int(t["id"].split()[1])
+    cells = {num(t): content_cells(t["segments"]) for t in titles if t.get("segments")}
+    seconds = {num(t): t["duration"] for t in titles}
+    long_enough = {n for n in cells if seconds[n] >= PLAY_ALL_PART_MIN}
+    twins = {a: sorted(b for b in long_enough if b != a and cells[b] == cells[a]) for a in long_enough}
+
+    def parts(n):
+        """The titles a title holds, in its order; one of each video."""
+        whole, found, seen = cells.get(n) or (), [], set()
+        for m in sorted(long_enough):
+            if len(cells[m]) < len(whole) and set(cells[m]) <= set(whole) and cells[m] not in seen:
+                seen.add(cells[m])
+                found.append((whole.index(cells[m][0]), m))
+        return [m for _, m in sorted(found)]
+
+    def expanded(run):
+        out = []
+        for n in run:
+            for m in parts(n) or [n]:
+                if m in long_enough and m not in out:
+                    out.append(m)
+        return out
+
+    orders = [expanded(r) for r in runs] + [expanded([n]) for n in sorted(long_enough)]
+    best = max(orders, key=len, default=[])
+    if len(best) < 2:
+        return None
+    return {"order": best, "seconds": [seconds[n] for n in best],
+            "twins": {str(n): v for n, v in twins.items() if v}}
+
+
+def menu_play_order(readings, play):
+    """Readings in a Play All's order, for menu_episodes: those it plays first ("in_play"), by the
+    button of the same video if it's a twin that plays (Psych S1 D3's 14, the button playing 12), a
+    title it plays that has no reading added with no words, to be found by its place; the rest after."""
+    if not play:
+        return list(readings)
+    by_title = {r["title"]: r for r in readings}
+    twins = {int(k): v for k, v in (play.get("twins") or {}).items()}
+    ordered, used = [], set()
+    for n, seconds in zip(play["order"], play["seconds"]):
+        t = next((x for x in [n] + twins.get(n, []) if x in by_title and x not in used), None)
+        if t is not None:
+            used.add(t)
+            ordered.append(dict(by_title[t], in_play=True))
+        elif not any(x in by_title for x in twins.get(n, [])):
+            ordered.append({"title": n, "text": "", "seconds": seconds, "bonus": False, "kind": None, "in_play": True})
+    return ordered + [r for r in readings if r["title"] not in used]
+
+
+def _menu_run(scores, numbers):
+    """The best assignment of readings to episodes in order, one each: (total, [(reading,
+    episode position, score)]). Episodes next to each other count for more, as do readings carrying
+    an episode's own number: of two similar names, the one beside its neighbours."""
+    states = {-1: (0.0, [])}
+    for i, row in enumerate(scores):
+        new = dict(states)
+        for last, (total, picks) in states.items():
+            for j in range(last + 1, len(row)):
+                if row[j] < MENU_NAME_FLOOR:
+                    continue
+                t = total + row[j] + (0.25 if picks and j == last + 1 else 0) + (0.05 if numbers[i][j] else 0)
+                if j not in new or t > new[j][0]:
+                    new[j] = (t, picks + [(i, j, row[j])])
+        states = new
+    return max(states.values(), key=lambda x: x[0])
+
+
+def menu_episodes(readings, orders, season=None, order="aired"):
+    """Which episode each menu reading names: {"season": the season found, "picks": {index:
+    {"season", "number", "name", "score", "by"}}}, or None. readings: [{"text", "seconds", "bonus",
+    "switch", "only_kind"}], in the menus' order; the show's whole list searched, a run within one season
+    taken, a hint of the season (season) only settling a tie. Fuzzy, for OCR's sake. A reading
+    the run missed, between two it found with as many episodes between them, is the episode in its
+    place ("by": "neighbours"), if long enough for one. Readings a Play All puts in order (in_play:
+    menu_play_order) reach further, to the run's two ends, each taking the episode at its place ("by":
+    "play-all"), unless a name it's sure of disagrees with that order. Bonus materials are nobody's
+    episode, and nor is anything far shorter than the season's episodes (a deleted scene, named for
+    its episode)."""
+    if order == "dvd" and (orders or {}).get("dvd"):
+        pool = (orders or {}).get("dvd")
+    else:
+        pool = (orders or {}).get("aired") or []
+    by_season = {}
+    for e in pool:
+        if e.get("season") and e.get("number") is not None and e.get("name"):
+            by_season.setdefault(e["season"], []).append(e)
+    usable = [i for i, r in enumerate(readings) if not (r.get("bonus") or r.get("switch") or r.get("only_kind"))]
+    if not usable or not by_season:
+        return None
+    commons = name_commons([e["name"] for eps in by_season.values() for e in eps])
+    best = None
+    for s, eps in sorted(by_season.items()):
+        eps = sorted(eps, key=lambda e: e["number"])
+        known = sorted(e["runtime"] for e in eps if e.get("runtime"))
+        least = 0.5 * 60 * known[len(known) // 2] if known else 0
+
+        def fits(i):
+            return (readings[i].get("seconds") or least) >= least
+        scores = [[_menu_score(readings[i].get("text"), e["name"], commons) if fits(i) else 0.0 for e in eps]
+                  for i in usable]
+        numbers = [[(re.match(r"\W*(\d+)", readings[i].get("text") or "") or [0, ""])[1] == str(e["number"]) for e in eps]
+                   for i in usable]
+        total, picks = _menu_run(scores, numbers)
+        if not picks:
+            continue
+        rank = (total + (0.1 if s == season else 0), s == season)
+        if best is None or rank > best[0]:
+            best = (rank, s, eps, picks, scores, fits)
+    if best is None:
+        return None
+    _, s, eps, run, scores, fits = best
+    # one weak match alone says nothing of a whole show
+    if len(run) == 1 and run[0][2] < MENU_NAME_SURE:
+        return None
+    entry = lambda j, score, by: {"season": s, "number": eps[j]["number"], "name": eps[j]["name"],
+                                  "score": round(score, 3), "by": by}
+    out = {usable[a]: entry(j, q, "name") for a, j, q in run}
+    taken = {j for _, j, _ in run}
+    # out of the run: the disc's own order isn't the list's; sure of the name all the same
+    disagrees = False
+    for a, i in enumerate(usable):
+        if i in out:
+            continue
+        j = max(range(len(eps)), key=lambda k: scores[a][k])
+        if scores[a][j] >= MENU_NAME_SURE and j not in taken:
+            out[i] = entry(j, scores[a][j], "name")
+            taken.add(j)
+            disagrees = disagrees or bool(readings[i].get("in_play"))
+    placed = lambda i: "play-all" if readings[i].get("in_play") else "neighbours"
+    # between two neighbours, as many readings as episodes: each in its place
+    for (a, ja, _), (b, jb, _) in zip(run, run[1:]):
+        if b - a == jb - ja > 1:
+            for k in range(1, b - a):
+                i = usable[a + k]
+                if i not in out and fits(i) and ja + k not in taken and (readings[i].get("seconds") or 0):
+                    out[i] = entry(ja + k, scores[a + k][ja + k], placed(i))
+                    taken.add(ja + k)
+    # before the run's first and after its last: the Play All says who's there
+    if not disagrees:
+        first, j0, _ = run[0]
+        last, j1, _ = run[-1]
+        for a, j in [(first - k, j0 - k) for k in range(1, first + 1)] + \
+                [(last + k, j1 + k) for k in range(1, len(usable) - last)]:
+            i = usable[a]
+            if 0 <= j < len(eps) and i not in out and readings[i].get("in_play") and fits(i) and j not in taken:
+                out[i] = entry(j, scores[a][j], "play-all")
+                taken.add(j)
+    return {"season": s, "picks": out}
+
+
+def show_episodes(imdb_id, tvmaze_dir=None, online=True, imdb_dir=None):
+    """A show's episodes, for reading its menus by: TVmaze's lists (tvmaze_orders' shape), else
+    IMDb's. None when neither knows it."""
+    if not imdb_id:
+        return None
+    try:
+        orders = tvmaze_orders(imdb_id, tvmaze_dir, online)
+    except Exception:
+        orders = None
+    if orders and orders.get("aired"):
+        return orders
+    try:
+        con = imdb_open(imdb_dir or default_imdb_dir(), allow_download=False, log=lambda *a: None)
+        rows = con.execute("SELECT season, episode, title, runtime FROM episodes WHERE parent=?",
+                           (int(imdb_id[2:]),)).fetchall()
+    except Exception:
+        return None
+    seq = [{"season": s, "number": e, "name": t, "runtime": r} for s, e, t, r in rows]
+    return {"aired": seq, "dvd": None} if seq else None
+
+
+MENU_SHOW_NAMES = 3        # names a menu must share with a show to say it's that show
+
+
+def shows_by_episodes(con, readings):
+    """The show a menu's words name, nothing else having said: IMDb's episodes searched, across
+    every show, for each reading's longest word; a show with several of them is then read through
+    properly (menu_episodes). The best candidate: {imdb_by_id's, "season", "named"}, with at least
+    MENU_SHOW_NAMES names in one season, and clearly the best (a tie, a remake and its original say
+    nothing, unless one's far the better known); else None."""
+    usable = [r for r in readings if not (r.get("bonus") or r.get("switch") or r.get("only_kind")) and r.get("text")]
+    words = {}
+    for i, r in enumerate(usable):
+        long = re.findall(r"[a-z]{5,}", (r["text"] or "").lower())
+        if long:
+            words[i] = max(long, key=len)
+    if len(set(words.values())) < MENU_SHOW_NAMES:
+        return None
+    unique = sorted(set(words.values()))
+    rows = con.execute("SELECT parent, title FROM episodes WHERE " + " OR ".join(["title LIKE ?"] * len(unique)),
+                       ["%" + w + "%" for w in unique]).fetchall()
+    hits = {}
+    for parent, title in rows:
+        low = (title or "").lower()
+        for w in unique:
+            if w in low:
+                hits.setdefault(parent, set()).add(w)
+    shows = sorted((p for p, h in hits.items() if len(h) >= MENU_SHOW_NAMES), key=lambda p: -len(hits[p]))[:15]
+    found = []
+    for parent in shows:
+        eps = con.execute("SELECT season, episode, title, runtime FROM episodes WHERE parent=?", (parent,)).fetchall()
+        got = menu_episodes(usable, {"aired": [{"season": s, "number": e, "name": t, "runtime": m} for s, e, t, m in eps],
+                                     "dvd": None})
+        named = [p for p in (got or {"picks": {}})["picks"].values() if p["by"] == "name"]
+        if len(named) < MENU_SHOW_NAMES:
+            continue
+        cand = imdb_by_id(con, tt(parent))
+        if not cand or cand["kind"] != "tv":
+            continue
+        votes = (con.execute("SELECT votes FROM ratings WHERE id=?", (parent,)).fetchone() or [0])[0] or 0
+        found.append((len(named), round(sum(p["score"] for p in named), 1), votes,
+                      dict(cand, season=got["season"], named=len(named), why="its menus name its episodes")))
+    found.sort(key=lambda x: x[:3], reverse=True)
+    if not found:
+        return None
+    if len(found) > 1 and found[1][:2] == found[0][:2] and found[0][2] < 5 * found[1][2]:
+        return None
+    return found[0][3]
+
+
 def tvmaze_season_guess(orders, season, disc, lengths, name_order="aired", fmt=None, hints=None, before=None):
     """Episode guess for a disc from TVmaze: placed by DVD order when TVmaze has one, named
     by the order asked for (Plex uses aired order unless you change the show's setting).
@@ -5303,6 +5676,12 @@ def identify(root, args):
         else:
             s = parse_bluray(base)
             bd_meta = s["meta"]
+            # and the name its menu project gives itself (Sony's: "Muppets_From_Space"), searched
+            # as the disc's own name too: a label saying nothing (LOGICAL_VOLUME_ID) or in shorthand (HP4)
+            from . import bdmenus
+            project = bdmenus.project_title(root)
+            if project and project.lower() not in (n.lower() for n in bd_meta["names"]):
+                bd_meta = dict(bd_meta, names=list(bd_meta["names"]) + [project], project=project)
             rep["bd_meta"] = {k: v for k, v in bd_meta.items() if k != "thumbnails"}
         titles = s["titles"]
         kind, obfuscated = classify(titles, fmt)
@@ -5364,6 +5743,10 @@ def identify(root, args):
         if lp is not bl:
             for k in ("season", "disc"):
                 lp[k] = lp.get(k) or bl.get(k)
+    for name in (bd_meta or {}).get("names", [])[1:]:          # (its other names: a menu project's)
+        q = parse_label(name).get("query")
+        if q and (q, False) not in queries:
+            queries.append((q, False))
     if lp and lp.get("query"):
         queries.append((lp["query"], lp["maybe_truncated"]))
     if lp and lp.get("alt_query"):
@@ -5382,19 +5765,26 @@ def identify(root, args):
                    if (t.get("item") or {}).get("season")]
         if seasons:
             anchor += " S%s" % max(set(seasons), key=seasons.count)
+    # what its menus' episodes say, where nothing confirmed has (App._name_episodes): a show, not saved
+    menu_answer = getattr(args, "menu_answer", None) if not anchor else None
+    anchor = anchor or menu_answer
     if not anchor and lp and lp.get("bonus") and lib is not None and not sample:
         anchor = bonus_disc_sibling(lib, lp.get("query"), fp["hash"])
         if anchor:
             rep["bonus_of"] = anchor             # the set's film disc, from your library
     if anchor:
         pt = parse_truth(anchor)
+        if pt["season"] is None and getattr(args, "menu_season", None):
+            pt["season"] = args.menu_season       # (your answer named the show alone: its menus, the season)
         queries = [(pt["title"], False)]
         lp = dict(lp or {"raw": None, "side": None, "year": None},
                   season=pt["season"] if pt["season"] is not None else (lp or {}).get("season"),
                   disc=pt["disc"] or (lp or {}).get("disc"), query=pt["title"], maybe_truncated=False)
         facts["truth_year"] = pt["year"]
         if pt["title"] and db["hit"] and kind == "unknown":
-            kind = "tv" if pt["season"] is not None else "movie"
+            # (the disc's kind too, not only the search's: Gladiator 4K's structure says nothing
+            # sure, TheDiscDB a film; the case card said "Disc")
+            kind = rep["kind"] = "tv" if pt["season"] is not None else "movie"
         if db["hit"] and str(db["hit"].get("type", "")).lower() in ("series", "tv", "show") and kind != "tv":
             kind = rep["kind"] = "tv"           # TheDiscDB files it under a series (a special's disc)
             eps = [t for t in titles if t["role"] == "episode"]
@@ -5492,6 +5882,8 @@ def identify(root, args):
                             db["hit"]["path"].replace("\\", "/"))),)).fetchone()
                         exact = r[0] if r else None
                     picked = imdb_by_id(con, exact) if exact else None
+                    if picked and menu_answer:
+                        picked["why"] = "its menus name its episodes"
                     if anchor and pt.get("films"):
                         picked = collection_from_ids(con, pt["films"], titles, anchor, pt.get("extras"))
                     elif db["hit"] and not personal:
@@ -5974,20 +6366,24 @@ def film_check(rep, pmap):
     return said
 
 
-def prefer_played(rep, played):
+def prefer_played(rep, played, unread=(), keep=()):
     """Of two titles of the same video, the one a disc's menus play is the original (played: the
     title ids its buttons play, Detect titles), when they never play the other: Wallace &
     Gromit's Wrong Trousers button plays title 7; title 6, the scan's pick, is its Play All's way
-    in, and jumps elsewhere played alone. Both played (a commentary's Play, a scene's), or neither:
-    as the scan has it. Its roles and notes swap, and the scan's guesses (their films' titles,
-    the names they'd be saved as) follow. Returns {old original: new}."""
+    in, and jumps elsewhere played alone. Or when only its button was read (unread: those played by
+    buttons whose words weren't): Psych S6 D3's commentary, named on its episode's page, title 6,
+    its page of commentaries, title 5's, not needing a look. So the picture of its button is its
+    own. Both played and read (a commentary's Play, a scene's), or neither: as the scan has it. Its
+    roles and notes swap, and the scan's guesses (their films' titles, the names they'd be saved
+    as) follow. An original in keep (yours, TheDiscDB's) stays. Returns {old original: new}."""
+    heard = lambda tid: 0 if tid not in played else 1 if tid in unread else 2
     titles = rep.get("titles") or []
     byid = {t["id"]: t for t in titles}
     moved = {}
     for t in titles:
         m = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t.get("role") == "duplicate" else None
         was = byid.get(m.group(1)) if m else None
-        if not was or t["id"] not in played or was["id"] in played or was.get("role") == "duplicate":
+        if not was or heard(t["id"]) <= heard(was["id"]) or was.get("role") == "duplicate" or was["id"] in keep:
             continue
         for k in ("role", "note", "episode_index", "in_play_all", "play_order"):
             if k in was:
@@ -6188,9 +6584,9 @@ STEPS = {
     "lineup": (N_("comparing the disc's cover art with the candidates' box art"), N_("Holding a line-up")),
     "menus": (N_("reading the disc's menus (nothing else named it)"), N_("Looking through the mug book")),
     "routes": (N_("running the disc's program: what its menus' buttons play, and what plays after what"),
-               N_("Retracing their steps")),
+               N_("Reviewing case notes")),
     "stakeout": (N_("Detect titles: VLC plays the disc's menus, their buttons are pressed and read"),
-                 N_("Staking out the menus")),
+                 N_("Staking out the suspects")),
     "ai": (N_("asking Gemini what the disc's picture shows"), N_("Calling in an expert witness")),
     "photos": (N_("looking up posters and box art"), N_("Pinning photos to the evidence board")),
     "lab": (N_("running MakeMKV on the disc"), N_("Sending the disc to the lab")),
@@ -7420,7 +7816,7 @@ def print_report(rep):
     if rep.get("structure_error"):
         p("  structure   could not parse: %s" % rep["structure_error"])
 
-    shown = [t for t in rep["titles"] if t["role"] not in ("junk", "loop")]
+    shown = without_lost_copies([t for t in rep["titles"] if t["role"] not in ("junk", "loop")])
     loops = [t for t in rep["titles"] if t["role"] == "loop"]
     junk = len(rep["titles"]) - len(shown)
     if shown:

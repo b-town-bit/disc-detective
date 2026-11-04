@@ -438,9 +438,11 @@ class Engine:
             out["after"] = self._after(out["player"], out["title"], into=into)
             if into:
                 out["into"] = into[0]
+                # (the whole of it, long titles too: a TV disc's Play All, episode after episode)
+                out["run"] = self._after(out["player"], out["title"], through=True)
         return out
 
-    def _after(self, p, first, limit=20, into=None):
+    def _after(self, p, first, limit=20, into=None, through=False):
         """The titles that play on, one after another, after the one a button plays: up to a
         menu, or a film (The Sorcerer's Apprentice's Sneak Peeks: 66, then 70 and 74; FastPlay:
         those, then the film)."""
@@ -452,7 +454,7 @@ class Engine:
                 break
             if "title" not in res or res["title"] in out + [first]:
                 break
-            if (res.get("seconds") or 0) >= LONG_TITLE:
+            if not through and (res.get("seconds") or 0) >= LONG_TITLE:
                 # (a film ends the run, not part of it: noted in into, Wallace & Gromit's Play
                 # All going on from title 1 into title 6, The Wrong Trousers)
                 if into is not None:
@@ -818,6 +820,8 @@ def answer(out):
             a["after"] = out["after"]
         if out.get("into"):
             a["into"] = out["into"]
+        if out.get("run"):
+            a["run"] = out["run"]
         return a
     if "menu" in out and out.get("played"):
         main = longest(out["played"])
