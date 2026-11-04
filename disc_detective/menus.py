@@ -198,6 +198,21 @@ def command(c):
     return {"op": "other", "raw": c.hex()}
 
 
+def _pal_menus(ifo):
+    """Whether a domain's menus are PAL: 576 lines to NTSC's 480 (its video attributes, in either IFO)."""
+    return len(ifo) > 0x100 and (ifo[0x100] >> 4) & 3 == 1
+
+
+def _to_frame(programs):
+    """A PAL page's buttons, in place, on the 720x480 frames everything here goes by: VLC gives
+    every disc's that size, and a button's rectangle in PAL's 576 lines is another part of the
+    picture (Friends S1 D1's main menu: Play at line 478 of a 480-line frame, its words at 398)."""
+    for buttons in programs:
+        for b in buttons:
+            x0, y0, x1, y1 = b["rect"]
+            b["rect"] = [x0, round(y0 * 480 / 576), x1, round(y1 * 480 / 576)]
+
+
 def dvd_structure(root):
     """Every menu page of a DVD folder (or drive): {"vmgm": [...], "vtsm": {vts: [...]}}; a page is
     {"pgc", "type", "entry", "cells", "buttons", "pre"} (pre: the page's own commands). Also
@@ -225,6 +240,8 @@ def dvd_structure(root):
                 found = [_buttons(vob, p["cells"][a - 1:(starts[i + 1] - 1 if i + 1 < len(starts) else None)])
                          if vob else ([], 0.0) for i, a in enumerate(starts)]
                 progs = [b for b, _ in found]
+                if _pal_menus(ifo):
+                    _to_frame(progs)
                 pages.append({"pgc": n, "type": typ, "entry": entry, "cells": p["cells"],
                               "buttons": next((b for b in progs if b), []), "program_buttons": progs,
                               "buttons_at": [at for _, at in found],
@@ -254,7 +271,7 @@ MENU_VOCAB = {"play", "movie", "film", "main", "menu", "special", "features", "f
               "trailer", "trailers", "theatrical", "teaser", "bonus", "material", "extras", "behind", "the",
               "making", "of", "deleted", "outtakes", "music", "video", "commentary", "interview", "interviews",
               "documentary", "featurette", "gallery", "talent", "files", "cast", "crew", "previews", "credits",
-              "story", "production", "back", "next", "on", "off"}
+              "story", "production", "back", "next", "more", "on", "off"}
 # the words extras are named with, beyond a menu's own: film-making's, and the kinds of extras
 # (a film title rarely has them: The Iron Giant's "Storyboards and Animatics" read as junk)
 EXTRAS_VOCAB = MENU_VOCAB | {
@@ -1068,7 +1085,7 @@ MENU_STRIPS = (3, 4)     # a menu picture is also read in this many overlapping 
 MENU_EDGE_WORDS = {"play", "menu", "main", "scenes", "scene", "selection", "selections", "languages", "language",
                    "setup", "bonus", "materials", "material", "features", "feature", "special", "production",
                    "notes", "commentary", "trailer", "trailers", "theatrical", "extras", "chapters", "audio",
-                   "subtitles", "previews", "credits", "gallery", "resume", "options", "sneak", "peeks"}
+                   "subtitles", "previews", "credits", "gallery", "resume", "options", "sneak", "peeks", "more", "back", "next"}
 
 
 def _menu_edge(word):
@@ -1548,7 +1565,7 @@ def end_session():
 # a disc's menu data (dvd_structure) never changes: read once, kept by fingerprint in your data
 # folder, and read back for the next stakeout (WALL-E's 443 pages: two minutes off the drive).
 # Bumped whenever dvd_structure gives more or other than before: older copies are read again
-STRUCTURE_VERSION = 3              # 2: when each program's buttons come on (buttons_at); 3: highlight colours
+STRUCTURE_VERSION = 4              # 4: a PAL disc's buttons on 720x480 frames (_to_frame); 2: when each program's buttons come on (buttons_at); 3: highlight colours
 
 
 def _structure_file(content_hash, home=None):
@@ -1893,8 +1910,8 @@ SKIP_RE = re.compile(r"\b(set ?up|settings|options|languages?|audio|subtitles?|c
 
 
 # (a stray letter before it: OCR of the lettering's backdrop, "i play")
-PLAY_ALL_RE = re.compile(r"\bplay\s*a(?:\w?l\w*)?\b", re.I)    # (OCR's Play All: "Play Aly", "PLAY aul",
-                                                              # "play A"; not "Play Again", "Display")
+PLAY_ALL_RE = re.compile(r"\bp[li1]ay\s*a(?:\w?l\w*)?\b", re.I)    # (OCR's Play All: "Play Aly", "PLAY aul",
+                                                                  # "play A", "Piay All"; not "Play Again", "Display")
 PLAY_RE = re.compile(r"^\W*([a-z]\W+)?(play|start|resume|watch)( the)?( movie| film| feature)?\W*$", re.I)
 # a button naming a copy of the film ("PLAY WIDESCREEN VERSION"), not a film of its own
 VERSION_WORDS_RE = re.compile(r"\b(versions?|editions?|cuts?|wide\s*screen|full\s*screen|letterbox\w*|pan\s*(&|and)?\s*scan)\b",
@@ -3220,7 +3237,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
         """What the buttons themselves say they do, so they needn't be pressed. And one whose page
         depends on the way it was reached, when there's another way to each of them: nothing to find
         by it (Rush Hour 3's BACK, from a version chooser to whichever scene page led there: half a
-        minute's press). A page only it leads to, it's pressed for (Father of the Bride Part II's)."""
+        minute's press). A page only it leads to, it's pressed for."""
         for k, there in menus_by_route.items():
             if k not in known and all(x in routes for x in there):
                 known[k] = {"menus": True, "engine": True}
@@ -4078,6 +4095,11 @@ TV_SWITCH_RE = re.compile(r"^\W*(on|off)\W*$|\bcommentar", re.I)
 VIDEO_COMMENTARY_RE = re.compile(r"\bvideo\s+commentar\w*", re.I)
 
 
+# a button saying only which cut of something it plays, no name for it
+CUT_ALONE_RE = re.compile(r"^\W*(director'?s?\W*cut|producer'?s?\W*cut|(extended|alternate|uncut|unrated)\W*(cut|version|edition|episode)|"
+                          r"uncut|unrated)\W*$", re.I)
+
+
 def _scene_state(pages, s, known=None):
     """The one title a page's program jumps into by chapters (an episode's scene page: Smallville's
     Episodes page leads to one each, no button there playing the episode itself), or None."""
@@ -4201,6 +4223,8 @@ def tv_titles(out):
                                switch=bool(TV_SWITCH_RE.search(text)) and not VIDEO_COMMENTARY_RE.search(text),
                                # (only its kind: "Deleted Scenes" isn't Smallville's "Delete")
                                only_kind=_kind_alone(text),
+                               # (Psych S8 D2's "Director's Cut": no episode's name, whatever its place)
+                               only_cut=bool(CUT_ALONE_RE.search(text)),
                                # (a page of them: its buttons say only whose)
                                commentaries=bool(VIDEO_COMMENTARY_RE.search(via)))
             elif x["bonus"] and not bonus:        # (its own button, over a commentary's)
@@ -4244,6 +4268,17 @@ def tv_found(tv, picks=None):
             e = picks[i]
             episodes.append({"title": r["title"], "season": e["season"], "episode": e["number"], "name": e["name"],
                              "read": r["text"], "by": e.get("by") or "name"})
+        elif r.get("only_cut"):
+            # the episode's it sits under, an extra: Plex has one file for an episode, and this is
+            # another cut of it, its own encode, 6 seconds longer (Psych S8 D2's A Nightmare on State Street)
+            ep = r.get("rect") and _episode_above(r, placed)
+            said = nice_name(r["text"])
+            extras.append({"title": r["title"], "name": "%s - %s" % (ep["name"], said) if ep else said,
+                           "seconds": r["seconds"], "kind": None})
+            if ep:
+                extras[-1].update(season=ep["season"], episode=ep["number"])
+            if r.get("place"):
+                extras[-1]["place"] = r["place"]
         elif r["title"] not in versions and r["text"] and not r.get("switch") and (r["bonus"] or r.get("kind") or
                                                     (longest and (r["seconds"] or 0) < 0.5 * longest)):
             extras.append({"title": r["title"], "name": nice_name(LISTED_RE.sub("", r["text"])),
@@ -4278,7 +4313,9 @@ def tv_found(tv, picks=None):
         twin = next((e for e in extras if e is not bare and not _kind_alone(e["name"])
                      and abs((e["seconds"] or 0) - (bare["seconds"] or 0)) <= 1), None)
         if twin:
-            twin["kind"], twin["name"] = heading_kind(bare["name"]), "%s %s" % (twin["name"], bare["name"])
+            # (its name may say so already: "Was It Something I Said? Music Video", and "Music Video")
+            said = bare["name"].lower() in (twin["name"] or "").lower()
+            twin["kind"], twin["name"] = heading_kind(bare["name"]), twin["name"] if said else "%s %s" % (twin["name"], bare["name"])
             extras.remove(bare)
     # a deleted scene whose words name one of this disc's episodes: that episode's, named for it
     for e in extras:

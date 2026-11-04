@@ -42,6 +42,16 @@ def pgc(seconds=0.0, pre=(), post=(), cells=1, programs=1):
             "program_cells": list(range(1, programs + 1)), "next": 0, "prev": 0, "up": 0, "seconds": seconds}
 
 
+def test_a_nonsense_title_entry_doesnt_cost_the_discs_program(monkeypatch):
+    import struct
+    ifo = bytearray(64)
+    struct.pack_into(">H", ifo, 0, 2)               # two PGCs
+    struct.pack_into(">I", ifo, 8 + 4, 32)          # the first where it should be
+    struct.pack_into(">I", ifo, 8 + 8 + 4, 0x25220d5)   # the second far past the file's end
+    monkeypatch.setattr(dvdvm, "_pgc", lambda data, off: {"at": off})
+    assert dvdvm._title_pgcs(bytes(ifo), 0) == {1: {"at": 32}}
+
+
 def test_a_disc_from_first_play_to_a_button():
     """First play: a 12-second warning (title 1), which ends in the root menu; its button 1 jumps
     to chapter 2 of the feature (title 2), button 2 sets a register and goes to page 2, whose pre

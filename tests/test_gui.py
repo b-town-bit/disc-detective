@@ -168,6 +168,24 @@ def test_type_the_answer_in(gui, tmp_path, monkeypatch):
     d2.year.set("1997")
     d2.ok()
     assert got == ["Justified (2010) S1 D2", "Hercules (1997)"]
+    # a show with no season to give (a whole series' bonus disc), typed in or picked from the results
+    got.clear()
+    d3 = dd_app.MatchDialog(root, app, title="Psych", year=2006, tv=True)
+    d3.ok()
+    d4 = dd_app.MatchDialog(root, app, title="Psych", year=2006, tv=True,
+                            picked={"name": "Psych", "year": 2006, "imdb_id": "tt0491738", "kind": "tv"})
+    d4.ok()
+    d5 = dd_app.MatchDialog(root, app, title="Psych", year=2006, tv=True, season=0,
+                            picked={"name": "Psych", "year": 2006, "imdb_id": "tt0491738", "kind": "tv"})
+    d5.ok()
+    assert got == ["Psych (2006)", "Psych (2006) {imdb-tt0491738}", "Psych (2006) S0 {imdb-tt0491738}"]
+    assert core.parse_truth(got[2])["season"] == 0 and core.parse_truth(got[1])["season"] is None
+    # nonsense for a season still isn't one
+    d6 = dd_app.MatchDialog(root, app, title="Psych", year=2006, tv=True)
+    d6.season.set("two")
+    d6.ok()
+    assert "should be a number" in d6.note.cget("text") and len(got) == 3
+    d6.close()
 
 
 def test_enter_it_myself_as_several_films(gui, monkeypatch):
@@ -257,8 +275,6 @@ def test_type_ahead_picks_an_exact_imdb_entry(gui, imdb_dir, monkeypatch, tmp_pa
     d.results.selection_set(iid)
     d.pick()
     assert d.tv() and d.picked["kind"] == "tv" and d.pick_lbl.cget("text").startswith("Using IMDb tt")
-    d.ok()                                                # TV without a season: asks for it
-    assert "season" in d.note.cget("text") and not got
     d.season.set("1")
     d.ok()
     assert got[0].startswith("Hercules (1998) S1 {imdb-tt")
@@ -1155,6 +1171,73 @@ def test_a_window_is_kept_above_the_taskbar(gui, monkeypatch):
     root.update()
     assert (top.winfo_rootx(), top.winfo_rooty()) == (x, y)
     top.destroy()
+
+
+def test_an_extras_disc_has_no_main_movie():
+    # (The Fellowship of the Ring's: its longest title a 41-minute documentary)
+    found = {"feature": 1, "feature_name": "A Passage to Middle-earth", "extras": [{"title": 3, "name": "Quest for the Ring", "seconds": 1000, "kind": None}],
+             "promos": []}
+    titles = lambda: [{"id": "Title 1", "role": "extra", "duration": 2502}, {"id": "Title 3", "role": "extra", "duration": 1000}]
+    labels = dd_app.detected_for({"titles": titles(), "labels": {}, "extras_disc": True}, found)
+    assert (labels["Title 1"]["type"], labels["Title 1"]["title"]) == ("Extra", "A Passage to Middle-earth")
+    assert labels["Title 3"]["title"] == "Quest for the Ring"
+    # (a film's disc: its feature, as ever)
+    labels = dd_app.detected_for({"titles": titles(), "labels": {}}, found)
+    assert labels["Title 1"]["type"] == "MainMovie"
+
+
+def test_several_episodes_in_one_title_as_a_file_and_in_order():
+    dest = dd_app.episode_dest("Show (2011)", "Show (2011)", 1, "1-2", "Pilot / Last Baby Proofing Standing")
+    assert dest == "Show (2011)/Season 01/Show (2011) - s01e01-e02 - Pilot & Last Baby Proofing Standing.mkv"
+    assert dd_app.episode_dest("S", "S", "1", 3, "Grandparents Day") == "S/Season 01/S - s01e03 - Grandparents Day.mkv"
+    # TheDiscDB's form too, as the scan's guesses have them
+    got = dd_app.scan_names({"plex_names": ["Title 4 -> S/Season 01/S - s01e01-e02 - Two.mkv", "Title 5 -> S/Season 01/S - s01e03 - One.mkv"]})
+    assert got["Title 4"] == {"season": 1, "episode": "1-2", "title": "Two"} and got["Title 5"]["episode"] == 3
+    rows = {"Title 5": {"type": "Episode", "season": "1", "episode": "3"}, "Title 4": {"type": "Episode", "season": "1", "episode": "1-2"}}
+    assert sorted(rows, key=lambda t: dd_app.found_order(t, rows[t], {})) == ["Title 4", "Title 5"]
+
+
+def test_the_lab_says_when_a_title_reads_short_and_looks_again_once(gui, tmp_path, monkeypatch):
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    store = tmp_path / "log.txt"
+    log = 'TINFO:0,9,0,"0:20:21"\nTINFO:0,24,0,"7"\n'
+    store.write_text(log, encoding="utf-8")
+    monkeypatch.setattr(core, "makemkv_log_store", lambda h: str(store))
+    monkeypatch.setattr(app, "makemkv_exe", lambda: "makemkvcon")
+    ran = []
+    monkeypatch.setattr(app, "run_bg", lambda *a: ran.append(a))
+    rep = {"content_hash": "A" * 32, "format": "DVD", "kind": "tv", "candidates": [],
+           "titles": [{"id": "Title 7", "role": "episode", "duration": 1287}]}
+    app.rep = rep
+    app.prescan(rep)                            # short, on file: a fresh look, in case it's been cleaned
+    assert len(ran) == 1
+    job = ran[0][-1]
+    job.update(ok=True)
+    job["done"].set()
+    app._prescan_over(job)
+    assert app.bg_lbl.cget("text") == "Lab: Title 7 reads 66 seconds short: check the disc"
+    app.prescan(rep)                            # still short: said, not read again
+    assert len(ran) == 1 and app.bg_lbl.cget("text").startswith("Lab: Title 7")
+    app.lab_again.clear()                       # (it went out of the drive)
+    app.prescan(rep)
+    assert len(ran) == 2
+    job2 = ran[1][-1]
+    store.write_text(log.replace("0:20:21", "0:21:27"), encoding="utf-8")   # cleaned: it reads whole
+    job2.update(ok=True)
+    job2["done"].set()
+    app._prescan_over(job2)
+    assert app.bg_lbl.cget("text") == "Lab report filed"
+    app.prescan(rep)
+    assert len(ran) == 2 and app.bg_lbl.cget("text") == "Lab report on file"
+    # the rip's outcome says so
+    app.rip_short = [{"id": "Title 7", "seconds": 66, "length": 1287}]
+    app.cancelled = False
+    app.rip_done(["x"], 1, None)
+    assert "Title 7 reads 66 seconds short" in app.standing_full
+    app.rip_short = []
+    app.rep = None
 
 
 def test_the_copy_whose_button_was_read_is_the_one_to_confirm():
@@ -2179,6 +2262,19 @@ def test_detect_titles_during_the_scan(gui, monkeypatch):
     app._before = dict(got)                                              # the same disc again: kept
     again = app._menus_seen("E:\\", SimpleNamespace(), dict(guess))
     assert "stakeout" not in calls and again["menu_raw"] is raw and again["staked_out"]
+    # a disc with no menu to answer (Psych's bonus disc): no error, the scan goes on without one
+    def no_menu(rep, vlc):
+        raise menus.Lost("couldn't tell which menu VLC is on")
+    monkeypatch.setattr(app, "_stakeout", no_menu)
+    app._stakeouts.clear()
+    app._before = None
+    calls.clear()
+    errors = []
+    monkeypatch.setattr(core.logger, "exception", lambda *a, **k: errors.append(a))
+    quiet = app._menus_seen("E:\\", SimpleNamespace(), dict(guess))
+    assert calls == [("read", False)] and not errors and "menu_raw" not in quiet and not quiet.get("staked_out")
+    app._stakeouts["%s" % guess.get("content_hash")] = raw
+    monkeypatch.setattr(app, "_stakeout", lambda rep, vlc: raw)
     # what it named waits in Edit titles: the footer says so
     app._before = None
     titles = [{"id": "Title 1", "role": "feature", "duration": 5160}, {"id": "Title 3", "role": "extra", "duration": 100}]

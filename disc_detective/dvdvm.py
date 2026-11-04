@@ -49,6 +49,13 @@ LINKS = {0: "nolink", 1: "top_cell", 2: "next_cell", 3: "prev_cell", 5: "top_pro
 # the disc: everything the commands can reach
 # --------------------------------------------------------------------------
 
+def _title_pgcs(ifo, pgci):
+    """A title set's title PGCs, {number: PGC}. Not one past the end of the file: a nonsense entry for
+    a title nothing plays (Last Man Standing S1 D1's VTS 3 has one) shouldn't cost the whole disc's program."""
+    offsets = {i + 1: pgci + _u32(ifo, pgci + 8 + 8 * i + 4) for i in range(_u16(ifo, pgci))}
+    return {i: _pgc(ifo, off) for i, off in offsets.items() if off + 4 <= len(ifo)}
+
+
 class Disc:
     """The disc's programs: the first-play PGC, the menu PGCs of the VMG and of each title set
     (their first language unit), each title set's title PGCs and chapter map, the title table,
@@ -74,8 +81,7 @@ class Disc:
                 ifo = fh.read()
             self.menus[v] = {n: (typ, entry, p) for n, typ, entry, p in _menu_pgcs(ifo, _u32(ifo, 0xD0))}
             pgci = _u32(ifo, 0xCC) * SECTOR
-            self.title_pgcs[v] = {i + 1: _pgc(ifo, pgci + _u32(ifo, pgci + 8 + 8 * i + 4))
-                                  for i in range(_u16(ifo, pgci))}
+            self.title_pgcs[v] = _title_pgcs(ifo, pgci)
             ptt = _u32(ifo, 0xC8) * SECTOR
             n = _u16(ifo, ptt)
             end = ptt + _u32(ifo, ptt + 4) + 1

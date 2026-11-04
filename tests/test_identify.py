@@ -318,6 +318,17 @@ def test_an_editions_name_isnt_the_titles():
     assert q("SPIDER_MAN_2_SPECIAL_EDITION") == "Spider Man 2"            # a sequel's number stays
 
 
+def test_a_shows_disc_with_no_episodes_is_its_bonus_disc():
+    show = {"kind": "tv", "name": "Psych"}
+    after = [{"id": "Title 2", "role": "extra", "duration": 2592}, {"id": "Title 3", "role": "junk", "duration": 26}]
+    assert core.not_the_film({"kind": "unknown"}, after, show)
+    # episodes on it, or already called something else: not
+    assert not core.not_the_film({"kind": "unknown"}, after + [{"id": "Title 5", "role": "episode", "duration": 2592}], show)
+    assert not core.not_the_film({"kind": "tv"}, after, show)
+    assert not core.not_the_film({"kind": "unknown", "extras_disc": True}, after, show)
+    assert not core.not_the_film({"kind": "unknown"}, [], show)
+
+
 def test_a_disc_with_none_of_its_film_is_its_extras_disc():
     """Speed Racer's DVD game disc (SRTMDGFF2_DES): named Speed Racer by you, but nothing on it
     is the film (its longest title 30 minutes, the film 135): the film's special-features disc.
@@ -328,10 +339,9 @@ def test_a_disc_with_none_of_its_film_is_its_extras_disc():
     assert core.not_the_film({"kind": "unknown"}, game, dict(film, runtime=None))     # (90 minutes, then)
     special = [{"id": "Title 1", "role": "extra", "duration": 47 * 60}]
     assert not core.not_the_film({"kind": "unknown"}, special, {"kind": "movie", "runtime": 47})
-    # a disc the scan found the film on, a show, or one already an extras disc: not this
+    # a disc the scan found the film on, or one already an extras disc: not this
     assert not core.not_the_film({"kind": "unknown"}, game + [{"id": "Title 9", "role": "feature", "duration": 8100}], film)
     assert not core.not_the_film({"kind": "movie"}, game, film)
-    assert not core.not_the_film({"kind": "unknown"}, game, dict(film, kind="tv"))
     assert not core.not_the_film({"kind": "unknown", "extras_disc": True}, game, film)
 
 

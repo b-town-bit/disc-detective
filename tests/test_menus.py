@@ -1384,6 +1384,33 @@ def test_a_trailers_page_of_other_films_is_ads():
     assert menus.trailer_ads(found, None, films.get) is found                 # (no film known: as found)
 
 
+def test_play_all_as_ocr_reads_it():
+    for text in ("Play All", "PLAY aul", "Play Aly", "play A", "Piay All", "P1ay All"):
+        assert menus.PLAY_ALL_RE.search(text), text
+    for text in ("Play Again", "Display", "Play Movie", "Pilot", "Pray All Day"):
+        assert not menus.PLAY_ALL_RE.search(text), text
+
+
+def test_a_buttons_more_or_back_names_no_film():
+    # (LOTR_FELLOWSHIP_TH_D2's "more" button: "more" found Strangers No More and Mary No More)
+    for words in ("more", "MORE", "back", "more back", "next"):
+        assert menus._menu_words(words), words
+    assert not menus._menu_words("More American Graffiti")
+    assert menus.trim_menu_words("Two Wizards more back") == "Two Wizards"
+
+
+def test_a_pal_discs_buttons_are_on_the_frames_the_crawl_sees():
+    # (Friends S1 D1's main menu, a UK disc: Play and Episodes, at the words in a 720x480 frame)
+    progs = [[{"n": 1, "rect": [218, 478, 260, 520]}, {"n": 2, "rect": [269, 478, 344, 521]}], []]
+    menus._to_frame(progs)
+    assert progs[0][0]["rect"] == [218, 398, 260, 433] and progs[0][1]["rect"] == [269, 398, 344, 434]
+    ifo = bytearray(0x102)
+    assert not menus._pal_menus(bytes(ifo))                 # NTSC
+    ifo[0x100] = 0x10 | 0x0C
+    assert menus._pal_menus(bytes(ifo))
+    assert not menus._pal_menus(b"\x00" * 16)               # (too short to say)
+
+
 def test_an_ad_buttons_words_read_into_the_heading_dont_make_its_page_all_ads():
     trailer = {"text": "THEATRICAL TRAILER"}
     peeks = {"text": "SNEAK PEEKS"}

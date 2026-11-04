@@ -131,6 +131,32 @@ def test_your_labels_survive_a_rescan_and_feed_packets_and_improvements(tmp_path
     assert "00010.mpls" not in core.get_labels(con, h)
 
 
+def test_a_packet_from_a_reading_with_titles_short_says_so(tmp_path):
+    con = core.library_open(str(tmp_path / "lib.sqlite"))
+    h = "G" * 32
+    with con:
+        con.execute("INSERT INTO discs (hash, format, label, status, best_guess, truth, first_seen, last_seen) "
+                    "VALUES (?, 'DVD', 'SHOW', 'x', 'Show S2', 'Show S2', '2026', '2026')", (h,))
+        con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?, 'Title 2', 'episode', 1290)", (h,))
+        con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?, 'Title 7', 'episode', 1287)", (h,))
+    core.set_label(con, h, "Title 7", "Episode", "About Last Knight", 2, 6)
+    log = lambda seven: "\n".join(['CINFO:2,0,"Show"', 'TINFO:0,9,0,"0:21:30"', 'TINFO:0,24,0,"2"', 'TINFO:0,27,0,"t00.mkv"',
+                                   'TINFO:1,9,0,"%s"' % seven, 'TINFO:1,24,0,"7"', 'TINFO:1,27,0,"t01.mkv"'])
+    out = tmp_path / "packet"
+    pk = core.build_packet(con, h, log("0:20:21"), str(out))        # (Galavant S2's, dirty)
+    assert pk["read_short"] == [{"id": "Title 7", "seconds": 66, "length": 1287}]
+    lab = {l["our_title"]: l for l in pk["labels"]}
+    assert lab["Title 7"]["note"] == "your label; read 66 seconds short: part of it couldn't be read"
+    assert lab["Title 2"]["note"] != "" and "short" not in lab["Title 2"]["note"]
+    text = (out / "checklist.md").read_text(encoding="utf-8")
+    assert "Don't submit this reading yet" in text and "Title 7: 66 seconds short" in text
+    assert text.index("Don't submit") < text.index("## 1. Identify")
+    # cleaned: nothing said
+    pk = core.build_packet(con, h, log("0:21:14"), str(out))
+    assert pk["read_short"] == []
+    assert "Don't submit" not in (out / "checklist.md").read_text(encoding="utf-8")
+
+
 def test_scans_store_each_titles_tracks():
     t = {"video_info": {"codec": "AVC", "height": 1080, "audio": ["x"]},
          "audio": [{"lang": "en", "codec": "DTS-HD MA", "channels": 6, "kind": ""}], "subs": [{"lang": "en", "kind": ""}]}

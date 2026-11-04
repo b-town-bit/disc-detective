@@ -208,6 +208,21 @@ def clean(s):
     return re.sub(r'[<>"/\\|?*]', "", re.sub(r"\s*:\s*", " - ", s or "")).strip()
 
 
+def lab_short_text(short):
+    """The rip card's word on titles the lab read short ([] : none)."""
+    if len(short) == 1:
+        return "Lab: %s reads %d seconds short: check the disc" % (short[0]["id"], short[0]["seconds"])
+    return "Lab: %d titles read short: check the disc" % len(short)
+
+
+def episode_dest(base, show, season, episode, title):
+    """Where a rip saves an episode, or several in one title: Plex's "s01e01-e02". (Two names joined
+    with a slash, as a menu has them, would make a folder of the first.)"""
+    code = di._ep_code(int(season), di.episode_numbers(episode)).lower()
+    return "%s/Season %02d/%s - %s - %s.mkv" % (base, int(season), show, code,
+                                                clean(re.sub(r"\s*/\s*", " & ", title or "")))
+
+
 def menu_data(root, content_hash, vlc, log, t0=None, oldest=None):
     """A DVD's menu data (menus.read_structure): as read before (kept by content hash), else read
     off the disc (VLC unlocking the drive first, when it's there) and kept for next time. oldest:
@@ -274,6 +289,11 @@ def detected_for(rep, found):
     if found.get("tv"):
         return menus.detected_tv_labels(found, rep.get("titles") or [], keep=keep)
     menu_play_alls(rep.get("titles") or [], found)
+    if rep.get("extras_disc") and found.get("feature"):
+        # none of the film on it: its longest title is one more extra, named as its button has it
+        # (The Fellowship of the Ring's special features: A Passage to Middle-earth, 41 minutes)
+        longest = {"title": found["feature"], "name": found.get("feature_name") or None, "seconds": None, "kind": None}
+        found = dict(found, feature=None, feature_name=None, extras=[longest] + list(found.get("extras") or []))
     # (a disc of short films: the ones its answer has, each a film, as a film's own menu makes it)
     cands = rep.get("candidates") or []
     shorts = short_films(rep, found)
@@ -365,9 +385,11 @@ def scan_names(rep):
     out = {}
     for n in (rep or {}).get("plex_names") or []:
         src, _, dest = n.partition(" -> ")
-        m = re.search(r"\bs(\d+)e(\d+)(?:-e\d+)*(?: - (.+?))?\.\w+$", dest.strip(), re.I)
+        m = re.search(r"\bs(\d+)e(\d+)((?:-e\d+)*)(?: - (.+?))?\.\w+$", dest.strip(), re.I)
         if m:
-            out[src.strip()] = {"season": int(m.group(1)), "episode": int(m.group(2)), "title": m.group(3) or ""}
+            more = [int(x) for x in re.findall(r"\d+", m.group(3))]
+            episode = di.episode_value(", ".join(map(str, [int(m.group(2))] + more)))
+            out[src.strip()] = {"season": int(m.group(1)), "episode": episode, "title": m.group(4) or ""}
     return out
 
 
@@ -395,7 +417,8 @@ def found_order(tid, was, detected):
     rank = FOUND_TYPES.index(kind if kind in FOUND_TYPES else "Other")
     place = (detected.get(tid) or {}).get("place")
     # (an extra may have an episode too: it goes by its place all the same)
-    season, episode = (di._int(was.get("season")) or 0, di._int(was.get("episode")) or 0) if kind == "Episode" else (0, 0)
+    season, episode = (di._int(was.get("season")) or 0, (di.episode_numbers(was.get("episode")) or [0])[0]) \
+        if kind == "Episode" else (0, 0)
     return (rank, season, episode, place is None, place or [], di._natural(tid))
 
 
@@ -532,9 +555,8 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
                 continue
         elif role not in roles or (t and t.get("interactive")):    # a menu game: only if ticked
             continue
-        if role == "episode" and item.get("season") and item.get("episode"):
-            dest = "%s/Season %02d/%s - s%02de%02d - %s.mkv" % (base, int(item["season"]), show, int(item["season"]),
-                                                               int(item["episode"]), clean(item.get("title")))
+        if role == "episode" and item.get("season") and di.episode_numbers(item.get("episode")):
+            dest = episode_dest(base, show, item["season"], item["episode"], item.get("title"))
         elif role in ("play-all", "promo") and item.get("title") and item.get("type") not in (None, "", "Promo"):
             # ticked by hand, but labelled (yours, or TheDiscDB's): saved as the label says
             dest = "%s/%s/%s.mkv" % (base, EXTRA_FOLDERS.get(item["type"], "Other"), clean(item["title"]))
@@ -1088,6 +1110,7 @@ class App:
         self.ripping = False
         self.last_out = None
         self.mkv_scan = None          # MakeMKV reading a confirmed disc in the background (see prescan)
+        self.lab_again = set()        # discs whose short titles have had a second reading since they went in
         self._answer_saved = None     # a disc whose corrected answer was saved, being rescanned
         root.title(WINDOW_TITLE)
         try:
@@ -1770,6 +1793,7 @@ class App:
         """The case taken off the desk (its disc gone): back to the blank desk, saying why if
         there's something to say (another disc in its place), not for a disc taken out when done."""
         from . import menus
+        self.lab_again.clear()           # (cleaned, maybe, when it's back)
         di.logger.info("%s (case %s closed)", why or "the disc was removed", (self.rep or {}).get("content_hash", "?")[:8])
         v = self.titles_dialog
         if v is not None and v.alive():
@@ -2495,6 +2519,9 @@ class App:
         di.step("stakeout")
         try:
             raw = self._stakeouts[h] = self._stakeout(rep, vlc)
+        except menus.Lost as exc:        # (no menu answered: Psych's bonus disc has none. Not an error)
+            di.logger.info("no menu answered on this disc (%s): the scan goes on without one", exc)
+            return self._menus_witness(drive, args, rep)
         except Exception:
             di.logger.exception("reading the menus failed: the scan goes on without them")
             return self._menus_witness(drive, args, rep)
@@ -2614,7 +2641,7 @@ class App:
         facts = rep.get("facts") or {}
         kind = {"tv": "TV", "movie": "Movie", "collection": "Collection"}.get(rep["kind"], "Disc")
         if rep.get("extras_disc"):
-            kind = "Special Features"            # the film's extras disc: no film on it
+            kind = "Special Features"            # the film's or show's extras disc: none of it on there
         mid = []
         if rep.get("extras_disc") and (rep.get("boxset") or {}).get("disc"):
             mid.append(rep["boxset"]["disc"])     # which disc of the set: "Indiana Jones Bonus Disc"
@@ -2807,6 +2834,7 @@ class App:
         self.run_bg(self._detect_worker, self.rep, vlc, lab)
 
     def _detect_worker(self, rep, vlc, lab=None):
+        from . import menus
         try:
             self.wait_for_lab(lab)       # MakeMKV gone from the drive, and the drive settled
             raw = self._stakeouts[rep["content_hash"]] = self._stakeout(rep, vlc)
@@ -2814,6 +2842,10 @@ class App:
             found = self._name_titles(raw, rep)
             # the answer in its turn, once the last suspect has had their moment
             self.post(self.tell, lambda: self.detect_done(rep, found, None))
+        except menus.Lost as exc:    # (no menu answered: not an error, unless the disc went)
+            di.logger.info("no menu answered on this disc (%s)", exc)
+            msg = self.GONE_STAKEOUT if self.disc_gone(rep["path"]) else self.NO_MENU_STAKEOUT
+            self.post(self.tell, lambda: self.detect_done(rep, None, msg))
         except Exception as exc:     # show it rather than dying silently in a thread
             di.logger.exception("reading the menus failed")
             msg = "%s: %s" % (type(exc).__name__, exc)
@@ -2958,6 +2990,7 @@ class App:
         return again
 
     GONE_STAKEOUT = "The disc was removed: stakeout aborted"
+    NO_MENU_STAKEOUT = "No menu answered: nothing to stake out on this disc"
 
     def detect_outcome(self, text, colour):
         """How the stakeout went: in Edit titles, where it was asked for, while that's open; else
@@ -3003,7 +3036,7 @@ class App:
         labels = detected_for(rep, found) if found else {}
         if not labels:
             self.show_plan_summary()
-            self.detect_outcome(*(((err, th.WAX) if err == self.GONE_STAKEOUT else
+            self.detect_outcome(*(((err, th.WAX) if err in (self.GONE_STAKEOUT, self.NO_MENU_STAKEOUT) else
                                    ("The stakeout couldn't go ahead: details in the case notes", th.WAX)) if err else
                                   ("The stakeout turned up nothing: titles unchanged", th.AMBER_DOT)))
             return
@@ -3063,10 +3096,15 @@ class App:
         if not exe or not rep or rep.get("from_sample") or self.mkv_scan or self.busy:   # (busy: the drive's in use)
             return
         if os.path.exists(di.makemkv_log_store(rep["content_hash"])):
-            di.logger.info("MakeMKV's reading of %s is saved already (from an earlier rip or reading)",
-                           rep["content_hash"][:8])
-            self.set_background("Lab report on file", th.GREEN_DOT)
-            return
+            short = self.lab_short(rep)
+            if not short or rep["content_hash"] in self.lab_again:
+                di.logger.info("MakeMKV's reading of %s is saved already (from an earlier rip or reading)",
+                               rep["content_hash"][:8])
+                self.set_background(*((lab_short_text(short), th.AMBER_DOT) if short else ("Lab report on file", th.GREEN_DOT)))
+                return
+            # a title it read short, on a disc back in the drive: cleaned, maybe. A fresh look, once
+            di.logger.info("MakeMKV's saved reading of %s has titles short: reading it again", rep["content_hash"][:8])
+            self.lab_again.add(rep["content_hash"])
         if (rep.get("discdb") or {}).get("hit"):
             # TheDiscDB has it: no packet to build, so the reading would only spare the rip its
             # own (which it does when it starts); the drive is left alone
@@ -3081,6 +3119,14 @@ class App:
         di.logger.info("MakeMKV reads %s in the background (saved for rips and TheDiscDB packets)",
                        rep["content_hash"][:8])
         self.run_bg(self._prescan_worker, exe, self.source.get(), job)
+
+    def lab_short(self, rep):
+        """The titles MakeMKV's saved reading of a disc has well short of their length (core.lab_short_titles)."""
+        try:
+            with open(di.makemkv_log_store(rep["content_hash"]), encoding="utf-8", errors="replace") as fh:
+                return di.lab_short_titles(fh.read(), rep.get("titles"), rep.get("format"))
+        except OSError:
+            return []
 
     def fetch_credits(self, rep):
         """The film's credits into your case files, once (di.film_credits: the IMDb credits index,
@@ -3133,7 +3179,14 @@ class App:
             self.show_drive()
         # its report, on its case: (a scan since will say "on file" itself, once it's done)
         if not job["stopped"] and self.rep and self.rep.get("content_hash") == job["hash"]:
-            self.set_background(*(("Lab report filed", th.GREEN_DOT) if job["ok"] else
+            short = self.lab_short(self.rep) if job["ok"] else []
+            for s in short:
+                di.logger.warning("MakeMKV reads %s %d seconds short of its %d: part of it couldn't be read (a dirty or "
+                                  "damaged disc?)", s["id"], s["seconds"], s["length"])
+            if short:
+                self.lab_again.add(job["hash"])      # (not read again till it's been out of the drive)
+            self.set_background(*((lab_short_text(short), th.AMBER_DOT) if short else
+                                  ("Lab report filed", th.GREEN_DOT) if job["ok"] else
                                   ("The lab couldn't read the disc", th.AMBER_DOT)))
 
     DRIVE_SETTLE = 2.0       # seconds a drive gets to settle after MakeMKV lets go of it
@@ -3229,6 +3282,8 @@ class App:
                     fh.write(info)
             plan = self.current_plan(mk["titles"], extras=opts["extras"], selected=opts["selected"])
             di.logger.info("rip %s from %s (%s) into %s: %d titles", rep["content_hash"][:8], drive, source, out, len(plan))
+            ripping = {item["title_id"] for item in plan}
+            self.rip_short = [s for s in self.lab_short(rep) if s["id"] in ripping]
             for item in plan:
                 di.logger.info("  MakeMKV title %s (%s, %s) -> %s", item["mk"], item["title_id"], item["length"], item["dest"])
             done = []
@@ -3310,6 +3365,10 @@ class App:
         elif len(done) < planned:
             self.set_outcome("Evidence bagged: %d of %d titles ripped (details in the logs)" % (len(done), planned),
                              th.AMBER_DOT)
+        elif getattr(self, "rip_short", None):
+            self.set_outcome("Evidence bagged, but %s: compare %s" % (
+                lab_short_text(self.rip_short)[5:].replace(": check the disc", ""),
+                "it" if len(self.rip_short) == 1 else "them"), th.AMBER_DOT)
         else:
             self.set_outcome("Evidence bagged: %d of %d titles ripped" % (len(done), planned), th.GREEN_DOT)
 
@@ -4075,7 +4134,7 @@ class TitlesDialog:
         ttk.Entry(g, textvariable=v["title"], width=30, state="disabled" if off else "normal").grid(
             row=r, column=col["NAME"], sticky="we", padx=(0, 6))
         se = ttk.Entry(g, textvariable=v["season"], width=3, state="disabled" if off else "normal")
-        ep = ttk.Entry(g, textvariable=v["episode"], width=3, state="disabled" if off else "normal")
+        ep = ttk.Entry(g, textvariable=v["episode"], width=5, state="disabled" if off else "normal")
         se.grid(row=r, column=col["S"], sticky="w", padx=(0, 4))
         ep.grid(row=r, column=col["E"], sticky="w", padx=(0, 8))
         self.episode_boxes[tid] = (se, ep)
@@ -4259,7 +4318,7 @@ class TitlesDialog:
         one."""
         v, s = self.vars[tid], self.state[tid]
         season, episode = s["season"].strip(), s["episode"].strip()
-        if not (season.isdigit() and episode.isdigit()) or not self.numbered(s["type"]):
+        if not (season.isdigit() and di.episode_numbers(episode)) or not self.numbered(s["type"]):
             return
         kind = s["type"]
         if s["title"].strip() and s["title"] != s["auto"]:
@@ -4360,7 +4419,7 @@ class TitlesDialog:
                 if not (s["ok"] if s["from"] == "menus" else self.changed(tid)):
                     continue
                 if self.numbered(s["type"]) and not s["title"].strip() \
-                        and s["season"].strip().isdigit() and s["episode"].strip().isdigit():
+                        and s["season"].strip().isdigit() and di.episode_numbers(s["episode"]):
                     s["title"] = self.named(s["type"], di.episode_name(
                         self.series, s["season"], s["episode"], self.order, online=self.online)) or ""
                 di.set_label(con, self.h, tid, s["type"] or None, s["title"],
@@ -4897,7 +4956,7 @@ class MatchDialog:
         self.title = tk.StringVar(value=title or "")
         self.year = tk.StringVar(value=str(year or ""))
         self.kind = tk.StringVar(value="multi" if multi and not on_pick else "tv" if tv else "film")
-        self.season = tk.StringVar(value=str(season or ""))
+        self.season = tk.StringVar(value="" if season is None else str(season))
         self.disc = tk.StringVar(value=str(disc or ""))
         title_lbl = ttk.Label(f, text="Title")
         title_lbl.grid(row=0, column=0, sticky="w", padx=(0, 10))
@@ -5137,12 +5196,13 @@ class MatchDialog:
         self.draw_films()
 
     def truth(self):
+        # (a season only if it says something: a whole series' bonus disc has none)
+        s, d = self.season.get().strip(), self.disc.get().strip()
+        if self.tv() and s and not s.isdigit():
+            return None, "The season should be a number."
         if self.picked:
-            if self.tv() and not self.season.get().strip().isdigit():
-                return None, "Enter the season number."
             p = dict(self.picked, kind="tv" if self.tv() else "movie")
-            s, d = self.season.get().strip(), self.disc.get().strip()
-            return di.truth_for(p, int(s) if self.tv() else None,
+            return di.truth_for(p, int(s) if self.tv() and s else None,
                                 int(d) if self.tv() and d.isdigit() else None), None
         title = self.title.get().strip()
         year = self.year.get().strip()
@@ -5152,10 +5212,7 @@ class MatchDialog:
             return None, "The year should look like 1998."
         t = "%s (%s)" % (title, year) if year else title
         if self.tv():
-            s, d = self.season.get().strip(), self.disc.get().strip()
-            if not s.isdigit():
-                return None, "Enter the season number."
-            t += " S%d" % int(s) + (" D%d" % int(d) if d.isdigit() else "")
+            t += (" S%d" % int(s) if s else "") + (" D%d" % int(d) if d.isdigit() else "")
         return t, None
 
     def ok(self):
@@ -5551,8 +5608,12 @@ class HelpDiscDBDialog:
         if err:
             self.status.config(text="Couldn't build the packet: %s" % err)
             return
-        self.status.config(text="Packet ready: %d of %d titles matched. Open checklist.md in it and follow it." % (
-            pk["real_matched"], pk["real_titles"]))
+        if pk.get("read_short"):
+            self.status.config(text="Packet built, but don't submit it yet: %s. Clean the disc, scan it again, then rebuild." % (
+                lab_short_text(pk["read_short"])[5:].replace(": check the disc", "")))
+        else:
+            self.status.config(text="Packet ready: %d of %d titles matched. Open checklist.md in it and follow it." % (
+                pk["real_matched"], pk["real_titles"]))
         if os.name == "nt":
             os.startfile(out)
         else:

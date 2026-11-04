@@ -3362,22 +3362,11 @@ def special_on_disc(con, queries, titles, facts):
     return c
 
 
-def imdb_initials_numbered(con, label, facts):
-    """HP4, LOTR_2, POTC3, HP5_PHOENIX: a franchise's initials and a film number (and maybe a
-    word of its title). The franchise is the best-known run of films whose titles start with words
-    of those initials ("Harry Potter..."); its Nth film by release year, counting only the
-    franchise's own films (not look-alikes with a fraction of its votes). The disc's runtime has
-    to agree, and confirm it (numbered_fit), or it is only a guess."""
-    import math
-    m = re.match(r"^([A-Za-z]{2,4})[\s_.\-]?(\d{1,2})((?:[\s_.\-]+[A-Za-z]+)*)$", (label or "").strip())
-    if not m:
-        return []
-    letters, n = m.group(1).upper(), int(m.group(2))
-    extra = [w for w in re.findall(r"[a-z]+", m.group(3).lower()) if w not in ("the", "a", "an", "of", "and")]
-    if n < 1:
-        return []
+def _franchise(con, letters):
+    """The best-known run of films whose titles start with words of these initials ("Lord of the
+    Rings"): (its name, its films oldest first, not look-alikes with a sliver of its votes:
+    [(id, type, title, year, runtime, votes)]), or None."""
     k = len(letters)
-    master_year = int(facts["mastered"][:4]) if facts.get("mastered") else 9999
     groups = {}
     for (fid, ttype, title, year, runtime, votes) in con.execute(
             "SELECT t.id, t.type, t.title, t.year, t.runtime, COALESCE(r.votes, 0) FROM titles t "
@@ -3394,14 +3383,57 @@ def imdb_initials_numbered(con, label, facts):
     for base, rows in groups.items():
         top = max(r[5] for r in rows)
         family = sorted((r for r in rows if r[5] >= 0.02 * top), key=lambda r: (r[3], -r[5]))
-        if len(family) < max(n, 2) or top < 5000:
+        if len(family) < 2 or top < 5000:
             continue                     # a franchise: two or more well-known films
         weight = sum(r[5] for r in family)
         if not best or weight > best[0]:
             best = (weight, base, family)
-    if not best:
+    return best[1:] if best else None
+
+
+def imdb_initials_named(con, label, facts):
+    """LOTR_FELLOWSHIP_TH_D2: a franchise's initials and a word of the film's title. Both have to
+    agree on one film, so a name that merely starts like initials finds nothing (IRON_GIANT)."""
+    import math
+    m = re.match(r"^([A-Za-z]{2,4})[\s_.\-]+([A-Za-z]{3,})(?:[\s_.\-]+[A-Za-z0-9]+)*$", (label or "").strip())
+    if not m:
         return []
-    _, base, family = best
+    found = _franchise(con, m.group(1).upper())
+    if not found:
+        return []
+    base, family = found
+    word = m.group(2).lower()
+    master_year = int(facts["mastered"][:4]) if facts.get("mastered") else 9999
+    films = [r for r in family if word in re.findall(r"[a-z0-9']+", r[2].lower()) and r[3] <= master_year]
+    if len(films) != 1:
+        return []
+    (fid, ttype, title, year, runtime, votes) = films[0]
+    why = ["label %s: the %s film with \"%s\" in its title" % (label, " ".join(x.capitalize() for x in base.split()), word),
+           "%s votes" % format(votes, ",")]
+    return [{"kind": "movie", "imdb_id": tt(fid), "_n": fid, "name": title, "year": year, "type": ttype,
+             "runtime": runtime, "score": round(85 + min(15, 3 * math.log10(votes + 1)), 1), "why": "; ".join(why),
+             "source": "IMDb", "votes": votes}]
+
+
+def imdb_initials_numbered(con, label, facts):
+    """HP4, LOTR_2, POTC3, HP5_PHOENIX: a franchise's initials and a film number (and maybe a
+    word of its title). The franchise is the best-known run of films whose titles start with words
+    of those initials ("Harry Potter..."); its Nth film by release year, counting only the
+    franchise's own films (not look-alikes with a fraction of its votes). The disc's runtime has
+    to agree, and confirm it (numbered_fit), or it is only a guess."""
+    import math
+    m = re.match(r"^([A-Za-z]{2,4})[\s_.\-]?(\d{1,2})((?:[\s_.\-]+[A-Za-z]+)*)$", (label or "").strip())
+    if not m:
+        return []
+    letters, n = m.group(1).upper(), int(m.group(2))
+    extra = [w for w in re.findall(r"[a-z]+", m.group(3).lower()) if w not in ("the", "a", "an", "of", "and")]
+    if n < 1:
+        return []
+    master_year = int(facts["mastered"][:4]) if facts.get("mastered") else 9999
+    found = _franchise(con, letters)
+    if not found or len(found[1]) < n:
+        return []
+    base, family = found
     pick = family[n - 1]
     (fid, ttype, title, year, runtime, votes) = pick
     minutes = facts.get("feature_minutes")
@@ -3439,6 +3471,9 @@ def imdb_initials(con, label, facts):
     titles that start with them. Films with the feature's length (+-4 min) released by the
     mastering date, best known first. Only a clear favourite becomes a guess."""
     import math
+    named = imdb_initials_named(con, label, facts)            # LOTR_FELLOWSHIP = that Lord of the Rings film
+    if named:
+        return named
     numbered = imdb_initials_numbered(con, label, facts)      # HP4 = the 4th Harry Potter film
     if numbered:
         return numbered
@@ -4845,8 +4880,13 @@ def tvmaze_orders(imdb_id, cache_dir=None, online=True):
 
 def episode_name(series_imdb, season, episode, order="aired", tvmaze_dir=None, online=True, imdb_dir=None):
     """An episode's title from its season and number: TVmaze's list in the order asked for (DVD
-    order where TVmaze has one, as on the disc's case), else IMDb's. None when neither knows it."""
-    season, episode = _int(season), _int(episode)
+    order where TVmaze has one, as on the disc's case), else IMDb's. None when neither knows it.
+    Several episodes ("1-2"): their names joined, as menus and TheDiscDB have them, if all are known."""
+    numbers = episode_numbers(episode)
+    if len(numbers) > 1:
+        names = [episode_name(series_imdb, season, n, order, tvmaze_dir, online, imdb_dir) for n in numbers]
+        return " / ".join(names) if all(names) else None
+    season, episode = _int(season), numbers[0] if numbers else None
     if not series_imdb or season is None or not episode:
         return None
     try:
@@ -4888,6 +4928,28 @@ def series_of(con, h):
         return None
     m = re.search(r"\{imdb-(tt\d+)\}", r["truth"] or "")
     return (m.group(1) if m else None) or r["imdb_id"]
+
+
+def episode_numbers(value):
+    """The episodes a label or TheDiscDB says a title holds, as numbers: 5, "5", "1-2", "11 - 12",
+    "1-E2", "1 & 2", "1, 2, 3". [] for anything else ("1-2 + 3 OVA's")."""
+    s = str(value if value is not None else "").strip()
+    if re.fullmatch(r"\d+", s):
+        return [int(s)] if int(s) else []
+    m = re.fullmatch(r"[Ee]?(\d+)\s*[-–]\s*[Ee]?(\d+)", s)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        return list(range(a, b + 1)) if a and 0 < b - a < 50 else []
+    parts = re.split(r"\s*[,&+]\s*", s)
+    return [int(p) for p in parts] if len(parts) > 1 and all(p.isdigit() and int(p) for p in parts) else []
+
+
+def episode_value(value):
+    """An episode as it's kept: a number, or text for several ("1-2", "1, 3"). None for nonsense."""
+    n = episode_numbers(value)
+    if len(n) < 2:
+        return n[0] if n else None
+    return "%d-%d" % (n[0], n[-1]) if n == list(range(n[0], n[-1] + 1)) else ", ".join(map(str, n))
 
 
 def _ep_code(season, numbers):
@@ -5153,10 +5215,41 @@ def _menu_run(scores, numbers):
     return max(states.values(), key=lambda x: x[0])
 
 
+def _joined_episodes(eps, texts):
+    """eps, with two neighbours made one where some reading names both as one button does
+    ("PILOT / LAST BABY PROOFING STANDING", OCR often dropping the slash): {"number": "1-2", "name":
+    "Pilot / Last Baby Proofing Standing"}. Length doesn't come into it: two short episodes may be as
+    long as one (TheDiscDB's Aaahh!!! Real Monsters). A reading closer to one name alone isn't both."""
+    ratio = lambda a, b: difflib.SequenceMatcher(None, a, b).ratio()
+    keys = [(t, _menu_key(t)) for t in texts if t]
+    out, i = [], 0
+    while i < len(eps):
+        pair = eps[i:i + 2]
+        said = None
+        if len(pair) == 2 and pair[1]["number"] == pair[0]["number"] + 1:
+            whole = _menu_key("%s %s" % (pair[0]["name"], pair[1]["name"]))
+            for text, r in keys:
+                if len(r) >= 0.7 * len(whole):
+                    q = ratio(r, whole)
+                    if q >= MENU_NAME_SURE and q > max(ratio(r, _menu_key(e["name"])) for e in pair):
+                        said = text
+                        break
+        if said is None:
+            out.append(eps[i])
+            i += 1
+        else:
+            runtimes = [e.get("runtime") for e in pair]
+            out.append(dict(pair[0], number="%d-%d" % (pair[0]["number"], pair[1]["number"]),
+                            name=(" & " if "&" in said else " / ").join(e["name"] for e in pair),
+                            runtime=sum(runtimes) if all(runtimes) else None))
+            i += 2
+    return out
+
+
 def menu_episodes(readings, orders, season=None, order="aired"):
     """Which episode each menu reading names: {"season": the season found, "picks": {index:
     {"season", "number", "name", "score", "by"}}}, or None. readings: [{"text", "seconds", "bonus",
-    "switch", "only_kind"}], in the menus' order; the show's whole list searched, a run within one season
+    "switch", "only_kind"}], in the menus' order (a number may be "1-2": _joined_episodes); the show's whole list searched, a run within one season
     taken, a hint of the season (season) only settling a tie. Fuzzy, for OCR's sake. A reading
     the run missed, between two it found with as many episodes between them, is the episode in its
     place ("by": "neighbours"), if long enough for one. Readings a Play All puts in order (in_play:
@@ -5172,7 +5265,7 @@ def menu_episodes(readings, orders, season=None, order="aired"):
     for e in pool:
         if e.get("season") and e.get("number") is not None and e.get("name"):
             by_season.setdefault(e["season"], []).append(e)
-    usable = [i for i, r in enumerate(readings) if not (r.get("bonus") or r.get("switch") or r.get("only_kind"))]
+    usable = [i for i, r in enumerate(readings) if not (r.get("bonus") or r.get("switch") or r.get("only_kind") or r.get("only_cut"))]
     if not usable or not by_season:
         return None
     commons = name_commons([e["name"] for eps in by_season.values() for e in eps])
@@ -5181,6 +5274,7 @@ def menu_episodes(readings, orders, season=None, order="aired"):
         eps = sorted(eps, key=lambda e: e["number"])
         known = sorted(e["runtime"] for e in eps if e.get("runtime"))
         least = 0.5 * 60 * known[len(known) // 2] if known else 0
+        eps = _joined_episodes(eps, [readings[i].get("text") for i in usable])
 
         def fits(i):
             return (readings[i].get("seconds") or least) >= least
@@ -5975,6 +6069,25 @@ def identify(root, args):
                                 sorted(t["duration"] for t in eps)[(len(eps) - 1) // 2] / 60), episode_count=len(eps))
                             rep["facts"] = facts
                             rep["candidates"] = imdb_candidates(con, queries, "tv", facts)
+                    if not is_probable(rep["candidates"]) and not anchor and rep.get("label"):
+                        # LOTR_FELLOWSHIP_TH_D2: the label names a film, whatever the titles' lengths
+                        # made of the disc (41 and 21 minutes: two "episodes"). Far shorter than the
+                        # film: its special-features disc
+                        named = imdb_initials_named(con, rep["label"], facts)
+                        if named:
+                            rep["candidates"] = named
+                            longest = max((t["duration"] for t in titles if t["role"] != "duplicate"), default=0)
+                            if longest / 60 < EXTRAS_SHARE * (named[0].get("runtime") or 90):
+                                bonus_disc_extras(titles)
+                                rep["extras_disc"] = True
+                                facts = {k: v for k, v in facts.items() if k not in ("feature_minutes", "episode_minutes", "episode_count")}
+                                rep["facts"] = facts
+                                eps = []
+                            elif kind == "tv" and as_movie(titles):
+                                facts = movie_facts(titles, facts)
+                                rep["facts"] = facts
+                                eps = []
+                            kind = rep["kind"] = "movie"
                     if not is_probable(rep["candidates"]) and not anchor and kind == "movie" and rep.get("label"):
                         # BCS0NNW1-style codes, HP4: also when the words found only junk (HP-414...)
                         step("code")
@@ -6046,12 +6159,12 @@ def identify(root, args):
         ordered = sorted(eps, key=lambda t: t.get("episode_index") or 0)
         items = [by_src.get(t["id"].lower()) or by_src.get("%02d" % int(t["id"].split()[-1]))
                  if t["id"].lower().startswith("title ") else by_src.get(t["id"].lower()) for t in ordered]
-        if items and all(it and it.get("season") not in (None, "") and it.get("episode") for it in items):
+        if items and all(it and it.get("season") not in (None, "") and episode_numbers(it.get("episode")) for it in items):
             ss = {int(it["season"]) for it in items}
             if len(ss) == 1:
                 season = ss.pop()
                 rep["episode_guess"] = {"source": "TheDiscDB",
-                                        "guess": ["S%02dE%02d %s" % (season, int(it["episode"]), it.get("title") or "")
+                                        "guess": ["%s %s" % (_ep_code(season, episode_numbers(it["episode"])), it.get("title") or "")
                                                   for it in items],
                                         "note": "TheDiscDB names each episode on this disc" +
                                                 ("; season 0 is where Plex keeps specials" if season == 0 else "")}
@@ -6164,9 +6277,9 @@ def identify(root, args):
                     "films": len(m.get("items") or []) or None} if m else None
     if m and not_the_film(rep, titles, m):
         # the film's extras disc, named by you or TheDiscDB but not by its label (Speed Racer's
-        # DVD game disc, SRTMDGFF2_DES): nothing on it is the film
+        # DVD game disc, SRTMDGFF2_DES): nothing on it is the film. Or a show's: no episodes on it
         rep["extras_disc"] = True
-        rep["kind"] = "movie"
+        rep["kind"] = "tv" if m["kind"] == "tv" else "movie"
         rep["facts"] = {k: v for k, v in (rep.get("facts") or {}).items()
                         if k not in ("feature_minutes", "episode_minutes", "episode_count")}
     for c in rep["candidates"]:
@@ -6196,11 +6309,14 @@ def not_the_film(rep, titles, m):
     """Whether a disc matched to a film holds none of it: the scan found no film on it (no
     feature, cut, episode or part: its kind unknown), and its longest title is well short of the
     film's running time (90 minutes when IMDb doesn't say). A 47-minute special whose one title
-    is the special is the film, not its extras."""
-    if rep.get("extras_disc") or m.get("kind") != "movie" or rep.get("kind") not in ("unknown", None):
+    is the special is the film, not its extras. A show has no such length to go by: found to be a
+    show's, with no episodes, it's that show's bonus disc (Psych's, its one title Psych After Pshow)."""
+    if rep.get("extras_disc") or m.get("kind") not in ("movie", "tv") or rep.get("kind") not in ("unknown", None):
         return False
     if not titles or any(t.get("role") in ("feature", "version", "episode", "part") for t in titles):
         return False
+    if m["kind"] == "tv":
+        return True
     longest = max(t.get("duration") or 0 for t in titles) / 60
     return longest < EXTRAS_SHARE * (m.get("runtime") or 90)
 
@@ -6806,9 +6922,9 @@ def label_role(kind, scan_role=None):
 
 def labelled_episodes(labels):
     """Your labels' episodes with a season and number: {title_id: (season, episode, title)}."""
-    return {tid: (_int(my.get("season")), _int(my.get("episode")), my.get("title"))
+    return {tid: (_int(my.get("season")), episode_value(my.get("episode")), my.get("title"))
             for tid, my in (labels or {}).items()
-            if my.get("type") == "Episode" and _int(my.get("season")) is not None and _int(my.get("episode"))}
+            if my.get("type") == "Episode" and _int(my.get("season")) is not None and episode_numbers(my.get("episode"))}
 
 
 def labels_over_guess(rep):
@@ -6901,7 +7017,7 @@ def set_label(con, h, title_id, type_=None, title=None, season=None, episode=Non
             con.execute("DELETE FROM labels WHERE hash=? AND title_id=?", (h, title_id))
         else:
             con.execute("INSERT OR REPLACE INTO labels VALUES (?,?,?,?,?,?,?)",
-                        (h, title_id, type_ or None, (title or "").strip() or None, _int(season), _int(episode),
+                        (h, title_id, type_ or None, (title or "").strip() or None, _int(season), episode_value(episode),
                          now_iso()))
 
 
@@ -7023,7 +7139,7 @@ def episodes_before(con, show, season, disc, own_hash):
     for h in found.values():
         mine = labelled_episodes(get_labels(con, h))
         if mine:                                  # you numbered that disc's episodes: count them
-            total += len({(s, e) for s, e, _ in mine.values()})
+            total += len({(s, n) for s, e, _ in mine.values() for n in episode_numbers(e)})
             continue
         lens = [x[0] for x in con.execute("SELECT duration FROM titles WHERE hash=? AND role='episode'", (h,))]
         if not lens:
@@ -7092,7 +7208,8 @@ def truth_for(cand, season=None, disc=None):
     exact IMDb entry when known ("{imdb-tt0119282}"), so the right one of several is used."""
     t = "%s (%s)" % (cand["name"], cand["year"]) if cand.get("year") else cand["name"]
     if cand.get("kind") == "tv" or season:
-        t += "".join(" %s%s" % (k, v) for k, v in (("S", season), ("D", disc)) if v)
+        # (season 0 is one: where Plex keeps specials)
+        t += "".join(" %s%s" % (k, v) for k, v in (("S", season), ("D", disc)) if v or (k == "S" and v == 0))
     if cand.get("imdb_id"):
         t += " {imdb-%s}" % cand["imdb_id"]
     return t
@@ -7562,6 +7679,32 @@ def parse_makemkv_log(text):
     return {"disc_name": disc.get(2, ""), "volume": disc.get(32, ""), "titles": out}
 
 
+# A title MakeMKV reads this much short of the disc's own word on its length: part of it couldn't be
+# read. Of 242 titles on 46 discs, one is over 1.6% short, by 5.2% (Galavant S2's scratched episode).
+# MakeMKV's own messages won't do: "corrupt" and read errors come with protected discs that rip fine.
+LAB_SHORT_SECONDS = 30
+LAB_SHORT_SHARE = 0.03
+
+
+def lab_short_titles(log_text, titles, fmt):
+    """The titles of a scan (rep's) that MakeMKV's reading has well short: [{"id", "seconds": how
+    much, "length": the disc's word}]. Only titles sure to be the same one, not copies or play-alls."""
+    ours = [{"title_id": t["id"], "role": t.get("role"), "duration": t.get("duration"),
+             "clips": t.get("clip_list") or t.get("clips")} for t in titles or []]
+    out = []
+    mk = parse_makemkv_log(log_text or "")["titles"]
+    pairs = map_makemkv(mk, ours, fmt)
+    for m in mk:
+        t, how = pairs.get(m["index"], (None, None))
+        if not t or how not in ("source", "clip") or not m["duration"] or not t["duration"] or \
+                t["role"] in ("junk", "loop", "duplicate", "play-all", "segment"):
+            continue
+        short = t["duration"] - m["duration"]
+        if short >= LAB_SHORT_SECONDS and short >= LAB_SHORT_SHARE * t["duration"]:
+            out.append({"id": t["title_id"], "seconds": round(short), "length": t["duration"]})
+    return out
+
+
 def map_makemkv(mk_titles, our_titles, fmt):
     """Pair each MakeMKV title with our classified title: Blu-ray by source file,
     DVD by original title number, then by duration as a fallback."""
@@ -7648,6 +7791,13 @@ def build_packet(con, prefix, log_text, out_dir, log_name=None):
                          season=my["season"] or entry["season"], episode=my["episode"] or entry["episode"],
                          note="your label" + (" (a promo: TheDiscDB files those as Trailer)" if my["type"] == "Promo" else ""))
         labels.append(entry)
+    # part of a title not read: a dirty or damaged disc, and this reading isn't one to share
+    short = lab_short_titles(log_text, [dict(t, id=t["title_id"]) for t in our], d["format"])
+    by_title = {s["id"]: s for s in short}
+    for l in labels:
+        s = by_title.get(l["our_title"])
+        if s:
+            l["note"] = ("%s; " % l["note"] if l["note"] else "") + "read %d seconds short: part of it couldn't be read" % s["seconds"]
     matched = sum(1 for l in labels if l["our_title"])
     real = [l for l, m in zip(labels, mk["titles"]) if (m["duration"] or 0) >= JUNK_MAX]
     real_matched = sum(1 for l in real if l["our_title"])
@@ -7659,7 +7809,7 @@ def build_packet(con, prefix, log_text, out_dir, log_name=None):
     packet = {"content_hash": h, "format": d["format"], "label": d["label"], "truth": truth,
               "imdb_id": d["imdb_id"], "mastered": d["mastered"], "makemkv_disc_name": mk["disc_name"],
               "makemkv_log": log_file, "matched": matched, "makemkv_titles": len(labels),
-              "real_titles": len(real), "real_matched": real_matched, "labels": labels}
+              "real_titles": len(real), "real_matched": real_matched, "labels": labels, "read_short": short}
     with open(os.path.join(out_dir, "labels.json"), "w", encoding="utf-8") as fh:
         json.dump(packet, fh, indent=2)
     with open(os.path.join(out_dir, "checklist.md"), "w", encoding="utf-8") as fh:
@@ -7672,6 +7822,16 @@ def packet_checklist(pk, pt):
     w = L.append
     w("# TheDiscDB submission: %s" % (pk["truth"] or "unconfirmed disc"))
     w("")
+    if pk.get("read_short"):
+        w("## Don't submit this reading yet")
+        w("MakeMKV couldn't read all of %s, so the lengths and sizes here, and the log, would go in wrong:" % (
+            "this title" if len(pk["read_short"]) == 1 else "these titles"))
+        for s in pk["read_short"]:
+            w("- %s: %d seconds short" % (s["id"], s["seconds"]))
+        w("")
+        w("Clean the disc, put it back in the drive and scan it: the lab reads it again. Then build this packet again.")
+        w("If it still reads short, another drive or another copy of the disc may do better.")
+        w("")
     w("Contribute at https://thediscdb.com/contribute (sign in with GitHub). Disc fingerprint `%s`." % pk["content_hash"])
     w("")
     w("## 1. Identify the release (their form searches TMDB for you)")
@@ -7714,7 +7874,7 @@ def packet_checklist(pk, pt):
     w("| MakeMKV | Output file | Source | Length | Label as | Title | S/E | Note |")
     w("|---|---|---|---|---|---|---|---|")
     for l in pk["labels"]:
-        se = "S%02dE%02d" % (l["season"], l["episode"]) if l["season"] and l["episode"] else ""
+        se = (_ep_code(int(l["season"]), episode_numbers(l["episode"])) or "") if l["season"] and l["episode"] else ""
         w("| %s | %s | %s | %s | %s | %s | %s | %s |" % (
             l["makemkv_title"], l["output_file"], l["source"] or "", l["duration"], l["type"] or "-",
             (l["title"] or "").replace("|", "/"), se, l["note"]))
@@ -8001,6 +8161,8 @@ def _main(args, ap):
             print("Packet written to %s: %d of %d titles over 2 minutes matched to the scan" % (
                 os.path.abspath(out_dir), pk["real_matched"], pk["real_titles"]))
             print("Open checklist.md and follow it on https://thediscdb.com/contribute")
+            for s in pk["read_short"]:
+                print("WARNING: %s read %d seconds short: a dirty or damaged disc? Don't submit this reading yet" % (s["id"], s["seconds"]))
         with tempfile.TemporaryDirectory(prefix="disc_detective_") as tmp:
             args.tmp_out = tmp
             if args.corpus:

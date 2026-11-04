@@ -180,6 +180,17 @@ def test_code_labels_try_the_title_initials(imdb):
     assert core.imdb_initials(imdb, "BCS0NNW1", {"mastered": "2010-05"}) == []   # no feature length
 
 
+def test_initials_with_a_word_of_the_title(imdb):
+    """LOTR_FELLOWSHIP_TH_D2: a franchise's initials and a word of its film's title: both have to agree."""
+    c = core.imdb_initials_named(imdb, "AT_FIEVEL_D2", {"mastered": "2003-12"})
+    assert [(x["name"], x["year"]) for x in c] == [("An American Tail: Fievel Goes West", 1991)]
+    assert core.is_probable(c) and core.imdb_initials(imdb, "AT_FIEVEL_D2", {"mastered": "2003-12"}) == c
+    assert core.imdb_initials_named(imdb, "AT_NOSUCH_D2", {}) == []                 # no film has that word
+    assert core.imdb_initials_named(imdb, "ZQ_FIEVEL", {}) == []                    # no such franchise
+    assert core.imdb_initials_named(imdb, "AT_FIEVEL", {"mastered": "1990-01"}) == []   # not out yet
+    assert core.imdb_initials_named(imdb, "SHREK", {}) == []                        # one word: no initials
+
+
 def test_initials_with_a_film_number(imdb):
     """HP4 = the 4th Harry Potter film: the franchise whose titles start with those initials,
     its films by release year (not look-alikes with a sliver of its votes); runtime has to fit."""

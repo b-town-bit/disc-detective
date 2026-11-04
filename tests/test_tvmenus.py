@@ -344,6 +344,131 @@ def test_a_button_saying_only_deleted_scene_is_the_episodes_above_it():
     assert "under" not in by[8]
 
 
+def test_episode_numbers_in_their_many_writings():
+    for value, numbers, kept in ((5, [5], 5), ("5", [5], 5), ("1-2", [1, 2], "1-2"), ("11 - 12", [11, 12], "11-12"), ("1-E2", [1, 2], "1-2"),
+                                 ("1 & 2", [1, 2], "1-2"), ("1, 2, 3", [1, 2, 3], "1-3"), ("1, 3", [1, 3], "1, 3"), ("1-3", [1, 2, 3], "1-3")):
+        assert core.episode_numbers(value) == numbers, value
+        assert core.episode_value(value) == kept, value
+    for value in (None, "", "x", 0, "0", "2-1", "1-2 + 3 OVA's", "1-1"):
+        assert core.episode_numbers(value) == [], value
+        assert core.episode_value(value) is None, value
+    assert core._ep_code(1, core.episode_numbers("1-2")) == "S01E01-E02"
+
+
+LAST_MAN = ["Pilot", "Last Baby Proofing Standing", "Grandparents Day", "Last Halloween Standing", "Co-Ed Softball"]
+
+
+def test_two_episodes_on_one_button():
+    orders = {"aired": eps(LAST_MAN, runtime=30), "dvd": None}
+    # (Last Man Standing S1 D1's: OCR dropping the slash)
+    for text in ("PILOT LAST BABY PROOFING STANDING", "PILOT / LAST BABY PROOFING STANDING", "Pilot / Last Baby Proofing Standng"):
+        got = core.menu_episodes([reading(text, 2577), reading("GRANDPARENTS DAY", 1293), reading("LAST HALLOWEEN STANDING", 1298)], orders)
+        picks = got["picks"]
+        assert (picks[0]["number"], picks[0]["name"]) == ("1-2", "Pilot / Last Baby Proofing Standing"), text
+        assert (picks[1]["number"], picks[2]["number"]) == (3, 4), text
+    # with its own joining word, and no longer than one (two short episodes in one title)
+    got = core.menu_episodes([reading("Pilot & Last Baby Proofing Standing", 1300), reading("Grandparents Day", 1300)], orders)
+    assert got["picks"][0]["name"] == "Pilot & Last Baby Proofing Standing" and got["picks"][0]["number"] == "1-2"
+
+
+def test_one_name_isnt_two():
+    orders = {"aired": eps(LAST_MAN, runtime=30), "dvd": None}
+    got = core.menu_episodes([reading("Pilot", 1300), reading("Last Baby Proofing Standing", 1300), reading("Grandparents Day", 1300)], orders)
+    assert [got["picks"][i]["number"] for i in range(3)] == [1, 2, 3]
+    # a long name beside a short one: nearly the two together, but it's the one
+    long_short = {"aired": eps(["The Longest Episode Name In All Of The Show", "Up", "Grandparents Day"], runtime=30), "dvd": None}
+    got = core.menu_episodes([reading("The Longest Episode Name In All Of The Show", 1300), reading("Up", 1300), reading("Grandparents Day", 1300)], long_short)
+    assert got["picks"][0]["number"] == 1
+    # not neighbours in the list: not one title's
+    gap = {"aired": eps(["Pilot"]) + eps(["Last Baby Proofing Standing"], first=5), "dvd": None}
+    got = core.menu_episodes([reading("Pilot Last Baby Proofing Standing", 1300)], gap)
+    assert got is None or got["picks"][0]["number"] != "1-5"
+
+
+def test_two_episodes_as_labels_and_the_extras_of_them():
+    picks = {0: {"season": 1, "number": "1-2", "name": "Pilot / Last Baby Proofing Standing", "score": 1, "by": "name"}}
+    tv = {"readings": [dict(title=4, text="PILOT LAST BABY PROOFING STANDING", seconds=2577, bonus=False, kind=None, rect=[0, 0, 9, 9], page=[1, 8, 1])],
+          "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+    found = menus.tv_found(tv, picks)
+    assert menus.found_tv_text(found).startswith("Episode:  title 4  S1E1-2 Pilot / Last Baby Proofing Standing")
+    label = menus.detected_tv_labels(found, [{"id": "Title 4", "role": "episode", "duration": 2577}])["Title 4"]
+    assert (label["type"], label["season"], label["episode"]) == ("Episode", 1, "1-2")
+
+
+def test_a_label_keeps_several_episodes(tmp_path):
+    con = core.library_open(str(tmp_path / "lib.sqlite"))
+    con.execute("INSERT INTO discs (hash, format, label, first_seen, last_seen) VALUES ('h', 'DVD', 'X', '2026', '2026')")
+    core.set_label(con, "h", "Title 4", "Episode", "Pilot / Last Baby Proofing Standing", 1, "1-2")
+    core.set_label(con, "h", "Title 5", "Episode", "Grandparents Day", "1", "3")
+    core.set_label(con, "h", "Title 6", "Episode", "Typed Wrong", 1, "nonsense")
+    got = core.get_labels(con, "h")
+    assert got["Title 4"]["episode"] == "1-2" and got["Title 5"]["episode"] == 3 and got["Title 6"]["episode"] is None
+    assert core.labelled_episodes(got) == {"Title 4": (1, "1-2", "Pilot / Last Baby Proofing Standing"), "Title 5": (1, 3, "Grandparents Day")}
+    con.close()
+
+
+def test_the_names_of_several_episodes(monkeypatch):
+    monkeypatch.setattr(core, "tvmaze_orders", lambda *a, **k: {"aired": eps(LAST_MAN), "dvd": None})
+    assert core.episode_name("tt1", 1, "1-2") == "Pilot / Last Baby Proofing Standing"
+    assert core.episode_name("tt1", 1, 3) == "Grandparents Day"
+
+
+def test_a_name_that_says_its_kind_doesnt_say_it_twice():
+    row = lambda title, text: dict(title=title, text=text, seconds=198, bonus=True, kind=None, page=[6, 20, 1])
+    tv = {"readings": [row(8, "Was It Something I Said? Music Video"), row(7, "Music Video")],
+          "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+    found = menus.tv_found(tv, {})
+    assert [(e["title"], e["name"], e["kind"]) for e in found["extras"]] == [(8, "Was It Something I Said? Music Video", "Music")]
+
+
+def test_a_directors_cut_is_the_episodes_above_it_and_not_the_next_one():
+    # (Psych S8 D2's: its Play All runs on into it, as if it were the next episode)
+    show = {"aired": eps(["Opening Night", "The Lighthouse Keeper", "The Break Up"]), "dvd": None}
+    row = lambda title, text, rect: dict(title=title, text=text, seconds=EPISODE, bonus=False, kind=None, rect=rect, page=[6, 31, 1],
+                                         only_kind=False, only_cut=bool(menus.CUT_ALONE_RE.search(text)), place=[2, title])
+    readings = [row(15, "1. Opening Night", [164, 107, 351, 253]), row(16, "2. The Lighthouse Keeper", [372, 107, 574, 253]),
+                row(17, "Director's Cut", [398, 303, 536, 339])]
+    readings = core.menu_play_order(readings, {"order": [15, 16, 17], "seconds": [EPISODE] * 3})
+    got = core.menu_episodes(readings, show, 1)
+    assert sorted(p["number"] for p in got["picks"].values()) == [1, 2]     # (not 3: The Break Up isn't here)
+    tv = {"readings": readings, "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+    found = menus.tv_found(tv, got["picks"])
+    assert sorted(e["title"] for e in found["episodes"]) == [15, 16]
+    assert [(e["title"], e["name"], e["episode"]) for e in found["extras"]] == [(17, "The Lighthouse Keeper - Director's Cut", 2)]
+    labels = menus.detected_tv_labels(found, [{"id": "Title %d" % n, "role": "episode", "duration": EPISODE} for n in (15, 16, 17)])
+    assert labels["Title 17"]["type"] == "Extra" and labels["Title 17"]["season"] == 1 and labels["Title 17"]["place"] == [2, 17]
+    for text in ("Director's Cut", "DIRECTORS CUT", "Extended Cut", "Extended Version", "Unrated", "Alternate Cut", "Extended Episode"):
+        assert menus.CUT_ALONE_RE.search(text), text
+    for text in ("The Final Cut", "Cut to the Chase", "Extended Scene", "Extended Version Video Commentary", "The Director's Cut of Doom"):
+        assert not menus.CUT_ALONE_RE.search(text), text
+
+
+def mk_log(*titles):
+    """MakeMKV's robot output: (index, DVD title, seconds)."""
+    lines = ['CINFO:2,0,"X"', 'MSG:4004,0,0,"The source file is corrupt","","",""',
+             'MSG:2003,0,0,"Error MEDIUM ERROR","",""']
+    for i, n, s in titles:
+        lines += ['TINFO:%d,9,0,"%d:%02d:%02d"' % (i, s // 3600, s // 60 % 60, s % 60), 'TINFO:%d,24,0,"%d"' % (i, n)]
+    return "\n".join(lines)
+
+
+def test_the_lab_notices_a_title_read_short():
+    # (Galavant S2's scratched episode: 66 seconds of 21:27)
+    scan = [{"id": "Title 2", "role": "episode", "duration": 1290}, {"id": "Title 7", "role": "episode", "duration": 1287},
+            {"id": "Title 8", "role": "episode", "duration": 1283}]
+    log = mk_log((0, 2, 1290), (1, 7, 1221), (2, 8, 1264))
+    assert core.lab_short_titles(log, scan, "DVD") == [{"id": "Title 7", "seconds": 66, "length": 1287}]
+    # the usual: a film a few seconds short at its end, however long (WALL-E's 58 of 98 minutes);
+    # MakeMKV's error messages alone say nothing, as on the protected discs that rip fine
+    assert core.lab_short_titles(mk_log((0, 1, 5835)), [{"id": "Title 1", "role": "feature", "duration": 5893}], "DVD") == []
+    assert core.lab_short_titles(mk_log((0, 1, 80)), [{"id": "Title 1", "role": "extra", "duration": 100}], "DVD") == []
+    # copies and play-alls follow what they hold: only the title itself is said
+    for role in ("duplicate", "play-all", "junk"):
+        assert core.lab_short_titles(log, [{"id": "Title 7", "role": role, "duration": 1287}], "DVD") == []
+    # no reading, no word
+    assert core.lab_short_titles("", scan, "DVD") == []
+
+
 def test_a_page_of_video_commentaries():
     # (the Bonus Features page's way to them: each button says only whose it is)
     out = {"pages": [
