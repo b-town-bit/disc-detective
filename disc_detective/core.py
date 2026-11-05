@@ -1062,6 +1062,8 @@ def dvd_text_name(vts_dir):
 
 def parse_bluray(bdmv):
     titles = []
+    from .makemkv import clear_own_playlists
+    clear_own_playlists(os.path.dirname(os.path.abspath(bdmv)))      # (left by a rip that never finished)
     pl_dir = find_child(bdmv, "PLAYLIST")
     clip_dir = find_child(bdmv, "CLIPINF")
     aspects = {}
@@ -7717,8 +7719,10 @@ def map_makemkv(mk_titles, our_titles, fmt):
                 key = m["source"]
             elif m["source"].lower().endswith(".m2ts"):
                 clip = m["source"][:-5]
+                # (short ones too: asked for with no minimum length, a short extra's playlist is
+                # listed as its stream file, and its length alone couldn't tell it from the others)
                 single = [t for t in our_titles if (t.get("clips") or "") == clip
-                          and t["role"] not in ("junk", "loop") and t["title_id"] not in used]
+                          and t["role"] != "loop" and t["title_id"] not in used]
                 key = single[0]["title_id"] if single else None
         elif fmt == "DVD" and m["dvd_title"]:
             key = "Title %d" % m["dvd_title"] if ("Title %d" % m["dvd_title"]) in ours else None

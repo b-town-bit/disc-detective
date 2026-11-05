@@ -33,6 +33,8 @@ from tkinter import font as tkfont
 
 from . import core as di
 from . import i18n
+from . import makemkv
+from .makemkv import MAKEMKV_SWITCHES, NO_MINIMUM, makemkv_source
 from . import theme as th
 
 APP = "Disc Detective"
@@ -183,21 +185,6 @@ def save_settings(d):
 # --------------------------------------------------------------------------
 # MakeMKV
 # --------------------------------------------------------------------------
-
-# MakeMKV's switches for every run: robot output, and --noscan: it opens only the drive it's
-# given, not every drive in the machine (a sensitive drive left alone while another is read)
-MAKEMKV_SWITCHES = ["-r", "--noscan", "--cache=1"]
-
-
-def makemkv_source(drive):
-    """MakeMKV's name for the disc: the drive by its own name ("dev:E:"), or a backup folder."""
-    d = drive.rstrip("\\/")
-    if re.fullmatch(r"[A-Za-z]:", d):
-        return "dev:%s" % d.upper()
-    if os.name != "nt" and d.startswith("/dev/"):
-        return "dev:%s" % d
-    return "file:%s" % os.path.abspath(drive)
-
 
 EXTRA_FOLDERS = {"Featurette": "Featurettes", "DeletedScene": "Deleted Scenes", "Trailer": "Trailers",
                  "Interview": "Interviews", "BehindTheScenes": "Behind The Scenes", "Short": "Shorts",
@@ -1103,7 +1090,7 @@ class App:
         self._watch_asking = False    # (the watcher's question to the drive, not answered yet)
         self._case_serial = None      # the case's disc's volume serial number, as the drive first said it
         self.detecting = False        # Detect titles under way
-        self.proc = None
+        self.mkv = None                # the rip under way, in MakeMKV's hands
         self.cancelled = False
         self.busy = False
         self.credits_asked = set()       # films whose credits were asked for this session (fetch_credits)
@@ -3250,7 +3237,8 @@ class App:
         self.run_bg(self._rip_worker, exe, self.source.get(), out, self.rep, opts)
 
     def _rip_worker(self, exe, drive, out, rep, opts):
-        plan = []
+        plan, undo = [], None
+        self.mkv = makemkv.Rip(exe, lambda: self.cancelled)
         try:
             # MakeMKV's title list: read once per disc and kept (a confirmed disc's was read in the
             # background, maybe still being read: wait for it rather than read it twice)
@@ -3264,23 +3252,56 @@ class App:
                         return
             source = makemkv_source(drive)
             store = di.makemkv_log_store(rep["content_hash"])        # reused by --packet later
-            mk = {"titles": []}
+            mk, reading = {"titles": []}, ""
             if os.path.exists(store):
                 with open(store, encoding="utf-8", errors="replace") as fh:
-                    mk = di.parse_makemkv_log(fh.read())
+                    reading = fh.read()
+                mk = di.parse_makemkv_log(reading)
                 if mk["titles"]:
                     di.logger.info("using MakeMKV's saved reading of the disc")
             if not mk["titles"]:
-                info = subprocess.run([exe, *MAKEMKV_SWITCHES, "info", source], capture_output=True, text=True,
-                                      encoding="utf-8", errors="replace", timeout=900,
-                                      creationflags=NO_WINDOW).stdout
-                mk = di.parse_makemkv_log(info)
-                if not mk["titles"]:
-                    raise RuntimeError("MakeMKV found no titles on %s" % source)
+                reading = self.mkv.read_titles(source)
+                mk = di.parse_makemkv_log(reading)
                 os.makedirs(os.path.dirname(store), exist_ok=True)
                 with open(store, "w", encoding="utf-8", newline="") as fh:
-                    fh.write(info)
+                    fh.write(reading)
             plan = self.current_plan(mk["titles"], extras=opts["extras"], selected=opts["selected"])
+            # what you asked for, by the disc's own list: one MakeMKV's minimum length may have hid
+            # (its default's 2 minutes, but it can be set higher) is worth reading the disc again with
+            # no minimum for this rip (not saved: packets keep the reading they had, and a rip that
+            # needs none pays nothing)
+            wanted = {p["title_id"] for p in self.current_plan(preview_titles(rep), extras=opts["extras"], selected=opts["selected"])}
+            switches = ()
+            if wanted - {p["title_id"] for p in plan}:
+                di.logger.info("titles asked for that MakeMKV's reading leaves out: reading it with no minimum length")
+                self.post(self.set_status, "Examining the disc again for the missing evidence…")
+                switches = NO_MINIMUM
+                reading = self.mkv.read_titles(source, switches)
+                plan = self.current_plan(di.parse_makemkv_log(reading)["titles"], extras=opts["extras"], selected=opts["selected"])
+            missing = wanted - {p["title_id"] for p in plan}
+            self.rip_problem = None
+            own = {}                       # our playlists, once there are any: {its file: the title}
+            if missing and not self.cancelled:
+                try:
+                    sting = self.mkv.sting(drive, missing, lambda: self.post(self.set_status, "Setting up a sting…"))
+                    if sting:
+                        source, own, undo = sting
+                        reading = self.mkv.read_titles(source, switches)     # (no minimum: already so, to get here)
+                        plan = self.current_plan(makemkv.named_titles(reading, own), extras=opts["extras"], selected=opts["selected"])
+                        missing = wanted - {p["title_id"] for p in plan}
+                except makemkv.STING_ERRORS as exc:
+                    # the rest of the rip goes ahead without them, from the disc as it was
+                    di.logger.warning("the sting fell through: %s", exc)
+                    if undo:
+                        undo()
+                        undo = None
+                    source, own = makemkv_source(drive), {}
+                    if not self.cancelled:
+                        self.rip_problem = "The sting fell through: %s" % exc
+            if missing:                    # (the outcome says so: fewer ripped than asked for)
+                di.logger.warning("MakeMKV doesn't list these, so they can't be ripped: %s", ", ".join(sorted(missing)))
+            expected = makemkv.makemkv_added(reading)
+            numbers = None                 # once re-read: which number each title has now
             di.logger.info("rip %s from %s (%s) into %s: %d titles", rep["content_hash"][:8], drive, source, out, len(plan))
             ripping = {item["title_id"] for item in plan}
             self.rip_short = [s for s in self.lab_short(rep) if s["id"] in ripping]
@@ -3294,11 +3315,35 @@ class App:
             for i, item in enumerate(plan):
                 if self.cancelled:
                     break
+                number = item["mk"] if numbers is None else numbers.get(item["title_id"])
+                if number is None:
+                    di.logger.warning("MakeMKV doesn't list %s now: not ripped", item["title_id"])
+                    continue
                 self.post(self.set_status, "Bagging the evidence, %d of %d: %s" % (i + 1, len(plan), item["dest"].split("/")[-1]))
                 work = os.path.join(out, ".ripping_%s_%d" % (rep["content_hash"][:8], item["mk"]))
                 shutil.rmtree(work, ignore_errors=True)
                 os.makedirs(work)
-                ok = self._run_mkv(exe, source, item["mk"], work, i, len(plan))
+                progress = lambda fraction, i=i: self.post(self.progress.configure, {"value": int(1000 * (i + fraction) / len(plan))})
+                ok = self.mkv.title(source, number, work, expected, switches, progress)
+                if self.mkv.numbers_changed and numbers is None and not self.cancelled:
+                    # numbered differently from the reading the plan used (MakeMKV's minimum title
+                    # length changed, or this is a backup of the disc read): read it again, once, and
+                    # ask for the same titles by their new numbers. The saved reading stays as it
+                    # was: packets use it. A second difference stops the title rather than guess.
+                    di.logger.warning("MakeMKV numbers this disc's titles differently from its saved reading: reading it again")
+                    self.post(self.set_status, "The lab's numbering changed: examining the disc again…")
+                    fresh = self.mkv.read_titles(source, switches)
+                    expected = makemkv.makemkv_added(fresh)
+                    again = self.current_plan(makemkv.named_titles(fresh, own), extras=opts["extras"], selected=opts["selected"])
+                    numbers = {p["title_id"]: p["mk"] for p in again}
+                    number = numbers.get(item["title_id"])
+                    if number is None:
+                        di.logger.warning("MakeMKV doesn't list %s now: not ripped", item["title_id"])
+                    else:
+                        shutil.rmtree(work, ignore_errors=True)
+                        os.makedirs(work)
+                        self.post(self.set_status, "Bagging the evidence, %d of %d: %s" % (i + 1, len(plan), item["dest"].split("/")[-1]))
+                        ok = self.mkv.title(source, number, work, expected, switches, progress)
                 files = [f for f in os.listdir(work) if f.lower().endswith(".mkv")]
                 if ok and files and not self.cancelled:
                     dest = rip_path(os.path.join(out, *item["dest"].split("/")), item, rep)
@@ -3307,44 +3352,29 @@ class App:
                     done.append(dest)
                     di.logger.info("  ripped %s", dest)
                 elif not self.cancelled:
-                    di.logger.warning("MakeMKV title %s did not rip (%s)", item["mk"],
+                    di.logger.warning("MakeMKV title %s did not rip (%s)", number,
+                                      "numbered differently from the reading" if self.mkv.numbers_changed else
                                       "no file written" if ok else "MakeMKV reported a failure")
+                    if self.mkv.problem:
+                        self.rip_problem = "MakeMKV says: %s" % self.mkv.problem
                     if self.disc_gone(drive):     # (taken out mid-rip: the rest would only fail too)
                         shutil.rmtree(work, ignore_errors=True)
                         di.logger.info("the disc was removed: rip aborted")
                         self.post(self.rip_done, done, len(plan), None, True)
                         return
                 shutil.rmtree(work, ignore_errors=True)
-            di.logger.info("rip finished: %d of %d titles%s", len(done), len(plan), " (cancelled)" if self.cancelled else "")
-            self.post(self.rip_done, done, len(plan), None)
+            di.logger.info("rip finished: %d of %d titles%s", len(done), len(plan) + len(missing), " (cancelled)" if self.cancelled else "")
+            self.post(self.rip_done, done, len(plan) + len(missing), None)
         except Exception as exc:
             di.logger.exception("rip failed")
             gone = self.disc_gone(drive)
             self.post(self.rip_done, [], len(plan), "%s: %s" % (type(exc).__name__, exc), gone)
-
-    def _run_mkv(self, exe, source, idx, work, n, total):
-        cmd = [exe, *MAKEMKV_SWITCHES, "--progress=-same", "mkv", source, str(idx), work]
-        di.logger.info("  run: %s", subprocess.list2cmdline(cmd))
-        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                     encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
-        ok = False
-        for line in self.proc.stdout:
-            if line.startswith("PRGV:"):
+        finally:
+            if undo:
                 try:
-                    cur, tot, mx = (int(x) for x in line[5:].split(","))
-                    frac = (tot / mx) if mx else 0
-                    self.post(self.progress.configure, {"value": int(1000 * (n + frac) / total)})
-                except ValueError:
-                    pass
-            elif line.startswith("MSG:"):
-                di.logger.info("  makemkv: %s", line.strip()[4:])   # MakeMKV's own messages, for the record
-                if re.search(r'"Copy complete|titles saved', line):
-                    ok = True
-        self.proc.wait()
-        rc, self.proc = self.proc.returncode, None
-        if rc and not ok:
-            di.logger.warning("makemkvcon exited with code %s", rc)
-        return ok or rc == 0
+                    undo()
+                except OSError as exc:
+                    di.logger.warning("couldn't clean up after the sting: %s", exc)
 
     def rip_done(self, done, planned, err, gone=False):
         """The rip's outcome, in the footer: green, all ripped; amber, called off or some didn't
@@ -3362,6 +3392,8 @@ class App:
             messagebox.showerror(APP, err + "\n\nDetails are in errors.log (Open logs folder, at the bottom of the window).")
         elif self.cancelled:
             self.set_outcome("Rip called off after %d of %d titles" % (len(done), planned), th.AMBER_DOT)
+        elif len(done) < planned and getattr(self, "rip_problem", None):
+            self.set_outcome("%d of %d titles ripped. %s" % (len(done), planned, self.rip_problem), th.AMBER_DOT)
         elif len(done) < planned:
             self.set_outcome("Evidence bagged: %d of %d titles ripped (details in the logs)" % (len(done), planned),
                              th.AMBER_DOT)
@@ -3374,8 +3406,8 @@ class App:
 
     def cancel(self):
         self.cancelled = True
-        if self.proc:
-            self.proc.terminate()
+        if self.mkv:
+            self.mkv.stop()
         self.set_status("Cancelling…")
 
     def on_close(self):
