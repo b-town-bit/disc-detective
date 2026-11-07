@@ -33,6 +33,11 @@ in `tests/data/tvmaze.json` is TVmaze data under the same license.
 Images are converted with [Pillow](https://python-pillow.org) (MIT-CMU license), installed
 as a dependency. ffmpeg is used instead if Pillow is missing.
 
+## RapidOCR
+Disc menus are read with [RapidOCR](https://github.com/RapidAI/RapidOCR) (Apache-2.0), using
+PaddleOCR's models on [ONNX Runtime](https://onnxruntime.ai) (MIT) and
+[OpenCV](https://opencv.org) (Apache-2.0), installed as dependencies.
+
 ## TMDB (optional)
 With a TMDB key, posters and a fallback search come from [TMDB](https://www.themoviedb.org).
 

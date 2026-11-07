@@ -378,8 +378,8 @@ def _note_sure(text, sure):
 
 def rapid_text(image):
     """What RapidOCR (PaddleOCR's models, on onnxruntime) reads in a picture: its lines, top to
-    bottom, joined; None when it isn't installed (pip install "disc-detective[rapid-ocr]"; its
-    runtime needs Python 3.14 or older for now: a packaged release brings its own). Tuned on menus
+    bottom, joined; None when it can't be had (its runtime needs Python 3.14 or older for now: a
+    packaged release brings its own; or its models couldn't be fetched). Tuned on menus
     (temp/fair_ocr_bench.py): the picture as it is (colour, its own size: enlarged it reads junk
     into the margins), text found first (PP-OCRv6 small) without scaling small pictures up (its
     default, 736 px at least: 6-9 times slower), read by the English PP-OCRv5 model. Against your
@@ -1483,6 +1483,13 @@ class Vlc:
     def press(self, key):
         self.lib.libvlc_media_player_navigate(self.mp, NAV[key])
 
+    def length_ms(self):
+        """The length of what's playing (a Blu-ray's title: VLC's list has few of them)."""
+        L = self.lib
+        L.libvlc_media_player_get_length.restype = ctypes.c_longlong
+        L.libvlc_media_player_get_length.argtypes = [ctypes.c_void_p]
+        return L.libvlc_media_player_get_length(self.mp)
+
     def menu(self):
         """VLC's DVD Menu (its menu title): the disc's menu, from a title playing."""
         self.lib.libvlc_media_player_set_title(self.mp, 0)
@@ -1759,6 +1766,16 @@ class Lost(Exception):
     """The crawl couldn't tell where it is in the menus."""
 
 
+class NoReader(Lost):
+    """Nothing to read the menus with: a Blu-ray's crawl goes by RapidOCR's lines and their places."""
+
+
+def rapid_missing():
+    """Whether RapidOCR can't read anything here: not installed, or its models couldn't be had."""
+    from PIL import Image
+    return rapid_lines(Image.new("RGB", (64, 64))) is None
+
+
 def _pages(structure):
     out = {("vmgm", p["pgc"]): p for p in structure["vmgm"]}
     for vts, pages in structure["vtsm"].items():
@@ -1901,12 +1918,111 @@ def _scene_page(structure, pages, page, known=None):
 # and the way back; and ads, by core.AD_RE ("Sneak Peeks", "Previews"). A film's own trailer
 # ("theatrical trailer") is an extra, so it isn't one. Words only order the search (_search_rank):
 # what's skipped is skipped for its titles.
+# text that points off the disc: something.com, www.something
+WEB_ADDRESS = r"www\.|[\w-]+\.(?:com|net|org|tv|co\.uk)"
 SKIP_RE = re.compile(r"\b(set ?up|settings|options|languages?|audio|subtitles?|captions|commentar\w*|"
-                     r"scenes?|scene selection|chapters?|main ?menu|register\w*|dvd-?rom|web ?links?|"
+                     r"scenes?|scene selection|chapters?|main ?menu|register\w*|dvd-?rom|web ?links?|" + WEB_ADDRESS + "|"
                      # pages of stills to flip through, nothing that plays (Muppets from Space's
                      # "Talent Files": 9 pages of cast bios)
                      r"talent files?|character files?|cast (and|&) crew|biograph\w*|filmograph\w*|production notes|"
                      r"photo galler\w*|galler(y|ies)|stills|dvd credits)\b", re.I)
+
+
+# what points off the disc, no title's: an address, computer features, a line that's only "Online"
+LINK = re.compile(r"\b(?:%s)|\b(?:dvd|bd)[- ]?rom\b|^\W*online(?:\s+features?)?\W*$" % WEB_ADDRESS, re.I)
+HEADING_SIGNS = 2                 # signs a line must have to be taken for its page's heading
+HEADING_TALLER = 1.2              # that much taller than the page's usual line
+HEADING_COLOUR = 60               # how far from the page's usual line's colour (red + green + blue)
+SECTION_WORDS = 4                 # at most, for a line's own words to count towards its being a heading
+
+
+def line_colour(frame, box):
+    """A line's average colour on the page, its lettering and what's behind it; None without a picture."""
+    try:
+        return frame.convert("RGB").crop(tuple(int(x) for x in box)).resize((1, 1)).getpixel((0, 0))
+    except (AttributeError, ValueError, OSError):
+        return None
+
+
+def heading_signs(line, others, frame):
+    """What says a line is its page's heading, each no proof by itself: taller than the page's other
+    lines; nothing over it in its column; and a colour of its own. {"taller", "top", "colour"}."""
+    text, box, _ = line
+    signs = set()
+    height = lambda b: b[3] - b[1]
+    middle = lambda values: sorted(values)[len(values) // 2]
+    if others and height(box) >= HEADING_TALLER * middle([height(o[1]) for o in others]):
+        signs.add("taller")
+    if not any(o[1][1] < box[1] - 3 and o[1][0] < box[2] and o[1][2] > box[0] for o in others):
+        signs.add("top")
+    own = line_colour(frame, box)
+    theirs = [c for c in (line_colour(frame, o[1]) for o in others) if c]
+    if own and theirs:
+        usual = [middle([c[i] for c in theirs]) for i in range(3)]
+        if sum(abs(own[i] - usual[i]) for i in range(3)) >= HEADING_COLOUR:
+            signs.add("colour")
+    return signs
+
+
+def best_heading(free, page, frame=None):
+    """Of the lines that could be a page's heading, the one with the most signs, at least two, the
+    higher if level; else None. page: all its lines, to compare with."""
+    scored = [(len(heading_signs(l, [o for o in page if o is not l], frame)), -l[1][1], l[0]) for l in free]
+    best = max(scored, default=None)
+    return best[2] if best and best[0] >= HEADING_SIGNS else None
+
+
+def several_headings(free, page, frame=None, names=()):
+    """Whether a page has more than one heading, one naming a type, so no one type for it all: of the
+    lines free of its buttons that stand out like a heading, a type's name in a few words being one more
+    sign. A link off the disc counts whatever it looks like (Chuck's "ONLINE"). Not a button's own words,
+    its box only a marker beside them (names: the buttons' readings; Spider-Man's TRAILERS, Rush Hour
+    3's THEATRICAL TRAILER)."""
+    letters = lambda text: re.sub(r"[^a-z]", "", (text or "").lower())
+    readings = [letters(n) for n in names]
+
+    def heading(line):
+        if letters(line[0]) and any(letters(line[0]) in r for r in readings):
+            return False
+        others = [o for o in page if o is not line]
+        named = len(line[0].split()) <= SECTION_WORDS and heading_kind(line[0])
+        return len(heading_signs(line, others, frame)) + bool(named) >= HEADING_SIGNS
+    found = [l[0] for l in free if LINK.search(l[0]) or heading(l)]
+    return len(found) >= 2 and any(heading_kind(t) for t in found)
+
+
+def page_headings(image, rects, size=(720, 480), names=()):
+    """A DVD page's heading by its signs (best_heading), the line alone or None, and whether it has
+    several (several_headings): of its lines outside its buttons (rects, in the frame's pixels), above
+    the bottom quarter. The heading's no link off the disc."""
+    from PIL import Image
+    lines = _page_lines(image)
+    if not lines:
+        return None, False
+    sx, sy = image.width / size[0], image.height / size[1]
+    lines = [(t, (b[0] / sx, b[1] / sy, b[2] / sx, b[3] / sy), s) for t, b, s in lines]
+
+    def in_button(box):
+        x, y = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+        return any(r[0] <= x <= r[2] and r[1] <= y <= r[3] for r in rects)
+    page = [l for l in lines if l[1][1] < size[1] * 0.75]
+    free = [l for l in page if not in_button(l[1])]
+    same = image if image.size == size else image.convert("RGB").resize(size, Image.LANCZOS)
+    return best_heading([l for l in free if not LINK.search(l[0])], page, same), several_headings(free, page, same, names)
+
+
+def page_heading_line(image, rects, size=(720, 480)):
+    """A DVD page's heading by its signs, the line alone, or None (page_headings)."""
+    return page_headings(image, rects, size)[0]
+
+
+def page_kind(page):
+    """The type a page's heading gives its titles: by the line its signs pick out, else by all the
+    words outside its buttons (a heading no taller than the rest, on a page of plain lettering). None
+    for a page of several headings: which titles go under which is the user's to say."""
+    if page.get("mixed"):
+        return None
+    return heading_kind(page.get("heading_line")) or heading_kind(page.get("heading"))
 
 
 # (a stray letter before it: OCR of the lettering's backdrop, "i play")
@@ -2272,6 +2388,8 @@ class _Crawler:
         self.texts = {}                         # {state: {button: text}}, read (see words())
         self.reading = {}                       # {state: {button: OCR under way}}: the pages visited
         self.headings = {}                      # {state: the words outside the buttons}, read
+        self.heading_lines = {}
+        self.mixed_pages = {}
         self.finished = {}                      # {state: its words, read every way it takes (_finish)}
         self.spent = {}                         # {what: seconds}, for the log (timed())
         self.overlay = {}                       # {state: whether its words are in its subpicture}
@@ -2961,7 +3079,8 @@ class _Crawler:
             got = plate_words(bare if bare is not None and not overlay else f1, rects, only=weak)
             words = {n: _plate_or(t, got.get(next(i for i, b in enumerate(btns) if b["n"] == n)))
                      for n, t in words.items()}
-        return {"words": words, "heading": head, "overlay": overlay}
+        line, mixed = page_headings(bare if bare is not None and not overlay else f1, rects, names=words.values())
+        return {"words": words, "heading": head, "heading_line": line, "mixed": mixed, "overlay": overlay}
 
     def word_now(self, st, n):
         """A button's words if they've been read already, else "" (without waiting for them): as
@@ -2993,7 +3112,19 @@ class _Crawler:
             self.timed("waiting for words", t0)
             self.texts[st], self.overlay[st] = got["words"], got["overlay"]
             self.headings[st] = got["heading"]
+            self.heading_lines[st] = got.get("heading_line")
+            self.mixed_pages[st] = bool(got.get("mixed"))
         return self.texts.get(st, {})
+
+    def heading_line(self, st):
+        """The line a page's signs pick out for its heading (page_heading_line), or None."""
+        self.words(st)
+        return self.heading_lines.get(st)
+
+    def mixed(self, st):
+        """Whether a page has several headings (several_headings)."""
+        self.words(st)
+        return self.mixed_pages.get(st, False)
 
     def heading(self, st):
         """A page's words outside its buttons (page_text), or "" for a page not read."""
@@ -3416,7 +3547,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
         page = {"domain": s[0], "page": s[1], "program": s[2],
                 "image": "page_%s_%d_%d.png" % s if s in c.reading else None,
                 "passed_by": None if s in c.reading else passed_by(s),
-                "heading": c.heading(s),
+                "heading": c.heading(s), "heading_line": c.heading_line(s), "mixed": c.mixed(s),
                 "route": [{"page": x[1], "program": x[2], "button": n} for x, n in routes[s]], "buttons": []}
         for b in _state_buttons(pages, s):
             e = {"n": b["n"], "rect": b["rect"], "cmd": b["cmd"], "text": c.words(s).get(b["n"], "")}
@@ -3593,8 +3724,8 @@ def menu_titles(out):
         # Iron Giant's deleted scenes: no heading to read, a "Deleted Scenes" button, then "Next");
         # up to a button back to a hub, which says nothing of the kinds it holds (WALL-E's Bonus
         # Features page, reached back from its Deleted Scenes page: not deleted scenes)
-        kind = heading_kind(p.get("heading"))
-        for w in reversed(way):
+        kind = page_kind(p)
+        for w in reversed([] if p.get("mixed") else way):
             if kind or HUB_RE.search(w) or MAIN_MENU_RE.search(w):
                 break
             kind = heading_kind(w)
@@ -3695,7 +3826,8 @@ def menu_titles(out):
         # _wordy, made for Tesseract's junk, takes "xXx", Spider-Man's trailer, for junk)
         named = re.search(r"[A-Za-z]{2}", text) if out.get("reader") == "rapidocr" else _wordy(text) > 0
         name = nice_name(_unicon(LISTED_RE.sub("", text), icons)) if named and not _nav_only(text) else ""
-        kind = next((x["kind"] for x in xs if x.get("kind")), None)
+        # (or its own button says: Jurassic World's "Deleted Scenes", on a page saying nothing)
+        kind = next((x["kind"] for x in xs if x.get("kind")), None) or heading_kind(name)
         other = all(x.get("other") for x in xs)     # (only by another route: a commentary version?)
         if other and name:
             name += " (another version)"
@@ -4153,6 +4285,41 @@ def _two_versions(p):
     return two
 
 
+# a name giving a scene's number: "Sc. 8-10", "Sc. 12,13", "Sc. B 29-30", "Scene 4". With a link to an
+# episode too, that's a deleted scene (the word "scene" by itself says nothing: a page of "Scenes" may
+# be the film's chapters). Outtakes are bloopers, plain extras. The Scene type (a single shot or moment
+# of the film) is left to be chosen by hand
+SCENE_NUMBER_RE = re.compile(r"\b(?:sc[.,]?|scene)\s*(?:[a-z]\s+)?\d", re.I)         # (a comma: "Sc. 44" misread, Chuck S2 D3)
+NOT_A_SCENE_RE = re.compile(r"\bout-?takes?\b|\bbloopers?\b|\bgag\s*reels?\b|\bcommentar\w*", re.I)
+
+
+def numbered_scene(text):
+    """Whether a name gives a scene's number, and isn't something else with one."""
+    return bool(text and SCENE_NUMBER_RE.search(text) and not NOT_A_SCENE_RE.search(text))
+
+
+def _episode_opening(words, episodes):
+    """The episode a scene's name opens with, and the rest of its name ("Chuck Versus the Fat Lady
+    Sc. 8-10 - Chuck with Jill": that episode, "Sc. 8-10 - Chuck with Jill"), or None; none either
+    when two fit as well, or nothing's left of the name. It has to end as the episode's name ends:
+    "Chuck Versus the" is most of "Chuck Versus the Ex", and no more that one's than any other's."""
+    from . import core
+    ratio = lambda a, b: difflib.SequenceMatcher(None, a, b).ratio()
+    ends = [m.end() for m in re.finditer(r"\S+", words or "")]
+    last = lambda text: core._menu_key((text.split() or [""])[-1])
+    scored = []
+    for e in episodes:
+        n = core._menu_key(e["name"])
+        score, end = max(((ratio(core._menu_key(words[:i]), n), i) for i in ends
+                          if ratio(last(words[:i]), last(e["name"])) >= 0.6), default=(0, 0))
+        scored.append((score, end, e))
+    scored.sort(key=lambda x: -x[0])
+    if not scored or scored[0][0] < 0.85 or (len(scored) > 1 and scored[1][0] >= scored[0][0] - 0.02):
+        return None
+    rest = words[scored[0][1]:].lstrip(" -\u2013\u2014:,.")
+    return (scored[0][2], rest) if rest else None
+
+
 def _episode_above(r, placed):
     """The episode a button sits under on its page ("Video Commentary", its words naming nothing):
     the nearest above it that it shares the most width with. placed: [(reading, pick)]."""
@@ -4190,8 +4357,8 @@ def tv_titles(out):
         on_way = [(s[0], r["page"], r["program"]) for r in p["route"]]
         way = [words.get((x, r["button"]), "") for x, r in zip(on_way, p["route"])]
         via = " ".join(way + [p.get("heading") or ""])
-        kind = heading_kind(p.get("heading"))
-        for w in reversed(way):
+        kind = page_kind(p)
+        for w in reversed([] if p.get("mixed") else way):
             if kind or HUB_RE.search(w) or MAIN_MENU_RE.search(w):
                 break
             kind = heading_kind(w)
@@ -4238,7 +4405,15 @@ def tv_titles(out):
             versions.append(_two_versions(p))
     offered = set(seen) | set(promos)
     play_alls = sorted(set(runs) - offered)
-    return {"readings": list(seen.values()), "promos": promos, "promo_names": promo_names,
+    # every title any button plays, read or not: only the rest aren't in the menus (Psych's bonus
+    # pages' buttons, their words unread, play real extras)
+    played = set()
+    for p in pages.values():
+        for b in p["buttons"]:
+            got = b.get("plays") or scene_title(p["domain"], b.get("goes_to"))
+            if got:
+                played.update([got["title"]] + list(got.get("after") or []) + [o["title"] for o in got.get("others") or []])
+    return {"readings": list(seen.values()), "promos": promos, "promo_names": promo_names, "played": sorted(played),
             "play_alls": play_alls, "commentary_versions": [v for v in versions if v],
             "opening": [t for t in out.get("opening") or [] if t not in offered and t not in play_alls]}
 
@@ -4283,10 +4458,15 @@ def tv_found(tv, picks=None):
                                                     (longest and (r["seconds"] or 0) < 0.5 * longest)):
             extras.append({"title": r["title"], "name": nice_name(LISTED_RE.sub("", r["text"])),
                            "seconds": r["seconds"], "kind": r.get("kind") or heading_kind(r["text"])})
+            if r.get("own_name"):             # (a whole page of an episode's scenes: each says which)
+                extras[-1]["own_name"] = True
             if r.get("place"):
                 extras[-1]["place"] = r["place"]
+            # (the disc's own files say whose)
+            if r.get("of_episode") is not None:
+                extras[-1]["under"] = next((p for p in picks.values() if p["number"] == r["of_episode"]), None)
             # a button saying only that it's a deleted scene: the episode it sits under's (Psych S1 D3's)
-            if r.get("only_kind") and extras[-1]["kind"] == "DeletedScene" and r.get("rect"):
+            elif r.get("only_kind") and extras[-1]["kind"] == "DeletedScene" and r.get("rect"):
                 extras[-1]["under"] = _episode_above(r, placed)
             said = VIDEO_COMMENTARY_RE.search(r["text"])
             # whose: the words before it ("Shawn and the Real Girl Video Commentary with Writer Andy
@@ -4319,6 +4499,14 @@ def tv_found(tv, picks=None):
             extras.remove(bare)
     # a deleted scene whose words name one of this disc's episodes: that episode's, named for it
     for e in extras:
+        # (a page of them, each saying whose, whatever they are: that's its episode, the rest its name)
+        # (only its kind left: "Pilot Deleted Scene", named for its episode below)
+        opening = _episode_opening(e["name"], episodes) if not e.get("episode") else None
+        if opening and not _kind_alone(opening[1]):
+            e.pop("under", None)
+            e.update(season=opening[0]["season"], episode=opening[0]["episode"], name=opening[1],
+                     kind=e["kind"] or ("DeletedScene" if numbered_scene(opening[1]) else None))
+            continue
         if e["kind"] == "DeletedScene":
             said = re.search(DELETED_WORDS, e["name"], re.I)
             ep = _episode_named(re.sub(DELETED_WORDS, " ", e["name"], flags=re.I), episodes)
@@ -4326,10 +4514,14 @@ def tv_found(tv, picks=None):
             if not ep and under:
                 ep = {"season": under["season"], "episode": under["number"], "name": under["name"]}
             if ep:
-                e.update(season=ep["season"], episode=ep["episode"], name="%s %s" % (
-                    ep["name"], nice_name(said.group(0)) if said else "Deleted Scene"))
-    return dict({k: tv.get(k) for k in ("promos", "promo_names", "play_alls", "opening")},
+                e.update(season=ep["season"], episode=ep["episode"])
+                if not e.get("own_name"):
+                    e["name"] = "%s %s" % (ep["name"], nice_name(said.group(0)) if said else "Deleted Scene")
+    return dict({k: tv.get(k) for k in ("promos", "promo_names", "play_alls", "opening", "played")},
                 tv=True, episodes=episodes, extras=extras)
+
+
+NOT_IN_MENUS = "not in the disc's menus"
 
 
 def detected_tv_labels(found, titles, keep=()):
@@ -4338,12 +4530,15 @@ def detected_tv_labels(found, titles, keep=()):
     film's disc: a TV disc's own episodes may have no button). Titles in keep (your labels,
     TheDiscDB's names) and those the scan sets aside as copies are left be."""
     out = {}
-    episodes = {"Title %d" % e["title"]: e for e in found.get("episodes") or []}
-    extras = {"Title %d" % e["title"]: e for e in found.get("extras") or []}
+    name = lambda n: n if isinstance(n, str) else "Title %d" % n      # (a Blu-ray's has its id already)
+    episodes = {name(e["title"]): e for e in found.get("episodes") or []}
+    extras = {name(e["title"]): e for e in found.get("extras") or []}
     promos = {"Title %d" % n for n in found.get("promos") or []}
     names = {"Title %d" % int(n): v for n, v in (found.get("promo_names") or {}).items()}
     opening = {"Title %d" % n for n in found.get("opening") or []}
     labelled = set()
+    played = found.get("played")
+    played = None if played is None else {name(t) for t in played}
     # copies, as the scan has them (a title's cells don't outlast it): one label, on the title it
     # kept, with the most any of their buttons said
     copy_of = {}
@@ -4369,7 +4564,8 @@ def detected_tv_labels(found, titles, keep=()):
             e = episodes[tid]
             read = " (read as \"%s\")" % e["read"] if e["read"] else " (no name read)"
             out[tid] = {"type": "Episode", "title": e["name"], "season": e["season"], "episode": e["episode"],
-                        "note": "the menus: \"%s\"" % e["read"] if e["by"] == "name"
+                        "note": "the disc's menu files" if e["by"] == "disc"
+                        else "the menus: \"%s\"" % e["read"] if e["by"] == "name"
                         else "the menus: its place in the disc's Play All" + read if e["by"] == "play-all"
                         else "the menus: between its neighbours on their episode page" + read}
         elif tid in extras and extras[tid]["name"]:
@@ -4389,6 +4585,11 @@ def detected_tv_labels(found, titles, keep=()):
         elif tid in opening:
             out[tid] = {"type": "Promo", "title": "Previews",
                         "note": "plays before the menu on a player (VLC skips it): previews, as a rule"}
+        elif episodes and extras and played is not None and t.get("role") == "extra" and tid not in extras and tid not in played:
+            # (a show's menus list what it's selling: the scan's extra they don't is a warning, a logo.
+            # Out of the way, for you to look at if you like. Not its episodes: some have no button.
+            # Only once its extras were found too: a page the crawl missed says nothing of them)
+            out[tid] = {"type": "Other", "title": None, "note": NOT_IN_MENUS}
     return out
 
 
@@ -4399,17 +4600,17 @@ def tv_pictures(tv, out_dir, pictures=None):
     for r in tv.get("readings") or []:
         if r.get("image"):
             out[r["title"]] = {"image": os.path.join(out_dir, r["image"]), "rect": list(r["rect"]),
-                               "button": list(r["rect"]), "text": r["text"]}
+                               "button": list(r["rect"]), "text": r.get("on_button", r["text"]), "alone": bool(r.get("alone"))}
     return out
 
 
 def found_tv_text(found):
     """tv_found in words, for the log and the command line."""
     how = {"name": "", "neighbours": ", by its neighbours", "play-all": ", by the Play All"}
-    lines = ["Episode:  title %d  S%sE%s %s (read \"%s\"%s)" % (
+    lines = ["Episode:  title %s  S%sE%s %s (read \"%s\"%s)" % (
         e["title"], e["season"], e["episode"], e["name"], e["read"], how.get(e["by"], ""))
         for e in found.get("episodes") or []]
-    lines += ["%-9s title %d  %s%s" % ("Deleted:" if e.get("kind") == "DeletedScene" else "Extra:", e["title"], e["name"],
+    lines += ["%-9s title %s  %s%s" % ("Deleted:" if e.get("kind") == "DeletedScene" else "Extra:", e["title"], e["name"],
                                        " (S%sE%s)" % (e["season"], e["episode"]) if e.get("episode") else "")
               for e in found.get("extras") or []]
     if found.get("promos"):

@@ -5248,6 +5248,25 @@ def _joined_episodes(eps, texts):
     return out
 
 
+def numbered_episodes(readings, orders, season, order="aired"):
+    """Each reading's episode by the number the disc's own files give it ("number"): the same answer as
+    menu_episodes, each "by": "disc", the name from the show's list. What was read off the menu (its
+    art, by OCR) only checks it's the right show: None if most of what was read isn't that episode's
+    name, or the list doesn't have them, for menu_episodes and a search by name to take over."""
+    pool = (orders or {}).get("dvd") if order == "dvd" and (orders or {}).get("dvd") else (orders or {}).get("aired")
+    eps = {e["number"]: e for e in pool or [] if e.get("season") == season and e.get("number") is not None and e.get("name")}
+    numbered = [(i, r) for i, r in enumerate(readings) if r.get("number") is not None]
+    if not numbered or any(r["number"] not in eps for _, r in numbered):
+        return None
+    commons = name_commons([e["name"] for e in eps.values()])
+    said = [(r, eps[r["number"]]) for _, r in numbered if re.sub(r"^\W*\d+\W*", "", r.get("text") or "")]
+    agree = sum(1 for r, e in said if _menu_score(r["text"], e["name"], commons) >= MENU_NAME_SURE)
+    if said and 2 * agree <= len(said):
+        return None
+    return {"season": season, "picks": {i: {"season": season, "number": r["number"], "name": eps[r["number"]]["name"],
+                                            "score": 1.0, "by": "disc"} for i, r in numbered}}
+
+
 def menu_episodes(readings, orders, season=None, order="aired"):
     """Which episode each menu reading names: {"season": the season found, "picks": {index:
     {"season", "number", "name", "score", "by"}}}, or None. readings: [{"text", "seconds", "bonus",

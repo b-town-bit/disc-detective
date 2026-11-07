@@ -169,6 +169,12 @@ class FakeCrawler:
     def heading(self, s):
         return None
 
+    def mixed(self, s):
+        return False
+
+    def heading_line(self, s):
+        return None
+
 
 # Play and four ways on from the main menu. Bonus holds an extra, the film again, and two buttons the
 # disc's program can't answer; Audio holds a title nothing else plays; Scenes and Credits, only the film

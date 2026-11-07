@@ -335,7 +335,7 @@ def test_menu_titles():
     assert found["extras"] == [
         {"title": 10, "name": "An Invitation to Father of the Bride", "seconds": 637.0, "listed": 635, "kind": None,
          "page": [1, 10, 1]},
-        {"title": 11, "name": "Martin & Short Interview Each Other", "seconds": 316.0, "listed": 313, "kind": None,
+        {"title": 11, "name": "Martin & Short Interview Each Other", "seconds": 316.0, "listed": 313, "kind": "Interview",
          "page": [1, 10, 1]}]
     assert found["promos"] == [6, 9]
     assert "menu says 10:35, plays 10:37" in menus.found_text(found)
@@ -836,6 +836,29 @@ def test_only_pages_the_disc_reaches_are_looked_among():
     assert menus._reachable(states, {}, {}, []) is None              # the program didn't run
 
 
+def test_a_scenes_number_is_read_the_same_for_any_format():
+    for text in ("Sc. 8-10", "Sc.9-3", "Scene 4", "Sc. B 29-30", "SC. 51", "Sc, 44"):
+        assert menus.numbered_scene(text), text
+    for text in ("Scenes", "Scene Selection", "Deleted Scenes", "Emmett scene after robbery", "Outtake Sc. 4", "Scene 4 Commentary", "Misc. 4", None):
+        assert not menus.numbered_scene(text), text
+
+
+def test_only_a_heading_saying_deleted_makes_a_page_of_deleted_scenes():
+    assert menus.page_kind({"heading_line": "Deleted Scenes"}) == "DeletedScene"
+    assert menus.page_kind({"heading": "Extended Scenes"}) == "DeletedScene"
+    for heading in ("Scenes", "Declassified Scenes", "Cut Scenes", "Scene Selection", "Behind the Scenes"):
+        assert menus.page_kind({"heading_line": heading}) is None, heading
+
+
+def test_a_film_discs_button_saying_deleted_counts_and_scene_alone_doesnt():
+    button = lambda n, text, title: {"n": n, "rect": [0, n, 9, n + 9], "text": text, "plays": {"title": title, "chapter": 1, "seconds": 90}}
+    out = {"reader": "rapidocr", "pages": [{"domain": 1, "page": 2, "program": 1, "heading": "", "route": [], "buttons": [
+        {"n": 1, "rect": [0, 0, 9, 9], "text": "Play Movie", "plays": {"title": 1, "chapter": 1, "seconds": 6000}},
+        button(2, "Deleted Scenes", 2), button(3, "The Alternate Scene", 3), button(4, "Sc. 12 - At the Party", 4),
+        button(5, "Theatrical Trailer", 5), button(6, "Music Video", 6)]}]}
+    assert {e["title"]: e["kind"] for e in menus.menu_titles(out)["extras"]} == {2: "DeletedScene", 3: None, 4: None, 5: "Trailer", 6: "Music"}
+
+
 def test_words_from_the_frame_without_the_subpicture(tmp_path, monkeypatch):
     """A page's words read from a frame without the subpicture (no highlight over them), and its
     picture too. Only when most read poorly that way, the frame as it is: its words may be in the
@@ -867,7 +890,7 @@ def test_words_from_the_frame_without_the_subpicture(tmp_path, monkeypatch):
     # WALL-E: its words in the video, read well without the subpicture: nothing else read
     said.update({("bare", 0): "Play Movie", ("bare", 20): "Bonus Features", ("bare", "heading"): "Bonus"})
     got = c._finish((7, 8, 1), lit, None, 1, bare, dark, first(), done("Bonus"))
-    assert got == {"words": {1: "Play Movie", 2: "Bonus Features"}, "heading": "Bonus", "overlay": False}
+    assert got == {"words": {1: "Play Movie", 2: "Bonus Features"}, "heading": "Bonus", "heading_line": None, "mixed": False, "overlay": False}
     assert asked == [] and Image.open(tmp_path / "page_7_8_1.png").getpixel((0, 0)) == (0, 0, 0)
 
     # read poorly without it, but not gone: the words are in the video; each the better reading
@@ -888,18 +911,18 @@ def test_words_from_the_frame_without_the_subpicture(tmp_path, monkeypatch):
     asked.clear()
     c.pages[(1, 2)] = c.pages[(7, 8)]
     got = c._finish((1, 2, 1), lit, None, 1, bare, dark, first(), done("MAIN MENU"))
-    assert got == {"words": {1: "Scene Selection", 2: "Bonus Features"}, "heading": "MAIN MENU", "overlay": True}
+    assert got == {"words": {1: "Scene Selection", 2: "Bonus Features"}, "heading": "MAIN MENU", "heading_line": None, "mixed": False, "overlay": True}
     assert "lit" in asked and "dark" in asked and any("in the subpicture" in m for m in logged)
 
     # the crawl asks: a page still being read; its first readings in (enough to route by, the
     # rest still under way: plates); then finished
     first_pending, pending = Future(), Future()
     c.reading, c.finished = {(1, 3, 1): {1: first_pending}}, {(1, 3, 1): pending}
-    c.texts, c.overlay, c.headings = {}, {}, {}
+    c.texts, c.overlay, c.headings, c.heading_lines, c.mixed_pages = {}, {}, {}, {}, {}
     assert not c.read((1, 3, 1)) and c.word_now((1, 3, 1), 1) == ""
     first_pending.set_result("Extra")
     assert c.read((1, 3, 1)) and c.word_now((1, 3, 1), 1) == "Extra" and c.first_words((1, 3, 1)) == {1: "Extra"}
-    pending.set_result({"words": {1: "Extras"}, "heading": "EXTRAS", "overlay": False})
+    pending.set_result({"words": {1: "Extras"}, "heading": "EXTRAS", "heading_line": None, "overlay": False})
     assert c.word_now((1, 3, 1), 1) == "Extras" and c.words((1, 3, 1)) == {1: "Extras"}
     assert c.heading((1, 3, 1)) == "EXTRAS"
     # OCR's Play All, however it comes out; not a Play Again

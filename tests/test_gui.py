@@ -111,7 +111,7 @@ def test_scan_shows_the_answer_and_plan(gui, tmp_path, imdb_dir, monkeypatch):
     plan = dd_app.plan_rip(app.rep, dd_app.preview_titles(app.rep), False)
     assert [p["dest"].split("/")[-1] for p in plan][0].startswith("Justified (2010) - s01e01 - Fire in the Hole")
     if app.rep.get("art"):
-        assert app.pic_col.winfo_ismapped()
+        assert pump(app.pic_col.winfo_ismapped, 5)          # (packed as the scan ends: drawn on the next update)
 
 
 def test_choose_another_match_and_forget_it(gui, tmp_path, imdb_dir, monkeypatch):
@@ -1030,7 +1030,7 @@ def test_your_labels_shape_the_rip_plan():
                       "Title 4": {"type": "DeletedScene", "title": "Shawn's Lies", "season": None, "episode": None}}}
     plan = {p["title_id"]: p for p in dd_app.plan_rip(rep, dd_app.preview_titles(rep), True)}
     assert plan["Title 1"]["dest"].endswith("Season 01/Psych - s01e01 - Pilot.mkv")
-    assert (plan["Title 2"]["role"], plan["Title 2"]["dest"]) == ("extra", "Psych (2006) {imdb-tt0491738}/Other/International Pilot.mkv")
+    assert (plan["Title 2"]["role"], plan["Title 2"]["dest"]) == ("extra", "Psych (2006) {imdb-tt0491738}/Season 01/Psych - s01e01 - Pilot - International Pilot-other.mkv")
     assert plan["Title 4"]["dest"] == "Psych (2006) {imdb-tt0491738}/Deleted Scenes/Shawn's Lies.mkv"
     no_extras = dd_app.plan_rip(rep, dd_app.preview_titles(rep), False)
     assert [p["title_id"] for p in no_extras] == ["Title 1"]       # your Extra isn't ripped as an episode
@@ -1773,6 +1773,12 @@ def test_a_menu_picture_shows_the_words_read_on_demand(tmp_path):
         path = str(tmp_path / "page.png")
         Image.new("RGB", (720, 480), (40, 60, 90)).save(path)
         v = dd_app.MenuPicture(root)
+        # (only a button, a disc's own image of it: as it is, no box to point at)
+        small = str(tmp_path / "button.png")
+        Image.new("RGB", (120, 40), (40, 60, 90)).save(small)
+        v.show("00051.mpls", {"image": small, "rect": [0, 0, 120, 40], "button": [0, 0, 120, 40], "text": "Pilot", "alone": True})
+        root.update()
+        assert v.photo.width() == 120 and "Pilot" in v.read.cget("text") and not v.photos
         v.show("Title 30", {"image": path, "rect": [186, 297, 291, 340], "button": [66, 275, 375, 364],
                             "text": "DELETED SCENES"})
         root.update()

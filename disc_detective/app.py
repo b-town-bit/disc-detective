@@ -189,6 +189,9 @@ def save_settings(d):
 EXTRA_FOLDERS = {"Featurette": "Featurettes", "DeletedScene": "Deleted Scenes", "Trailer": "Trailers",
                  "Interview": "Interviews", "BehindTheScenes": "Behind The Scenes", "Short": "Shorts",
                  "Scene": "Scenes"}
+# Plex's ending for an extra saved beside its episode ("-other" for the rest)
+EXTRA_SUFFIXES = {"Featurette": "featurette", "DeletedScene": "deleted", "Trailer": "trailer", "Interview": "interview",
+                  "BehindTheScenes": "behindthescenes", "Short": "short", "Scene": "scene"}
 
 
 def clean(s):
@@ -230,19 +233,24 @@ def menu_data(root, content_hash, vlc, log, t0=None, oldest=None):
     return structure
 
 
+def menu_title_id(n):
+    """A title as the menus' answer has it, as a scan's id: a DVD's number, a Blu-ray's id as it is."""
+    return n if isinstance(n, str) and not n.isdigit() else "Title %d" % int(n)
+
+
 def menu_played(found):
     """The titles a disc's menu buttons play (menu_titles()), as title ids."""
     found = found or {}
     nums = {found.get("feature")} | {f["title"] for f in found.get("features") or []} | \
         {e["title"] for e in found.get("extras") or []} | set(found.get("promos") or []) | \
         set(found.get("play_alls") or []) | {e["title"] for e in found.get("episodes") or []}
-    return {"Title %d" % n for n in nums if n}
+    return {menu_title_id(n) for n in nums if n}
 
 
 def menu_unread(found):
     """Of those, the extras whose buttons' words weren't read (a page passed by, its title known by
     another way, or its copy's), as title ids."""
-    return {"Title %d" % e["title"] for e in (found or {}).get("extras") or [] if not e.get("name")}
+    return {menu_title_id(e["title"]) for e in (found or {}).get("extras") or [] if not e.get("name")}
 
 
 PLAY_ALL_FIT = 0.05     # a Play All the scan didn't see is as long as its page's titles, to this
@@ -265,6 +273,9 @@ def menu_play_alls(titles, found):
         if held is not None and set(held) <= set(ids) and len(ids) > len(held) or \
                 t.get("role") in ("extra", None) and abs(total - t.get("duration", 0)) <= PLAY_ALL_FIT * total:
             t["role"], t["note"] = "play-all", "plays " + ", ".join(ids)
+
+
+NOT_IN_MENUS = "not in the disc's menus"       # (menus.NOT_IN_MENUS, without importing it at the start)
 
 
 def detected_for(rep, found):
@@ -396,17 +407,19 @@ FOUND_TYPES = ("MainMovie", "Episode", "DeletedScene", "Extra", "Featurette", "I
                "Scene", "Other", "Promo")
 
 
-def found_order(tid, was, detected):
-    """Where a title the menus have a word on goes in Edit titles: by type (the film, the episodes,
-    the deleted scenes...), the episodes in their order, the rest as the menus have them, a page's
-    from button to button, so that checking them doesn't jump about the page."""
+def found_order(tid, was, detected, index=0):
+    """Where a title goes in Edit titles: by type (the film, the episodes, the deleted scenes...); by
+    menu page; by the season and episode it's down as (a deleted scene by its episode's); then button
+    by button, so that checking them doesn't jump about the page. Episodes go straight by their numbers:
+    the page a button was found on is no reason to put one out of order. Without numbers, after those
+    that have them, as the scan has them (index)."""
     kind = was.get("type")
     rank = FOUND_TYPES.index(kind if kind in FOUND_TYPES else "Other")
     place = (detected.get(tid) or {}).get("place")
-    # (an extra may have an episode too: it goes by its place all the same)
-    season, episode = (di._int(was.get("season")) or 0, (di.episode_numbers(was.get("episode")) or [0])[0]) \
-        if kind == "Episode" else (0, 0)
-    return (rank, season, episode, place is None, place or [], di._natural(tid))
+    page = [] if kind == "Episode" or not place else list(place[:-1])
+    numbers = di.episode_numbers(was.get("episode"))
+    numbered = (0, di._int(was.get("season")) or 0, numbers[0]) if numbers else (1, 0, 0)
+    return (rank, not place and kind != "Episode", page, numbered, index, place or [], di._natural(tid))
 
 
 def title_word(t, mine, items, detected, guesses):
@@ -421,6 +434,8 @@ def title_word(t, mine, items, detected, guesses):
         return theirs, "discdb"
     if found_by_menus(detected.get(tid)):
         return detected[tid], "menus"
+    if (detected.get(tid) or {}).get("note") == NOT_IN_MENUS:    # (no word from them: nothing to confirm)
+        return detected[tid], "scan"
     return dict(guesses.get(tid) or {}, type=ROLE_TYPES.get(t["role"], "")), "scan"
 
 
@@ -482,6 +497,64 @@ def discdb_named(rep):
     return out
 
 
+def linked_episode(item):
+    """The episode numbers a label ties an extra to, or None."""
+    if item.get("type") in ("Episode", "MainMovie") or not str(item.get("season")).isdigit():
+        return None
+    return di.episode_numbers(item.get("episode")) or None
+
+
+def extra_dest(item, name, episodes, base, season):
+    """Where a rip saves an extra, at the level Plex shows it: beside the episode it's tied to; else
+    in its type's folder under the disc's season (season: None or 0, a disc of no one season), else
+    under the show. One tied to an episode with no file known keeps its code, under that season."""
+    numbers = linked_episode(item)
+    if numbers:
+        home = episodes.get((int(item["season"]), numbers[0]))
+        if home:
+            return linked_dest(home, name, item.get("type"))
+        name = "%s - %s" % (di._ep_code(int(item["season"]), numbers).lower(), name)
+        season = int(item["season"])
+    level = "%s/Season %02d" % (base, season) if season else base
+    return "%s/%s/%s.mkv" % (level, EXTRA_FOLDERS.get(item.get("type"), "Other"), name)
+
+
+def episode_files(mine, known, names, base, show):
+    """Where a rip saves each episode this disc knows of, ripped this time or not: {(season, number):
+    its path}. Your labels and the menus' first, then TheDiscDB's, then the scan's guess."""
+    out = {}
+
+    def add(season, numbers, dest):
+        for n in numbers:
+            out.setdefault((season, n), dest)
+    for item in list(mine.values()) + list(known.values()):
+        numbers = di.episode_numbers(item.get("episode"))
+        if item.get("type") == "Episode" and numbers and str(item.get("season")).isdigit():
+            add(int(item["season"]), numbers, episode_dest(base, show, item["season"], item["episode"], item.get("title")))
+    for dest in names.values():
+        code = re.search(r"\bs(\d+)e(\d+)((?:-e\d+)*)", dest, re.I)
+        if code:
+            add(int(code.group(1)), [int(code.group(2))] + [int(x) for x in re.findall(r"\d+", code.group(3))], dest)
+    return out
+
+
+def linked_dest(episode_file, name, kind):
+    """An extra Plex shows under its episode: beside it, the episode's whole file name, the extra's
+    own, then Plex's ending for its type. Plex doesn't take a dash in the extra's name, so none's
+    kept ("Sc. 8-10 - Chuck with Jill": "Sc. 8 to 10 Chuck with Jill"), nor the episode's name
+    again ("Pilot Deleted Scene": "Deleted Scene"), the file's saying that already."""
+    def plain(text):
+        text = re.sub(r"(?<=\d)\s*[-\u2013\u2014]\s*(?=\d)", " to ", text)
+        return re.sub(r"\s+", " ", re.sub(r"[-\u2013\u2014]", " ", text)).strip()
+    stem = episode_file[:-len(".mkv")]
+    words = plain(name)
+    episode = re.search(r"\bs\d+e\d+(?:-e\d+)* - (.+)$", stem, re.I)
+    opening = plain(episode.group(1)) + " " if episode else None
+    if opening and words.lower().startswith(opening.lower()) and words[len(opening):].strip():
+        words = words[len(opening):].strip()
+    return "%s - %s-%s.mkv" % (stem, words, EXTRA_SUFFIXES.get(kind, "other"))
+
+
 def plan_rip(rep, mk_titles, include_extras, selected=None):
     """Which MakeMKV titles to rip and what to call them (Plex layout). Of the film's copies in
     other pictures, the best by default (higher resolution, then HDR, then widescreen: a
@@ -522,6 +595,9 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
                 homes[it["title_id"]] = ("%s (%s) {imdb-%s}" % (clean(it["name"]), it.get("year") or "", it["imdb_id"]),
                                          "%s (%s)" % (clean(it["name"]), it.get("year") or ""))
     base0, show0 = base, show
+    episodes = episode_files(mine, known, names, base, show)
+    # the disc's season, as far as it's said, not worked out (a bonus disc has none, or season 0)
+    season_level = None if rep.get("season_note") else (rep.get("match") or {}).get("season")
     plan = []
     for m in mk_titles:
         t, _ = pairs.get(m["index"], (None, None))
@@ -534,7 +610,7 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
         role = t["role"] if t else di.LABEL_ROLES.get(item.get("type"), "extra") if item else None
         my = mine.get(t["title_id"]) if t else None
         if my and (my.get("type") or my.get("title")):
-            item = dict(item, **{k: v for k, v in my.items() if v})
+            item = dict(item, **{k: v for k, v in my.items() if v not in (None, "")})        # (season 0's a season)
             if my.get("type"):
                 role = di.label_role(my["type"], t["role"] if t else None)
         if selected is not None:
@@ -542,18 +618,17 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
                 continue
         elif role not in roles or (t and t.get("interactive")):    # a menu game: only if ticked
             continue
-        if role == "episode" and item.get("season") and di.episode_numbers(item.get("episode")):
+        if role == "episode" and str(item.get("season")).isdigit() and di.episode_numbers(item.get("episode")):
             dest = episode_dest(base, show, item["season"], item["episode"], item.get("title"))
         elif role in ("play-all", "promo") and item.get("title") and item.get("type") not in (None, "", "Promo"):
             # ticked by hand, but labelled (yours, or TheDiscDB's): saved as the label says
-            dest = "%s/%s/%s.mkv" % (base, EXTRA_FOLDERS.get(item["type"], "Other"), clean(item["title"]))
+            dest = extra_dest(item, clean(item["title"]), episodes, base, season_level)
         elif t and t["title_id"] in names and not (my and role == "extra"):
             dest = names[t["title_id"]]
         elif role == "extra":
-            folder = EXTRA_FOLDERS.get(item.get("type"), "Other")
             label = clean(item.get("title")) or clean((t or {}).get("special_name")) or \
                 "%s - %s" % (show, (t["title_id"] if t else m["source"]).replace(".", "_"))
-            dest = "%s/%s/%s.mkv" % (base, folder, label)
+            dest = extra_dest(item, label, episodes, base, season_level)
         elif role == "episode":
             dest = "%s/Episode %02d.mkv" % (base, (t or {}).get("episode_index") or m["index"])
         elif role in ("feature", "version", "longest") and my and edition_label(my, base, show) and \
@@ -2376,6 +2451,7 @@ class App:
                 rep = di.identify(drive, args)
                 pmap = self._program_map(drive, rep)
                 rep = self._menus_seen(drive, args, rep)
+                self._files_saved(args, rep)
                 self._program_seen(rep, pmap)
                 self._bd_menus_seen(drive, args, rep)
             args.library.close()
@@ -2491,6 +2567,10 @@ class App:
         h = rep.get("content_hash")
         before = self._before if self._before is not None and self._before.get("content_hash") == h else None
         raw = self._stakeouts.get(h)
+        if raw is None and self.files_in_scan(rep):      # (a Blu-ray whose files list its menu: a moment, nothing played)
+            raw = self._menu_files(rep)
+            if raw is not None:
+                self._stakeouts[h] = raw
         if raw is not None:              # staked out already this session: kept (Detect titles makes a new one)
             args.title_phrases = menus.feature_phrases(raw, menus.menu_dir(h), di.word_checker(getattr(args, "imdb_dir", None)))
             rep = self._menus_witness(drive, args, rep, staked=True)
@@ -2521,13 +2601,73 @@ class App:
         rep["staked_out"] = True
         return rep
 
+    @staticmethod
+    def _menu_files(rep):
+        """A Blu-ray's titles from its menu's own files (bdcrawl.from_files), or None: not such a disc.
+        Whatever the scan took it for: its episodes say it's a show. Off the Tk thread. No VLC, no Java,
+        and never a reason for the scan to fail."""
+        if rep.get("format") != "Blu-ray" or rep.get("from_sample") or not rep.get("path"):
+            return None
+        from . import bdcrawl
+        try:
+            from . import menus
+            return bdcrawl.from_files(rep["path"], rep.get("label"), rep.get("titles") or [],
+                                      lambda line: di.logger.info("menus: %s", line.strip()),
+                                      out_dir=menus.menu_dir(rep["content_hash"]))
+        except Exception:
+            di.logger.exception("reading the disc's menu files failed")
+            return None
+
+    @staticmethod
+    def _files_saved(args, rep):
+        """What a disc's menu files say for certain, saved as Sony's menu project's is, with nothing to
+        confirm: each title the files number and the show's list names, and those they tie to it, if
+        the words on the menu agreed with that list or the show's already settled. Not a title only
+        left out of them: that's for you to look at, Other for now."""
+        tv = (rep.get("menu_raw") or {}).get("tv") or {}
+        found = rep.get("menu_found") or {}
+        con, h = getattr(args, "library", None), rep.get("content_hash")
+        if not tv.get("exact") or not found.get("episodes") or con is None or not h:
+            return
+        if any(e.get("by") != "disc" for e in found["episodes"]):
+            return
+        read = any(re.sub(r"^\W*\d+\W*", "", r.get("text") or "") for r in tv["readings"] if r.get("number") is not None)
+        if not (read or rep.get("personal_hit") or (rep.get("discdb") or {}).get("hit")):
+            return
+        mine = dict(rep.get("labels") or {})
+        saved = 0
+        for tid, lab in detected_for(rep, found).items():
+            if tid not in mine and lab.get("type") and lab["type"] != "Other":
+                di.set_label(con, h, tid, lab["type"], lab.get("title"), lab.get("season"), lab.get("episode"))
+                mine[tid] = {"type": lab["type"], "title": lab.get("title"), "season": lab.get("season"), "episode": lab.get("episode")}
+                saved += 1
+        if saved:
+            rep["labels"] = mine
+            di.logger.info("the disc's menu files settle %d of its titles: saved", saved)
+
     def stakeout_in_scan(self, rep, vlc):
-        """Whether the scan runs Detect titles (Settings > Ripping, with Detect titles on): when
+        """Whether the scan goes on stakeout: a DVD, VLC to do it with, and its menus wanted."""
+        return bool(vlc) and rep.get("format") == "DVD" and self.menus_wanted(rep)
+
+    def files_in_scan(self, rep):
+        """Whether the scan reads a Blu-ray's menu files: when its menus are wanted, as a DVD's; and for
+        one whose titles you know, for each one's button to look at (a moment, nothing played). Not
+        with Detect titles off, or set never to run in a scan."""
+        if rep.get("format") != "Blu-ray":
+            return False
+        known = rep.get("labels") and self.scan_menus_mode() != "never" and rep.get("path") and not rep.get("from_sample")
+        return bool(known) or self.menus_wanted(rep)
+
+    def scan_menus_mode(self):
+        """Settings > Ripping: "never", or when the scan asks a disc's menus."""
+        return self.settings.get("detect_in_scan", "never") if self.settings.get("menu_detect") else "never"
+
+    def menus_wanted(self, rep):
+        """Whether the scan asks a disc's menus (Settings > Ripping, with Detect titles on): when
         the film isn't certain (not yours, not TheDiscDB's: unnamed, a guess, a second feature
         unnamed), or also on every disc whose titles aren't known (TheDiscDB's, your labels)."""
-        mode = self.settings.get("detect_in_scan", "never") if self.settings.get("menu_detect") else "never"
-        if mode == "never" or not vlc or rep.get("format") != "DVD" or \
-                rep.get("from_sample") or not rep.get("path"):
+        mode = self.scan_menus_mode()
+        if mode == "never" or rep.get("from_sample") or not rep.get("path"):
             return False
         hit = (rep.get("discdb") or {}).get("hit")
         weak = not rep.get("personal_hit") and not hit and (
@@ -2688,7 +2828,8 @@ class App:
             return []
         # (the rows Edit titles asks you to confirm: a title it lists, the menus' word on it, not yours)
         listed = {t["id"] for t in rep.get("titles") or [] if t.get("role") in TitlesDialog.ORDER}
-        return [tid for tid in rep.get("detected") or {} if tid in listed and tid not in (rep.get("labels") or {})]
+        return [tid for tid, lab in (rep.get("detected") or {}).items() if tid in listed and tid not in (rep.get("labels") or {})
+                and lab.get("note") != NOT_IN_MENUS]
 
     def show_waiting(self):
         """The rip card's "3 UNCONFIRMED" pill: titles the scan's stakeout named that wait for you
@@ -2788,12 +2929,12 @@ class App:
                                arrow_enabled=bool(self.rep) and not self.busy)
 
     def can_detect(self):
-        """Detect titles is on offer (Edit titles): switched on in Settings, and a DVD (a real one, not a
-        saved sample)."""
+        """Detect titles is on offer (Edit titles): switched on in Settings, and a DVD or a TV Blu-ray
+        (a real one, not a saved sample)."""
         rep = self.rep
         # (rep's path was a disc when it was scanned: not asked again, the drive may be busy)
-        return bool(self.settings.get("menu_detect") and rep and rep.get("format") == "DVD"
-                    and not rep.get("from_sample") and rep.get("path"))
+        return bool(self.settings.get("menu_detect") and rep and not rep.get("from_sample") and rep.get("path")
+                    and (rep.get("format") == "DVD" or (rep.get("format") == "Blu-ray" and rep.get("kind") == "tv")))
 
     def detect_titles(self):
         """Read the disc's menus (VLC plays them and presses their buttons) for its feature and
@@ -2829,6 +2970,9 @@ class App:
             found = self._name_titles(raw, rep)
             # the answer in its turn, once the last suspect has had their moment
             self.post(self.tell, lambda: self.detect_done(rep, found, None))
+        except menus.NoReader as exc:
+            di.logger.warning("%s", exc)
+            self.post(self.tell, lambda: self.detect_done(rep, None, self.NO_READER_STAKEOUT))
         except menus.Lost as exc:    # (no menu answered: not an error, unless the disc went)
             di.logger.info("no menu answered on this disc (%s)", exc)
             msg = self.GONE_STAKEOUT if self.disc_gone(rep["path"]) else self.NO_MENU_STAKEOUT
@@ -2863,6 +3007,17 @@ class App:
                 count["total"] = count["before"] + n
                 self.post(self.tell, suspect_line("Interrogating", count["before"] + i, count["total"]))
         root = rep["path"]
+        if rep.get("format") == "Blu-ray":        # (its menus decide as they run: only watching says)
+            from . import bdcrawl
+            raw = self._menu_files(rep)           # (unless its own files say)
+            if raw is not None:
+                return raw
+            if menus.rapid_missing():
+                raise menus.NoReader("RapidOCR can't run here: pip install rapidocr onnxruntime, with a connection "
+                                     "for its model the first time")
+            self.post(self.tell, "Going on stakeout…")
+            log("reading the pop-up menu of %s with VLC %s" % (root, vlc))
+            return bdcrawl.crawl(root, vlc, rep.get("titles") or [], menus.menu_dir(rep["content_hash"]), log)
         structure = menu_data(root, rep["content_hash"], vlc, log, t0)
         out = menus.menu_dir(rep["content_hash"])
         self.post(self.tell, "Going on stakeout…")
@@ -2882,7 +3037,7 @@ class App:
         from . import menus
         args = self.scan_args()
         log = lambda line: di.logger.info("menus: %s", line.strip())
-        if rep.get("kind") == "tv":
+        if rep.get("kind") == "tv" or (raw.get("tv") or {}).get("exact"):
             return self._name_episodes(raw, rep, args, log)
         found = raw["found"]
         try:                             # names OCR made up out of the backdrop: plain names
@@ -2922,12 +3077,15 @@ class App:
         match = rep.get("match") or {}
         orders = di.show_episodes(match.get("imdb_id"), getattr(args, "tvmaze_dir", None),
                                   online=not args.offline, imdb_dir=args.imdb_dir)
-        got = di.menu_episodes(tv["readings"], orders, match.get("season"),
-                               getattr(args, "episode_order", "aired")) if orders else None
+        order = getattr(args, "episode_order", "aired")
+        # (the disc's own files give each its number: the names only need fetching)
+        got = di.numbered_episodes(tv["readings"], orders, tv.get("season") or match.get("season"), order) \
+            if orders and tv.get("exact") else None
+        got = got or (di.menu_episodes(tv["readings"], orders, match.get("season"), order) if orders else None)
         found = menus.tv_found(tv, (got or {}).get("picks"))
         for line in menus.found_tv_text(found).splitlines():
             log(line)
-        settles = self._tv_settles(rep, tv["readings"], got, args)
+        settles = self._tv_settles(rep, tv["readings"], got, args, tv.get("disc"))
         if settles:
             found["settles"] = settles
             log("the menus say: %s" % settles)
@@ -2936,19 +3094,20 @@ class App:
                                                (raw.get("found") or {}).get("pictures")))
 
     @staticmethod
-    def _tv_settles(rep, readings, got, args):
+    def _tv_settles(rep, readings, got, args, disc=None):
         """What the menus' episodes change in the scan's answer, or None: {"season": n}, your answer
         naming the show but no season; {"answer": a truth}, nothing confirmed (a show they name
         better than the scan's guess, or a season the guess hasn't or has wrong). Yours and
-        TheDiscDB's show stands, whatever the menus read. Never saved: it's asked for again each scan."""
+        TheDiscDB's show stands, whatever the menus read. disc: the number its menu's files give it.
+        Never saved: it's asked for again each scan."""
         match = rep.get("match") or {}
-        named = sum(1 for p in (got or {"picks": {}})["picks"].values() if p["by"] == "name")
+        named = sum(1 for p in (got or {"picks": {}})["picks"].values() if p["by"] in ("name", "disc"))
         if rep.get("personal_hit") or (rep.get("discdb") or {}).get("hit"):
             return {"season": got["season"]} if got and not match.get("season") else None
         if got and named and match.get("imdb_id"):             # the scan's show it is
-            if got["season"] == match.get("season"):
+            if got["season"] == match.get("season") and (not disc or disc == match.get("disc")):
                 return None
-            return {"answer": di.truth_for(match, got["season"], match.get("disc"))}
+            return {"answer": di.truth_for(match, got["season"], disc or match.get("disc"))}
         try:
             con = di.imdb_open(args.imdb_dir, allow_download=False, log=lambda m: None)
             show = di.shows_by_episodes(con, readings)
@@ -2956,9 +3115,9 @@ class App:
             di.logger.exception("searching IMDb's episodes for the menus' names failed")
             return None
         if show and show["imdb_id"] != match.get("imdb_id"):
-            return {"answer": di.truth_for(show, show["season"])}
+            return {"answer": di.truth_for(show, show["season"], disc)}
         if show and show["season"] != match.get("season"):
-            return {"answer": di.truth_for(match, show["season"], match.get("disc"))}
+            return {"answer": di.truth_for(match, show["season"], disc or match.get("disc"))}
         return None
 
     def _settle_by_menus(self, drive, args, rep, raw):
@@ -2978,6 +3137,7 @@ class App:
 
     GONE_STAKEOUT = "The disc was removed: stakeout aborted"
     NO_MENU_STAKEOUT = "No menu answered: nothing to stake out on this disc"
+    NO_READER_STAKEOUT = "No stakeout: RapidOCR isn't working here, details in the case notes"
 
     def detect_outcome(self, text, colour):
         """How the stakeout went: in Edit titles, where it was asked for, while that's open; else
@@ -3023,7 +3183,7 @@ class App:
         labels = detected_for(rep, found) if found else {}
         if not labels:
             self.show_plan_summary()
-            self.detect_outcome(*(((err, th.WAX) if err in (self.GONE_STAKEOUT, self.NO_MENU_STAKEOUT) else
+            self.detect_outcome(*(((err, th.WAX) if err in (self.GONE_STAKEOUT, self.NO_MENU_STAKEOUT, self.NO_READER_STAKEOUT) else
                                    ("The stakeout couldn't go ahead: details in the case notes", th.WAX)) if err else
                                   ("The stakeout turned up nothing: titles unchanged", th.AMBER_DOT)))
             return
@@ -3948,7 +4108,7 @@ class TitlesDialog:
         self.items = discdb_items(hit)
         # a DVD on the desk: each title can be watched in VLC (its title numbers are the disc's)
         self.vlc = None
-        if rep is not None and rep.get("format") == "DVD" and rep.get("path") and not rep.get("from_sample"):
+        if rep is not None and rep.get("format") in ("DVD", "Blu-ray") and rep.get("path") and not rep.get("from_sample"):
             from . import menus
             self.vlc = menus.find_vlc(app.settings.get("vlc") or None)
         # a Blu-ray's: in ffmpeg's ffplay, each playlist by its number (no VLC: no title list to
@@ -4058,7 +4218,7 @@ class TitlesDialog:
         # the menu pages Detect titles saw: for each title a button plays, that button (this
         # session's pictures: gone when the app closes, unless kept as test data)
         pics = (((self.rep or {}).get("menu_found") or {}).get("pictures")) or {}
-        self.pictures = {"Title %d" % int(t): v for t, v in pics.items() if os.path.isfile(v.get("image") or "")}
+        self.pictures = {menu_title_id(t): v for t, v in pics.items() if os.path.isfile(v.get("image") or "")}
         detected = (self.rep or {}).get("detected") or {}
         for t in self.rows:
             tid = t["id"]
@@ -4069,6 +4229,8 @@ class TitlesDialog:
                    "season": str(word["season"]) if word.get("season") else "",
                    "episode": str(word["episode"]) if word.get("episode") else ""}
             self.state[tid] = dict(row, was=dict(row), ok=False, auto=None, **{"from": source})
+        self.rows.sort(key=lambda t: (self.ORDER[t["role"]],) + found_order(t["id"], self.state[t["id"]]["was"], detected,
+                                                                            t.get("episode_index") or 0))
 
     FIELDS = ("type", "title", "season", "episode")
 
@@ -4140,10 +4302,11 @@ class TitlesDialog:
             see = th.link(line, "", lambda: self.show_picture(tid), style="DeskLink.TLabel", icon="picture")
             see.pack(side="left", padx=(6, 0))
             th.Tooltip(see, lambda: "The menu button that plays it")
-        if (self.vlc and re.fullmatch(r"Title \d+", tid)) or (self.ffplay and re.fullmatch(r"\d+\.mpls", tid)):
+        if (self.vlc and re.fullmatch(r"Title \d+", tid)) or (self.ffplay and re.fullmatch(r"\d+\.mpls", tid)) or \
+                (self.vlc and tid in self.seen_playing()):
             watch = th.link(line, "", lambda: self.watch(tid), style="DeskLink.TLabel", icon="play")
             watch.pack(side="left", padx=(6, 0))
-            th.Tooltip(watch, lambda: "Watch it" if tid.endswith(".mpls") else "Watch it in VLC")
+            th.Tooltip(watch, lambda: "Watch it in VLC" if tid in self.seen_playing() or tid.startswith("Title ") else "Watch it")
         if t.get("sub"):
             ttk.Label(cell, text=t["sub"], style="Sub.TLabel").pack(anchor="w")
         ttk.Label(g, text=di.hms(t["duration"])).grid(row=r, column=col["LENGTH"], sticky="w", padx=(0, 8))
@@ -4325,9 +4488,9 @@ class TitlesDialog:
     NAMED = {"Episode": "%s", "DeletedScene": "%s Deleted Scene"}
 
     def numbered(self, kind):
-        """Whether a title of this type has a season and episode: an episode, or a TV disc's
-        deleted scene (an episode's own)."""
-        return kind == "Episode" or kind in self.NAMED and self.tv
+        """Whether a title of this type has a season and episode: an episode, or a TV disc's extra
+        (an episode's own, if it's given one)."""
+        return kind == "Episode" or self.tv and kind not in ("", None, "MainMovie", "Promo")
 
     def show_episode(self, tid):
         se, ep = self.episode_boxes[tid]
@@ -4343,7 +4506,7 @@ class TitlesDialog:
             self.heads[h].config(text=h if any_ep else "")
 
     def named(self, kind, episode_title):
-        return self.NAMED.get(kind, "%s") % episode_title if episode_title else None
+        return self.NAMED[kind] % episode_title if episode_title and kind in self.NAMED else None
 
     def fill_episode(self, tid):
         """An episode with a season and number: its title from TVmaze or IMDb, unless you've typed
@@ -4372,11 +4535,21 @@ class TitlesDialog:
             self.app.post(done)
         threading.Thread(target=work, daemon=True).start()
 
+    def seen_playing(self):
+        """A Blu-ray's titles the stakeout saw played: {title id: {"title": VLC's number for it}}."""
+        return ((self.rep or {}).get("menu_raw") or {}).get("watch") or {}
+
     def watch(self, tid):
         """The title, played in VLC's own window (not while the drive is being read)."""
         from . import menus
         if self.app.busy or getattr(self.app, "mkv_scan", None):
             self.show_outcome("The disc is busy: watch it once the scan or rip is done", th.WAX)
+            return
+        place = self.seen_playing().get(tid)
+        if place:
+            from . import bdmenus
+            if not bdmenus.watch_vlc(self.vlc, self.rep["path"], place["title"]):
+                self.show_outcome("VLC's player wasn't found beside it: reinstall VLC, or set its folder in Settings", th.WAX)
             return
         if tid.endswith(".mpls"):                 # (a Blu-ray's playlist: ffplay)
             from . import bdmenus
@@ -4506,6 +4679,9 @@ class TypeGuide:
             ttk.Label(g, text=what, style="Desk.TLabel", wraplength=th.px(340), justify="left").grid(
                 row=r, column=1, sticky="nw", padx=(0, 12), pady=1)
             ttk.Label(g, text=folder, style="DeskSub.TLabel").grid(row=r, column=2, sticky="nw", pady=1)
+        ttk.Label(body, text="On a TV disc, an extra given its episode saves beside that episode. The rest "
+                             "save in their folder under the disc's season, or under the show if it has none.",
+                  style="DeskSub.TLabel", wraplength=th.px(560), justify="left").pack(anchor="w", pady=(10, 0))
         ttk.Label(body, text="A Play All takes the type of what it plays (Deleted Scenes: Play All is a "
                              "DeletedScene). It isn't ripped unless ticked, as what it plays is ripped on its own.",
                   style="DeskSub.TLabel", wraplength=th.px(560), justify="left").pack(anchor="w", pady=(10, 0))
@@ -4567,6 +4743,19 @@ class MenuPicture:
         from PIL import Image, ImageDraw, ImageEnhance
         self.head.config(text="%s plays from this button" % tid)
         words = (pic.get("text") or "").strip()
+        if pic.get("alone"):                      # (only the button: the disc's own image of it)
+            self.read.config(text="Its button in the disc's menu, as the disc has it." + (" Read as “%s”." % words if words else ""))
+            with Image.open(pic["image"]) as im:
+                buf = io.BytesIO()
+                im.convert("RGB").save(buf, "PNG")
+            self.photo = tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
+            self.photos, self.hot, self.words_shown = None, (0, 0, -1, -1), False
+            self.pinned = self.over = False
+            self.pic.config(image=self.photo, cursor="")
+            self.top.deiconify()
+            self.top.lift()
+            keep_on_screen(self.top)
+            return
         button = list(pic.get("button") or pic["rect"])
         shown = list(pic["rect"])                 # (the words read, or the button's area: nothing read)
         # (the picture is the page as it was read: the menu's own highlight can be on another button)

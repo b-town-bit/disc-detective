@@ -11,12 +11,12 @@ license = "MIT"
 license-files = ["LICENSE", "THIRD_PARTY.md"]
 # 3.15 once our dependencies support it (RapidOCR's onnxruntime): then a new release
 requires-python = ">=3.9,<3.15"
-dependencies = ["Pillow"]  # posters and box art (Tk can't show JPEGs by itself)
+# Pillow: posters and box art (Tk can't show JPEGs by itself). RapidOCR: reading menus, the best
+# reader, and all a Blu-ray's menus are read with
+dependencies = ["Pillow", "rapidocr", "onnxruntime"]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-timeout"]
-# RapidOCR for menu buttons, the best reader (read first)
-rapid-ocr = ["rapidocr", "onnxruntime"]
 # Windows' own OCR for menu buttons (after RapidOCR; tesseract when neither finds words)
 windows-ocr = [
     "winrt-runtime; sys_platform == 'win32'",

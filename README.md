@@ -41,17 +41,18 @@ and macOS). Python 3.15 isn't supported yet: some of what it uses doesn't run on
 pip install "git+https://github.com/b-town-bit/disc-detective"
 ```
 
-That brings along its one dependency, **Pillow** (for posters and box art). To run
-from a downloaded copy of the repo instead, `pip install pillow` once, then
-double-click **Disc Detective.pyw** (Windows) or run `python -m disc_detective`.
+That brings along what it depends on: **Pillow** (for posters and box art) and **RapidOCR**
+(for reading disc menus), about 250 MB in all. RapidOCR fetches one of its models the first
+time it reads a menu, so have a connection for that. To run from a downloaded copy of the
+repo instead, `pip install pillow rapidocr onnxruntime` once, then double-click
+**Disc Detective.pyw** (Windows) or run `python -m disc_detective`.
 
 Optional: **MakeMKV** for ripping,
 **tesseract** for reading text off cover art, a free **TMDB** key (in Settings) for
-extra posters. Menu buttons are read best by **RapidOCR** (any system), then Windows'
-own OCR, then tesseract, whichever are installed:
-`pip install "disc-detective[rapid-ocr,windows-ocr] @ git+https://github.com/b-town-bit/disc-detective"`
-(or, from a copy of the repo, `pip install -e ".[rapid-ocr,windows-ocr]"`; leave out what your
-system can't have).
+extra posters. Where RapidOCR can't make out a DVD's menu buttons, Windows' own OCR, then
+tesseract, have a go, if installed:
+`pip install "disc-detective[windows-ocr] @ git+https://github.com/b-town-bit/disc-detective"`
+(or, from a copy of the repo, `pip install -e ".[windows-ocr]"`).
 
 On first launch it offers to download its data: the TheDiscDB index (about 4 MB)
 and IMDb's public title data (about 300 MB, indexed locally). It keeps both up to

@@ -73,6 +73,164 @@ def project_title(root):
     return None
 
 
+def _props(path):
+    """A menu file's lines ("episode01.playlistNumber=51") as {"episode01": {"playlistNumber": "51"}}."""
+    out = {}
+    with open(path, encoding="latin1") as fh:
+        for line in fh:
+            m = re.match(r"\s*(\w+)\.(\w+)=(.*)$", line.rstrip())
+            if m:
+                out.setdefault(m.group(1), {})[m.group(2)] = m.group(3)
+    return out
+
+
+def _wb_folders(root):
+    """Warner's BD-J framework (com.wb.bdj; Arrow S1 D1's): the folder of its English menu files, whose
+    images.txt names its sheets, or the first with any; and the one with its states.prop. (None, None)."""
+    jar = os.path.join(root, "BDMV", "JAR")
+    try:
+        folders = [os.path.join(jar, f) for f in sorted(os.listdir(jar))]
+    except OSError:
+        return None, None
+    menus_at = [f for f in folders if os.path.isfile(os.path.join(f, "menu_base.prop"))]
+    states = next((f for f in folders if os.path.isfile(os.path.join(f, "states.prop"))), None)
+
+    def english(folder):
+        try:
+            with open(os.path.join(folder, "images.txt"), encoding="latin1") as fh:
+                return "_eng" in fh.read()
+        except OSError:
+            return False
+    return next((f for f in menus_at if english(f)), menus_at[0] if menus_at else None), states
+
+
+def _sheet_reader(folder, read):
+    """A menu image, by its name: (its words, as read (a picture to its words) reads them, "" without
+    read or the image; and the picture itself, over black, or None), from its piece of a sheet of
+    images, as images.txt has it ("name,sheet,left,top,right,bottom")."""
+    pieces, sheets = {}, {}
+    try:
+        with open(os.path.join(folder, "images.txt"), encoding="latin1") as fh:
+            for line in fh:
+                p = line.strip().split(",")
+                if len(p) == 6 and all(x.isdigit() for x in p[2:]):
+                    pieces[p[0]] = (p[1], tuple(int(x) for x in p[2:]))
+    except OSError:
+        pass
+
+    def picture(name):
+        if name not in pieces:
+            return None
+        sheet, box = pieces[name]
+        try:
+            from PIL import Image
+            if sheet not in sheets:
+                sheets[sheet] = Image.open(os.path.join(folder, sheet)).convert("RGBA")
+            piece = sheets[sheet].crop(box)
+            flat = Image.new("RGBA", piece.size, (0, 0, 0, 255))
+            flat.alpha_composite(piece)
+            return flat.convert("RGB")
+        except (OSError, ValueError, ImportError):
+            return None
+
+    def words(name):
+        image = picture(name) if read else None
+        if image is None:
+            return ""
+        try:
+            return read(image.resize((image.width * 2, image.height * 2))).strip()
+        except (OSError, ValueError):
+            return ""
+    return words, picture
+
+
+def wb_menu(root, label, read=None):
+    """What Warner's BD-J framework's plain text files say of this disc (its menu covers the whole set):
+    {"season", "disc", "episodes": [{"number", "playlist", "read"}], "extras": [{"playlist", "read", "under",
+    "of_episode"}], "picture": a menu image by its name}, or None for another kind of disc, or one its
+    files don't list by this label. "playlist" as "00051.mpls". "read": a button's words as read(picture)
+    reads them off the menu's sheets, its art ("" without read); "button": the name of its image, or
+    None; "under": the words of the button that leads to its page. A "scissor" button beside an episode
+    ties a page's extra to that episode (of_episode)."""
+    folder, shared = _wb_folders(root)
+    if not folder or not label:
+        return None
+    try:
+        props = _props(os.path.join(folder, "menu_base.prop"))
+        states = _props(os.path.join(shared, "states.prop")) if shared else {}
+    except OSError:
+        return None
+    words, picture = _sheet_reader(folder, read)
+
+    def own_image(o):
+        """A button's image, as it looks selected, where it has one."""
+        names = (o.get("images") or "").split(",")
+        return names[1] if len(names) > 1 else names[0]
+    image_words = lambda o: words(own_image(o))
+    episodes = []
+    for name, o in props.items():
+        m = re.match(r"episode(\d+)$", name)
+        if m and o.get("type") == "EpisodeButton" and o.get("discName") == label and (o.get("playlistNumber") or "").isdigit():
+            number = int(o.get("episodeStringName") or m.group(1))
+            said = re.sub(r"\b0*%d\b" % number, " ", image_words(o))
+            episodes.append({"number": number, "playlist": "%05d.mpls" % int(o["playlistNumber"]),
+                             "read": re.sub(r"\s+", " ", said).strip(), "button": own_image(o) or None})
+    if not episodes:
+        return None
+    own = {n for n, o in states.items() if o.get("discName") == label}
+    pressed = lambda o: re.match(r"ecController\.playEC,(\w+),(\d+)$", o.get("onEnterPressed") or "")
+    scissors = {}
+    for name, o in props.items():
+        m, e = pressed(o), re.match(r"episode(\d+)scis$", name)
+        if m and e and m.group(1) in own:
+            scissors[int(m.group(2))] = int(e.group(1))
+    # the button that opens each page, for what it says of what's on it
+    opens = {}
+    for o in props.values():
+        m = re.match(r"menuController\.activateMenu,(\w+)$", o.get("onEnterPressed") or "")
+        if m:
+            opens[m.group(1)] = o
+    pages = {}
+    for page, o in props.items():
+        pending = [x for x in (o.get("children") or "").split(",") if x]
+        seen = set()
+        while pending:
+            child = pending.pop()
+            if child not in seen:
+                seen.add(child)
+                pages.setdefault(child, page)
+                pending.extend(x for x in (props.get(child, {}).get("children") or "").split(",") if x)
+    extras, listed = [], set()
+
+    def opener(name):
+        """The button that opens the nearest page holding this object, or None."""
+        at, hops = pages.get(name), 0
+        while at and hops < 8:
+            if at in opens:
+                return opens[at]
+            at, hops = pages.get(at), hops + 1
+        return None
+    for name, o in props.items():
+        m = pressed(o)
+        if not m or m.group(1) not in own or re.match(r"episode\d+scis$", name) or int(m.group(2)) in listed:
+            continue
+        listed.add(int(m.group(2)))
+        by = opener(name)
+        extras.append({"playlist": "%05d.mpls" % int(m.group(2)), "read": image_words(o), "under": image_words(by) if by else "",
+                       "of_episode": scissors.get(int(m.group(2))), "button": own_image(o) or None})
+    for pid, number in scissors.items():
+        if pid not in listed:
+            extras.append({"playlist": "%05d.mpls" % pid, "read": "", "under": "", "of_episode": number, "button": None})
+    season = re.search(r"_S(\d+)(?:_|$)", label, re.I)
+    try:
+        number = (_props(os.path.join(shared, "disc_set.prop")).get(label) or {}).get("discNum") if shared else None
+    except OSError:
+        number = None
+    return {"season": int(season.group(1)) if season else None, "disc": int(number) if (number or "").isdigit() else None,
+            "episodes": sorted(episodes, key=lambda e: e["number"]),
+            "extras": extras, "picture": picture}
+
+
 def menu_project(root):
     """The playlists a disc's menu project names (Sony's BD-J framework: bluray-project.bin
     under BDMV/JAR): [{"name": "SF_Cardshark_Serenade", "playlist": "00745.mpls", "fps", "seconds"}],
@@ -395,6 +553,22 @@ def watch_size(video):
         return None
     wide = v.get("aspect") == "16:9"
     return (round(WATCH_MIN_HEIGHT * (16 / 9 if wide else 4 / 3)), WATCH_MIN_HEIGHT)
+
+
+def watch_vlc(folder, source, title):
+    """Plays a title of a Blu-ray in VLC's own window, by VLC's number for it, as a stakeout saw it.
+    One window at a time, as menus.watch_title's. False if there's no VLC player to open."""
+    import subprocess
+    from . import menus
+    exe = menus.vlc_player(folder) if folder else None
+    if not exe:
+        return False
+    menus.stop_watching()
+    env = dict(os.environ)
+    env["PATH"] = os.pathsep.join(decryption_dirs() + [env.get("PATH", "")])
+    root = source.replace("\\", "/").rstrip("/")
+    menus._watching = subprocess.Popen([exe, "bluray:///%s/#%d" % (root, title)], env=env, close_fds=True)
+    return True
 
 
 def watch_playlist(source, playlist, ffplay, title=None, video=None):
