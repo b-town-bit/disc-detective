@@ -115,6 +115,25 @@ def test_download_refresh_and_offline(github, tmp_path, index_gz):
     con.close()
 
 
+def test_the_website_is_only_asked_for_what_the_downloaded_data_hasnt(github, tmp_path, movie_disc, monkeypatch):
+    con = core.discdb_index_open(str(tmp_path / "discdb"))
+    fmt, base = core.detect_format(movie_disc)
+    fp = core.fingerprint(fmt, base)
+    asked = []
+    monkeypatch.setattr(core, "discdb_online", lambda h: asked.append(h) or {"title": "Newer", "source": "thediscdb.com"})
+    assert core.discdb_lookup(fp, online=True, index=con)["hit"]["title"] == "Test Movie Mystery" and not asked
+    other = {"hash": "F" * 32, "files": fp["files"] + [("99999.m2ts", 123)]}
+    got = core.discdb_lookup(other, online=True, index=con)
+    assert asked == ["F" * 32] and got["hit"]["title"] == "Newer" and not got["near"]
+
+    def no_connection(h):
+        raise OSError("no connection")
+    monkeypatch.setattr(core, "discdb_online", no_connection)
+    got = core.discdb_lookup(other, online=True, index=con)      # (no internet: as if never asked, near matches too)
+    assert got["hit"] is None and got["near"] and "online lookup failed" in got["errors"][0]
+    con.close()
+
+
 def test_lookup_and_near_match(github, tmp_path, movie_disc):
     con = core.discdb_index_open(str(tmp_path / "discdb"))
     fmt, base = core.detect_format(movie_disc)

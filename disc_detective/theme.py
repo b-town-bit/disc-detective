@@ -242,8 +242,7 @@ def checkbox_style(st):
                       ("selected", on), sticky="")
     st.layout("TCheckbutton", [("Checkbutton.padding", {"sticky": "nswe", "children": [
         ("Tick.indicator", {"side": "left", "sticky": ""}),
-        ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [
-            ("Checkbutton.label", {"sticky": "nswe"})]})]})])
+        ("Checkbutton.label", {"side": "left", "sticky": "w"})]})])
     st.configure("TCheckbutton", padding=_scaled((0, 2)), indicatormargin=0)
     st.map("TCheckbutton", background=[("active", VELLUM_100)])
 
@@ -285,6 +284,21 @@ def round_button(name, bg, fg, border, active, pressed, disabled_bg, disabled_fg
     st.configure(name, foreground=fg, font=font, padding=padding, focuscolor=bg, background=outer)
     st.map(name, foreground=[("disabled", disabled_fg)], background=[("disabled", outer), ("active", outer),
                                                                      ("pressed", outer)])
+
+
+def _without_focus(layout):
+    """A ttk layout, its focus ring taken out and what was inside it left in place."""
+    out = []
+    for element, options in layout:
+        options = dict(options)
+        inside = _without_focus(options.pop("children", []))
+        if "focus" in element.lower():
+            out.extend(inside)
+            continue
+        if inside:
+            options["children"] = inside
+        out.append((element, options))
+    return out
 
 
 def setup(root):
@@ -334,6 +348,8 @@ def setup(root):
            lightcolor=[("selected", VELLUM_100)],
            padding=[("selected", _scaled((14, 5)))],          # clam shrinks the selected tab; keep it the same size
            expand=[("selected", _scaled((0, 4, 0, 0)))])     # then grow it upwards only, so no tab edge moves sideways
+    for style in ("TNotebook.Tab", "TRadiobutton", "Item"):        # (no dotted outline on what was last clicked)
+        st.layout(style, _without_focus(st.layout(style)))
     st.configure("TCombobox", fieldbackground=CARD, background=VELLUM_100, bordercolor=BRASS_400,
                  lightcolor=CARD, darkcolor=CARD, arrowcolor=BRASS_700, padding=_scaled(2), arrowsize=px(12))
     st.map("TCombobox", fieldbackground=[("readonly", CARD)], background=[("active", VELLUM_200)],

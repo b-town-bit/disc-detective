@@ -92,6 +92,7 @@ def index_gz(tmp_path_factory, discdb_repo):
 @pytest.fixture
 def github(index_gz, discdb_repo, imdb_dir, monkeypatch):
     srv = fixtures.FakeGitHub(asset=index_gz, raw_root=os.path.join(discdb_repo, "data"), imdb_dir=imdb_dir)
+    monkeypatch.setattr(core, "imdb_credits_build", lambda *a, **k: None)     # (1.1 GB from the real IMDb otherwise)
     monkeypatch.setattr(core, "DISCDB_INDEX_URL", srv.base + "/dl/discdb_index.sqlite.gz")
     monkeypatch.setattr(core, "DISCDB_RAW", srv.base + "/raw/")
     monkeypatch.setattr(core, "IMDB_BASE", srv.base + "/imdb/")

@@ -12,6 +12,7 @@ import re
 import struct
 
 PROJECT_NAMES = ("bluray-project.bin",)
+FRAMEWORK_FILES = (("Sony", "bluray-project.bin"), ("Warner", "menu_base.prop"))
 ENTRY_RE = re.compile(rb"(?:F?PL_|SF_|TMPL )[ -~]{2,60}")
 LENGTH_FIT = 0.02        # a name's running time within this of its playlist's (and 2 s) is its
 
@@ -48,6 +49,49 @@ def menu_program(root):
     n = _u16(d, p + 24)
     titles = [obj(d[p + 26 + 12 * i: p + 38 + 12 * i]) for i in range(n)]
     return {"first_play": first, "top_menu": top, "titles": titles}
+
+
+def _framework(root):
+    """The studio menu framework whose files a disc has under BDMV/JAR, or None."""
+    jar = os.path.join(root, "BDMV", "JAR")
+    if os.path.isfile(os.path.join(jar, "onQClient.cfg")):
+        return "onQ"
+    try:
+        folders = sorted(os.listdir(jar))
+    except OSError:
+        return None
+    for folder in folders:
+        for framework, name in FRAMEWORK_FILES:
+            if os.path.isfile(os.path.join(jar, folder, name)):
+                return framework
+    return None
+
+
+def menu_style(root):
+    """What kind of menus a Blu-ray has, off its files in a moment: {"menu": "BD-J", "HDMV" or None,
+    "framework": "Sony", "Warner", "onQ" or None}. A framework's files make it BD-J, whatever starts
+    it; else its first play and top menu say: Java in either makes it BD-J, though other titles may
+    be HDMV (Muppets from Space's)."""
+    framework = _framework(root)
+    try:
+        program = menu_program(root) or {}
+    except (struct.error, IndexError):       # (a broken index: as good as none)
+        program = {}
+    runs = {(program.get(k) or (None,))[0] for k in ("first_play", "top_menu")}
+    menu = "BD-J" if framework or "bdj" in runs else "HDMV" if "hdmv" in runs else None
+    return {"menu": menu, "framework": framework}
+
+
+def crawlable(style):
+    """Whether a crawl can work a disc of this style (menu_style): HDMV's. A Java menu no reader of ours
+    knows is left alone: Arrow's sat on its first play for four minutes, to nothing."""
+    return bool(style) and style.get("menu") == "HDMV"
+
+
+def style_line(style):
+    """A disc's menu style for the log: "BD-J, onQ"."""
+    style = style or {}
+    return ", ".join(x for x in (style.get("menu") or "no menu program found", style.get("framework")) if x)
 
 
 def project_title(root):

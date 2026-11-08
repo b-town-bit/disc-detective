@@ -262,10 +262,13 @@ def readings_of(pressed):
 
 
 class Crawler:
+    playing = None                              # (VLC's title of the Play All, or the top menu's: wait_playing)
+
     def __init__(self, v, titles, items, out_dir, log=print, sleep=time.sleep, clock=time.time):
         self.v, self.titles, self.items, self.out_dir = v, titles, items, out_dir
         self.log, self.sleep, self.clock = log, sleep, clock
         self.places = None                      # (the bar's page of episodes, its special features)
+        self.extras_heading = (None, False)     # (the special features page's heading line, whether it has several)
 
     def rows(self):
         return page_rows(menus.rapid_lines(self.v.frame()))
@@ -556,7 +559,8 @@ class Crawler:
                           limit=EVERY_WAY_LIMIT)
                 real = scenes()
         self.log("special features: %d buttons" % len(real))
-        kind = None if several_headings(lines, buttons, frame) else menus.heading_kind(page_heading(lines, buttons, frame))
+        self.extras_heading = (page_heading(lines, buttons, frame), several_headings(lines, buttons, frame))
+        kind = None if self.extras_heading[1] else menus.heading_kind(self.extras_heading[0])
 
         def entry(b, title, seconds, vlc=None):
             return {"title": title, "number": None, "name": button_words(b, buttons, lines), "seconds": seconds, "box": b["box"],
@@ -584,6 +588,38 @@ class Crawler:
                     out.append(entry(b, want, lengths.get(want), first + i if run else None))
                 return out
         return [entry(b, h[0], h[1], h[3]) for b, h in ((b, hear(b)) for b in real) if h]
+
+
+def pages_of(pressed, extras, heading=None, mixed=False):
+    """What was pressed as a DVD crawl's pages (menus.crawl's "pages"), so that one set of rules reads both:
+    the bar, its two items leading to the page of episodes and the special features page, each button with
+    the title it plays. heading, mixed: the special features page's (Crawler.extras_heading)."""
+    def page(number, buttons, route, line=None, several=False):
+        image = next((p["image"] for p in buttons if p.get("image")), None)
+        return {"domain": "bd", "page": number, "program": 1, "route": route, "heading": line or "", "heading_line": line,
+                "mixed": several, "image": image, "buttons": [
+                    {"n": i, "rect": [round(x) for x in p["box"]], "text": ("%d) " % p["number"] if p.get("number") is not None else "") + p["name"],
+                     "plays": {"title": p["title"], "chapter": 1, "seconds": p["seconds"]}}
+                    for i, p in enumerate(buttons, 1)]}
+    leads = lambda text, n, to: {"n": n, "rect": [0, 0, 0, 0], "text": text, "goes_to": {"page": to, "program": 1}}
+    bar = {"domain": "bd", "page": 0, "program": 1, "route": [], "heading": "", "image": None,
+           "buttons": [leads("Episodes", 1, 1), leads("Special Features", 2, 2)]}
+    way = lambda n: [{"page": 0, "program": 1, "button": n}]
+    return [bar] + ([page(1, pressed, way(1))] if pressed else []) + ([page(2, extras, way(2), heading, mixed)] if extras else [])
+
+
+def crawl_result(root, c, pressed, extras, out_dir):
+    """What a crawl comes to: its pages as a DVD's, and what the shared rules make of them (for a film);
+    its readings (for a show). Kept, as a DVD's is, to go over again with no disc."""
+    everything = pressed + extras
+    out = {"drive": root, "pages": pages_of(pressed, extras, *c.extras_heading), "chapters": {}, "opening": [], "reader": "rapidocr",
+           "suspects": len(everything),
+           "tv": {"readings": readings_of(everything), "played": [p["title"] for p in everything], "promos": [], "promo_names": {},
+                  "play_alls": [], "opening": [], "commentary_versions": []},
+           # (what VLC can open by itself: it can't seek a Play All to an episode inside it)
+           "watch": {p["title"]: {"title": p["vlc"]} for p in everything if p.get("vlc") not in (None, c.playing)}}
+    out["found"] = dict(menus.menu_titles(out), reader="rapidocr")
+    return menus.finish_crawl(out, out_dir)
 
 
 def from_files(root, label, titles, log=print, read=None, out_dir=None):
@@ -649,20 +685,14 @@ def crawl(root, vlc_dir, titles, out_dir, log=print):
         v.open("bluray:///%s/" % root.replace("\\", "/").rstrip("/"))
         longest = max((t.get("duration") or 0) for t in titles)
         c = Crawler(v, titles, play_alls(root, longest), out_dir, log)
-        playing = c.wait_playing(longest)
+        playing = c.playing = c.wait_playing(longest)
         if playing is None:
             raise menus.Lost("nothing started playing")
         vlc_titles = [t for t in v.titles() if not t.get("menu")]
         pressed = c.crawl(vlc_titles, playing)
         if not pressed:
             raise menus.Lost("no page of episodes answered")
-        pressed += c.extras(vlc_titles, playing)
-        readings = readings_of(pressed)
-        return {"tv": {"readings": readings, "played": [p["title"] for p in pressed], "promos": [], "promo_names": {},
-                       "play_alls": [], "opening": [],
-                       "commentary_versions": []}, "pages": [], "found": {}, "suspects": len(pressed),
-                # (what VLC can open by itself: it can't seek a Play All to an episode inside it)
-                "watch": {p["title"]: {"title": p["vlc"]} for p in pressed if p.get("vlc") not in (None, playing)}}
+        return crawl_result(root, c, pressed, c.extras(vlc_titles, playing), out_dir)
     finally:
         v.close()
         os.environ["PATH"] = path

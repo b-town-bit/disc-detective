@@ -27,6 +27,7 @@ def gui(monkeypatch, tmp_path):
     monkeypatch.setattr(dd_app, "SETTINGS", str(tmp_path / "settings.json"))
     monkeypatch.setattr(dd_app, "optical_drives", lambda: [])
     monkeypatch.setattr(dd_app.App, "MIN_STATUS_MS", 0)      # the story plays instantly in tests
+    monkeypatch.setattr(dd_app.App, "refresh_credits", lambda self, args: None)     # (1.1 GB from the real IMDb otherwise)
     # a real message box waits for a click forever (on Windows the tests open real windows)
     for name in ("showerror", "showwarning", "showinfo"):
         monkeypatch.setattr(dd_app.messagebox, name, lambda *a, **k: None)
@@ -80,14 +81,13 @@ def test_first_run_then_settings(gui, github, tmp_path, monkeypatch):
     sd.key.set("abc123")
     sd.test_key()
     assert pump(lambda: "works" in sd.key_note.cget("text"), 5)
-    sd.pictures.set(False)
     assert sd.order.get() == "aired"                 # Plex's default
     sd.order.set("dvd")
     sd.update("discdb")
     assert pump(lambda: "Up to date" in sd.prog.text.cget("text"))
     sd.close()
     args = app.scan_args()
-    assert args.tmdb_key == "abc123" and args.no_art and not args.no_discdb_online
+    assert args.tmdb_key == "abc123" and not args.no_art and not args.no_discdb_online   # (no choice in those)
     assert args.episode_order == "dvd"
     assert dd_app.load_settings()["tmdb_key"] == "abc123"
 
@@ -394,6 +394,7 @@ def test_long_title_list_scrolls_and_keeps_the_buttons_on_screen(gui, tmp_path, 
     orig = core.default_args
     monkeypatch.setattr(core, "default_args", lambda **kw: orig(**dict(kw, offline=True)))
     app = dd_app.App(root)
+    app.extras.set(True)                     # (extras in the lists, as they are when ripped)
     app.source.set(fixtures.make_tv_bluray(str(tmp_path / "JUSTIFIED")))
     app.source_changed()
     app.scan()
@@ -506,7 +507,7 @@ def test_ticked_version_is_an_edition():
 
 
 def test_rip_preferences_in_settings(gui, monkeypatch):
-    """Settings > Ripping > What to rip: Include extras is the rip menu's own tick (either one
+    """Settings > Disc > Ripping: Include extras is the rip menu's own tick (either one
     changes both, remembered). No Prefer widescreen: the better picture is always the default."""
     root, made, pump = gui
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
@@ -514,10 +515,140 @@ def test_rip_preferences_in_settings(gui, monkeypatch):
     d = dd_app.SettingsDialog(root, app)
     assert not app.extras.get() and not hasattr(d, "wide")
     ticks = {w.cget("text"): w for w in made_widgets(d.top) if w.winfo_class() == "TCheckbutton"}
-    ticks["Include extras"].invoke()
+    ticks["Include extras by default"].invoke()
     assert app.extras.get() and dd_app.load_settings()["extras"]
     assert "Prefer widescreen" not in ticks
     d.close()
+
+
+def test_settings_are_on_the_tab_they_belong_to(gui, monkeypatch):
+    """Disc Scan has what shapes a scan and its titles; Integrations the programs and keys."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    d = dd_app.SettingsDialog(root, app)
+    tabs = {d.tabs.tab(t, "text"): " | ".join(str(w.cget("text")) for w in made_widgets(d.tabs.nametowidget(t))
+                                             if w.winfo_class() in ("TLabel", "TCheckbutton", "TRadiobutton"))
+            for t in d.tabs.tabs()}
+    assert list(tabs) == ["DISC", "DATA", "INTEGRATIONS"]
+    on = lambda tab, *texts: [t for t in texts if t not in tabs[tab] or any(t in v for k, v in tabs.items() if k != tab)]
+    assert not on("DISC", "Include extras by default", "from a DVD's menus", "from a Blu-ray's menus",
+                  "During a scan", "copies and Play Alls", "aired order")
+    assert not on("INTEGRATIONS", "MakeMKV", "TMDB key", "Gemini key", "Posters", "AI Assistance")
+    assert "VLC | " in tabs["INTEGRATIONS"]        # (its heading: Detect titles' words say what it's for)
+    assert "IMDb" in tabs["DATA"] and "IMDb credits" not in " | ".join(tabs.values())       # (part of IMDb's data)
+    every = " | ".join(tabs.values())
+    assert "thediscdb.com when scanning" not in every and "Show posters" not in every   # (they just happen)
+    d.close()
+
+
+def test_extras_are_in_the_title_lists_only_when_theyre_ripped(gui, tmp_path, monkeypatch):
+    """Include extras on: in sight. Off: under Show more with the promos, in both lists, and not waiting to be
+    confirmed, there to browse. A tick you've made stays in sight."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    rep = {"content_hash": "6" * 32, "format": "DVD", "kind": "movie", "best_guess": "Film (2001)", "path": str(tmp_path),
+           "candidates": [{"kind": "movie", "name": "Film", "year": 2001, "imdb_id": "tt0000001", "score": 90}],
+           "titles": [{"id": "Title 1", "role": "feature", "duration": 6000},
+                      {"id": "Title 3", "role": "extra", "duration": 300},
+                      {"id": "Title 4", "role": "promo", "duration": 200}], "labels": {}}
+    app.rep = rep
+    assert not app.extras.get()                                       # (off until you say)
+    picker = dd_app.TitlePicker(root, app)
+    assert set(picker.vars) == {"Title 1"}
+    assert picker.more.cget("text") == "Show 2 more: extras, duplicates, play-alls, promos and pieces of the film"
+    picker.show_all.set(True)
+    picker.refill()
+    assert set(picker.vars) == {"Title 1", "Title 3", "Title 4"}
+    picker.vars["Title 3"].set(True)
+    picker.show_all.set(False)
+    picker.refill()
+    assert "Title 3" in picker.vars                                   # (ticked: stays)
+    picker.top.destroy()
+    app.extras.set(True)
+    picker = dd_app.TitlePicker(root, app)
+    assert set(picker.vars) == {"Title 1", "Title 3"}
+    assert picker.more.cget("text") == "Show 1 more: duplicates, play-alls, promos and pieces of the film"
+    picker.top.destroy()
+    # Edit titles: even one the menus have a word on
+    rep.update(staked_out=True, detected={"Title 3": {"type": "Extra", "title": "Making Of", "season": "", "episode": ""}})
+    assert app.titles_waiting() == ["Title 3"]
+    d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
+    assert "Title 3" in d.vars and d.heads["CONFIRM?"].cget("text") == "CONFIRM?"
+    d.close()
+    app.extras.set(False)
+    assert app.titles_waiting() == []
+    d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
+    assert set(d.vars) == {"Title 1"} and d.heads["CONFIRM?"].cget("text") == ""
+    d.show_all.set(True)
+    d.refill()
+    assert "Title 3" in d.vars and d.heads["CONFIRM?"].cget("text") == "CONFIRM?"
+    d.close()
+
+
+def test_imdb_credits_are_part_of_imdbs_data(tmp_path, monkeypatch):
+    built = []
+    monkeypatch.setattr(core, "imdb_open", lambda *a, **k: None)
+    monkeypatch.setattr(core, "imdb_credits_build", lambda d, log=None: built.append(d))
+    current = {"built": "2026-11-01", "current": True, "people": 1, "mb": 1}
+    monkeypatch.setattr(core, "imdb_credits_info", lambda d: current)
+    monkeypatch.setattr(core, "imdb_index_info", lambda d: {"built": "2026-11-01", "titles": 1, "current": True})
+    args = SimpleNamespace(imdb_dir="imdb")
+    core.update_data(args, ["imdb"])
+    assert not built                                   # (up to date)
+    core.update_data(args, ["imdb"], force=True)
+    assert built == ["imdb"]                           # (Update now: both)
+    built.clear()
+    core.update_data(args, [])
+    assert not built
+    # a scan refreshed the IMDb index: the credits follow, out of the way, at the next launch
+    app = SimpleNamespace()
+    assert dd_app.App.refresh_credits(app, args) is None
+    monkeypatch.setattr(core, "imdb_index_info", lambda d: {"built": "2026-12-01", "titles": 1, "current": True})
+    assert core.imdb_credits_stale("imdb")
+    dd_app.App.refresh_credits(app, args).join(5)
+    assert built == ["imdb"]
+    built.clear()
+
+    def fails(d, log=None):
+        built.append("tried")
+        raise OSError("no connection")
+    monkeypatch.setattr(core, "imdb_credits_build", fails)
+    dd_app.App.refresh_credits(app, args).join(5)      # (logged: never a problem for the app)
+    assert built == ["tried"]
+
+
+def test_first_run_offers_imdb_when_only_its_credits_are_missing(tmp_path, monkeypatch):
+    """Not fetched behind your back when there are none yet: 1.1 GB is asked for."""
+    asked, refreshed = [], []
+    monkeypatch.setattr(core, "imdb_index_info", lambda d: {"built": "2026-11-01", "titles": 1, "current": True})
+    monkeypatch.setattr(core, "discdb_index_info", lambda d: {"built": "2026-11-01", "discs": 1})
+    monkeypatch.setattr(core, "imdb_credits_info", lambda d: None)
+    monkeypatch.setattr(dd_app, "FirstRunDialog", lambda root, app, missing: asked.append(missing))
+    app = SimpleNamespace(root=None, settings={}, scan_args=lambda: SimpleNamespace(imdb_dir="i", discdb_dir="d"),
+                                refresh_credits=lambda args: refreshed.append(args))
+    dd_app.App.maybe_first_run(app)
+    assert asked == [["imdb"]] and not refreshed
+    asked.clear()
+    app.settings["skip_first_run"] = True
+    dd_app.App.maybe_first_run(app)
+    assert not asked and not refreshed
+    monkeypatch.setattr(core, "imdb_credits_info", lambda d: {"built": "2026-11-01", "current": True})
+    app.settings.clear()
+    dd_app.App.maybe_first_run(app)
+    assert not asked and len(refreshed) == 1
+
+
+def test_nothing_clicked_shows_a_focus_outline(gui):
+    root, made, pump = gui
+    from disc_detective import theme
+    layout = [("a.tab", {"sticky": "nswe", "children": [("a.focus", {"side": "top", "children": [("a.label", {"sticky": ""})]})]})]
+    assert theme._without_focus(layout) == [("a.tab", {"sticky": "nswe", "children": [("a.label", {"sticky": ""})]})]
+    theme.setup(root)
+    style = tk.ttk.Style(root)
+    for name in ("TNotebook.Tab", "TCheckbutton", "TRadiobutton", "Item"):
+        assert "focus" not in str(style.layout(name)).lower(), name
 
 
 def made_widgets(w):
@@ -921,6 +1052,7 @@ def test_label_titles_saves_your_labels(gui, tmp_path, monkeypatch):
     root, made, pump = gui
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
     app = dd_app.App(root)
+    app.extras.set(True)                     # (extras in the lists, as they are when ripped)
     db = str(tmp_path / "lib.sqlite")
     h = "L" * 32
     con = core.library_open(db)
@@ -1106,6 +1238,7 @@ def test_what_the_menus_found_is_saved_once_confirmed(gui, tmp_path, monkeypatch
     root, made, pump = gui
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
     app = dd_app.App(root)
+    app.extras.set(True)                     # (extras in the lists, as they are when ripped)
     app.settings["menu_detect"] = True
     rep = {"content_hash": "6" * 32, "format": "DVD", "kind": "movie", "best_guess": "Film (2001)", "path": str(tmp_path),
            "candidates": [{"kind": "movie", "name": "Film", "year": 2001, "imdb_id": "tt0000001", "score": 90}],
@@ -1382,6 +1515,7 @@ def test_detect_titles_button(gui, tmp_path, monkeypatch):
     root, made, pump = gui
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
     app = dd_app.App(root)
+    app.extras.set(True)                     # (extras in the lists, as they are when ripped)
     rep = {"content_hash": "4" * 32, "format": "DVD", "kind": "movie", "best_guess": "Film (2001)", "path": str(tmp_path),
            "candidates": [{"kind": "movie", "name": "Film", "year": 2001, "imdb_id": "tt0000001", "score": 90}],
            "titles": [{"id": "Title 1", "role": "feature", "duration": 6000},
@@ -1615,6 +1749,7 @@ def test_promos_and_repeats_stay_out_of_the_way(gui, monkeypatch):
     root, made, pump = gui
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
     app = dd_app.App(root)
+    app.extras.set(True)                     # (extras in the lists, as they are when ripped)
     rep = {"content_hash": "2" * 32, "format": "DVD", "kind": "movie", "best_guess": "Film (2001)",
            "candidates": [{"kind": "movie", "name": "Film", "year": 2001, "imdb_id": "tt0000001", "score": 90}],
            "titles": [{"id": "Title 1", "role": "feature", "duration": 6000},
@@ -1638,7 +1773,7 @@ def test_promos_and_repeats_stay_out_of_the_way(gui, monkeypatch):
     assert picker.what(rep["titles"][3]) == "Promo: Coming Soon to DVD"    # what it is, by your label
     assert picker.what(rep["titles"][1]) == "Copy of Title 1"
     picker.ok()
-    assert app.selected == {"Title 1", "Title 4"}
+    assert app.selected == {"Title 1", "Title 3", "Title 4"}
 
 
 def test_choose_titles_names_titles_as_edit_titles_does(gui, monkeypatch):
@@ -2176,6 +2311,7 @@ def test_edit_titles_shows_each_films_extras_and_follows_a_rescan(gui, monkeypat
     root, made, pump = gui
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
     app = dd_app.App(root)
+    app.extras.set(True)                     # (extras in the lists, as they are when ripped)
     rep = navy_and_ghost(first="Title 2")
     d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Abbott and Costello", rep=rep)
     words = lambda tid: [w.cget("text") for w in d.film_cells[tid].winfo_children()]
@@ -2230,7 +2366,7 @@ def test_a_rescan_keeps_what_the_menus_said(gui, monkeypatch, tmp_path):
 
 
 def test_detect_titles_during_the_scan(gui, monkeypatch):
-    """Settings > Ripping: Detect titles during a scan. "When the film isn't certain": a guess
+    """Settings > Disc: Detect titles during a scan. "When the film isn't certain": a guess
     (or nothing named, or a second feature unnamed), not a sure film, yours or TheDiscDB's.
     "Every disc whose titles aren't known": a sure film too, unless TheDiscDB or your labels name
     its titles. The stakeout's pictures then help name the disc; its titles are named for the film
@@ -2238,6 +2374,7 @@ def test_detect_titles_during_the_scan(gui, monkeypatch):
     root, made, pump = gui
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
     app = dd_app.App(root)
+    app.extras.set(True)                     # (extras in the lists, as they are when ripped)
     film = {"kind": "movie", "name": "Keep 'Em Flying", "score": 99, "imdb_id": "tt0033781"}
     sure = {"format": "DVD", "kind": "movie", "path": "E:\\", "content_hash": "676F", "status": "probable: x",
             "candidates": [film], "discdb": {"hit": None}, "labels": {}, "films_apart": 1}

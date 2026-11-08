@@ -1,6 +1,6 @@
 # Data sources and other software
 
-Disc Detective's own code is MIT licensed (see `LICENSE`). It uses data and tools
+Disc Detective's own code is under the PolyForm Noncommercial License 1.0.0 (see `LICENSE`). It uses data and tools
 from these projects, each under its own terms.
 
 ## TheDiscDB

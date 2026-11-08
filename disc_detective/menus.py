@@ -391,9 +391,11 @@ def rapid_text(image):
     return " ".join(t for t, _, _ in sorted(lines, key=lambda x: (x[1][1], x[1][0])))
 
 
-def rapid_lines(image, least=None):
+def rapid_lines(image, least=None, corners=None):
     """rapid_text's lines it's sure of (least: RAPID_LEAST): [(text, (x0, y0, x1, y1), how sure)], or
-    None when RapidOCR isn't installed."""
+    None when RapidOCR isn't installed. corners: a list given gets the same lines with their four
+    corners as RapidOCR found them ((x, y) top left, top right, bottom right, bottom left): a line's
+    slant (_keystone)."""
     global _rapid
     with _rapid_lock:
         if _rapid is None:
@@ -417,8 +419,12 @@ def rapid_lines(image, least=None):
             return None
     if got.boxes is None:
         return []
+    least = RAPID_LEAST if least is None else least
+    if corners is not None:
+        corners.extend((t, tuple((float(x), float(y)) for x, y in b[:4]), float(s))
+                       for b, t, s in zip(got.boxes, got.txts, got.scores) if s >= least)
     return [(t, (float(b[:, 0].min()), float(b[:, 1].min()), float(b[:, 0].max()), float(b[:, 1].max())), float(s))
-            for b, t, s in zip(got.boxes, got.txts, got.scores) if s >= (RAPID_LEAST if least is None else least)]
+            for b, t, s in zip(got.boxes, got.txts, got.scores) if s >= least]
 
 
 _pages_read = {}                    # {(id, size): a page's rapid_lines}: each picture read once
@@ -433,14 +439,107 @@ def _page_lines(image, scale=1):
         if key not in _pages_read:
             if len(_pages_read) > 8:        # (a stakeout's last few pictures)
                 _pages_read.clear()
+            corners = []
             if scale == 1:
-                lines = rapid_lines(image)
+                lines = rapid_lines(image, corners=corners)
             else:
                 from PIL import Image
                 lines = rapid_lines(image.resize((image.width * scale, image.height * scale), Image.LANCZOS))
                 lines = None if lines is None else [(t, tuple(v / scale for v in b), s) for t, b, s in lines]
-            _pages_read[key] = (image, lines)   # (the picture kept: its id isn't reused)
+            _pages_read[key] = (image, lines, corners)   # (the picture kept: its id isn't reused)
         return _pages_read[key][1]
+
+
+def _page_corners(image):
+    """_page_lines' lines (its own size) with their four corners (rapid_lines' corners)."""
+    _page_lines(image)
+    with _pages_lock:
+        got = _pages_read.get((id(image), image.size, 1))
+    return got[2] if got else []
+
+
+# A backup only (_second_readings' last): a page wrongly taken for one costs a reading of its weak buttons, kept
+# only if surer, so these needn't be strict (205 pages: the five Oscorp ones, and some with tilted lettering).
+KEYSTONE_SLANTS = 3.0       # degrees: a page's lines' slants differing this much, running to one point, are a
+                            # picture of a screen at an angle (Spider-Man's Oscorp pages: 9-11, +2 at the top, -8 below)
+KEYSTONE_MISS = 1.5         # degrees: a line further off the slant that point gives it isn't on that screen (title art)
+KEYSTONE_LINES = 4          # lines on it, at least
+KEYSTONE_FAR = 1.0          # page widths from its middle, the point at least (Oscorp: 2.1-2.4): well off the page
+KEYSTONE_WIDE = 30          # pixels: a line narrower has too rough a slant to judge by
+
+
+def _keystone(image):
+    """Where a page's lines run to, if it's a picture of a screen at an angle (Spider-Man's Oscorp pages: a
+    monitor seen from its left; their text slants more the lower it is): (x, y) in the picture's pixels, out to
+    its left or right, else None. From the slants of the lines it reads well (_page_corners): the point nearest
+    every line's own run (least squares), fitted again without the lines off it (a tilted title's art), their
+    slants differing down the page."""
+    import math
+    use = []
+    for _, c, sure in _page_corners(image):
+        (x0, y0), (x1, y1), (x2, y2), (x3, y3) = c
+        w = math.hypot(x1 - x0, y1 - y0)
+        if sure < READ_LEAST or w < KEYSTONE_WIDE:
+            continue
+        a = math.atan2((y1 - y0) + (y2 - y3), (x1 - x0) + (x2 - x3))
+        use.append(((x0 + x1 + x2 + x3) / 4, (y0 + y1 + y2 + y3) / 4, a, w))
+
+    def fit(lines):                         # each line: n . V = n . c, n its normal; weighted by its width
+        sxx = sxy = syy = bx = by = 0.0
+        for cx, cy, a, w in lines:
+            nx, ny = -math.sin(a), math.cos(a)
+            d = nx * cx + ny * cy
+            sxx, sxy, syy, bx, by = sxx + w * nx * nx, sxy + w * nx * ny, syy + w * ny * ny, bx + w * nx * d, by + w * ny * d
+        det = sxx * syy - sxy * sxy
+        v = None if abs(det) < 1e-9 else ((bx * syy - by * sxy) / det, (by * sxx - bx * sxy) / det)
+        return v if v and abs(v[0] - image.width / 2) >= KEYSTONE_FAR * image.width else None
+
+    slant = lambda v, l: math.atan((v[1] - l[1]) / (v[0] - l[0]))         # (the slant that point gives a line)
+    on = lambda v: [l for l in use if abs(math.degrees(slant(v, l) - l[2])) <= KEYSTONE_MISS]
+    if len(use) < KEYSTONE_LINES:
+        return None
+    v = fit(use)
+    for _ in range(2):
+        if not v or len(on(v)) < KEYSTONE_LINES:
+            return None
+        v = fit(on(v))
+    kept = on(v) if v else []
+    if len(kept) < KEYSTONE_LINES:
+        return None
+    seen = [math.degrees(slant(v, l)) for l in kept]
+    return v if max(seen) - min(seen) >= KEYSTONE_SLANTS else None
+
+
+def _flattened(image, box, point, scale=2):
+    """A box of a page seen at an angle (_keystone's point), made level and square on: its words' lines
+    straight across and as big on its far side as its near one, at scale times its size (smaller, they read
+    worse; bigger, and sharpening or blurring after, did no better: Spider-Man's Oscorp pages). And where a
+    spot in it is on the page. (A screen's sides are taken to be upright: so they are in a picture of one.)"""
+    from PIL import Image
+    vx, vy = point
+    # the page to level: (x, y) to (x, y - x vy/vx) / (1 - x/vx), the point sent off to the far right or left
+    def to_flat(x, y):
+        w = 1 - x / vx
+        return x / w, (y - x * vy / vx) / w
+    pts = [to_flat(x, y) for x, y in ((box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3]))]
+    X0, Y0 = min(p[0] for p in pts), min(p[1] for p in pts)
+    X1, Y1 = max(p[0] for p in pts), max(p[1] for p in pts)
+    if X1 <= X0 or Y1 <= Y0:
+        return None, None
+    k = scale * ((box[2] - box[0]) * (box[3] - box[1]) / ((X1 - X0) * (Y1 - Y0))) ** 0.5
+    # back: the levelled spot (X0 + u/k, Y0 + v/k) of the new picture's (u, v), on the page: X = x/w, Y = (y - x vy/vx)/w
+    # with w = 1 - x/vx gives x = X / (1 + X/vx), y = (Y + X vy/vx) / (1 + X/vx)
+    a, b = 1 / k, X0
+    c, d = 1 / k, Y0
+    out = (a, 0, b, vy / vx * a, c, vy / vx * b + d, a / vx, 0, b / vx + 1)       # rows of the 3x3 matrix
+    out = tuple(v / out[8] for v in out)
+    size = (max(1, int((X1 - X0) * k)), max(1, int((Y1 - Y0) * k)))
+    pic = image.transform(size, Image.PERSPECTIVE, out[:8], Image.BICUBIC)
+
+    def at_page(u, v):
+        w = out[6] * u + out[7] * v + out[8]
+        return (out[0] * u + out[1] * v + out[2]) / w, (out[3] * u + out[4] * v + out[5]) / w
+    return pic, at_page
 
 
 def _heading_boxes(image, rect, others, frame_size):
@@ -709,10 +808,32 @@ def _cell(rect, others, frame_size=(720, 480)):
 TINY_REACH = 60         # px: a name this near a tiny button can be its label (the disc's 720x480)
 
 
-def _blocks(lines):
+NAME_PITCH = 0.9        # a name's next line starts within this much of the page's distance from button to button
+
+
+def _button_pitch(rects):
+    """How far apart a page's list of tiny buttons sit, top to top (the disc's coordinates): the middle of
+    the distances from each to the next below it in its column; None for fewer than three in a column, as
+    nothing's to be told from them. The page's own measure of where one name stops and the next starts."""
+    tiny = [r for r in rects if r[2] - r[0] < TINY]
+    centre = lambda r: (r[0] + r[2]) / 2
+    steps = []
+    for r in tiny:
+        below = [o[1] - r[1] for o in tiny if o[1] > r[1] and abs(centre(o) - centre(r)) < TINY]
+        if below:
+            steps.append(min(below))
+    if len(steps) < 2:
+        return None
+    import statistics
+    return statistics.median(steps)
+
+
+def _blocks(lines, pitch=None):
     """A page's lines (rapid_lines) as names: lines stacked right on one another, overlapping side
     to side, one name ("Blockbuster / Countdown / Thursday"): [(text, (x0, y0, x1, y1), how sure:
-    its least sure line)]."""
+    its least sure line)]. pitch: how far apart the page's buttons sit, in the lines' pixels
+    (_button_pitch): lines this far apart are two names, however close (3 Ninjas: Knuckle Up's trailers,
+    a list set tight, one of them three lines long). How near any two lines may be stays the limit."""
     blocks = []
     for t, b, sure in sorted(lines, key=lambda x: x[1][1]):
         h = b[3] - b[1]
@@ -721,7 +842,8 @@ def _blocks(lines):
             low = min(h, o[3] - o[1])
             # (overlapping by half the narrower at least: "Review #1" over a MARKETING panel isn't one)
             over = min(b[2], o[2]) - max(b[0], o[0])
-            if over >= 0.5 * min(b[2] - b[0], o[2] - o[0]) and -0.6 * low <= b[1] - o[3] <= 0.8 * low:
+            if over >= 0.5 * min(b[2] - b[0], o[2] - o[0]) and -0.6 * low <= b[1] - o[3] <= 0.8 * low and \
+                    not (pitch and b[1] - o[1] >= NAME_PITCH * pitch):
                 blk.append((t, b, sure))
                 break
         else:
@@ -743,9 +865,13 @@ def _tiny_names(image, rects, frame_size=(720, 480)):
     if not lines:
         return {}
     sx, sy = image.width / frame_size[0], image.height / frame_size[1]
-    blocks = [(t, (b[0] / sx, b[1] / sy, b[2] / sx, b[3] / sy), sure) for t, b, sure in _blocks(lines)]
+    pitch = _button_pitch(rects)
+    blocks = [(t, (b[0] / sx, b[1] / sy, b[2] / sx, b[3] / sy), sure) for t, b, sure in _blocks(lines, pitch and pitch * sy)]
     mid = lambda b: ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
     inside = lambda b, r: r[0] <= mid(b)[0] <= r[2] and r[1] <= mid(b)[1] <= r[3]
+    # (a list of names goes by where each starts: their lengths move their middles, a long one's far
+    # from its button: Knuckle Up's Roughnecks, three lines. Thumbnails' names go by their middles)
+    spot_of = (lambda b: (b[0], b[1])) if pitch else mid
     tiny = [tuple(r) for r in rects if r[2] - r[0] < TINY]
     wide = [r for r in rects if r[2] - r[0] >= TINY]
     blocks = [x for x in blocks if not any(inside(x[1], r) for r in wide)]
@@ -763,10 +889,10 @@ def _tiny_names(image, rects, frame_size=(720, 480)):
     if not first:
         return {}
     import statistics
-    dx = statistics.median(mid(blocks[k][1])[0] - mid(tiny[i])[0] for i, k in first.items())
-    dy = statistics.median(mid(blocks[k][1])[1] - mid(tiny[i])[1] for i, k in first.items())
-    spot = lambda i, k: ((mid(blocks[k][1])[0] - mid(tiny[i])[0] - dx) ** 2 +
-                         (mid(blocks[k][1])[1] - mid(tiny[i])[1] - dy) ** 2) ** 0.5
+    dx = statistics.median(spot_of(blocks[k][1])[0] - spot_of(tiny[i])[0] for i, k in first.items())
+    dy = statistics.median(spot_of(blocks[k][1])[1] - spot_of(tiny[i])[1] for i, k in first.items())
+    spot = lambda i, k: ((spot_of(blocks[k][1])[0] - spot_of(tiny[i])[0] - dx) ** 2 +
+                         (spot_of(blocks[k][1])[1] - spot_of(tiny[i])[1] - dy) ** 2) ** 0.5
     return {tiny[i]: blocks[k] for i, k in pair(spot).items()}
 
 
@@ -1221,7 +1347,7 @@ def feature_phrases(raw, folder, is_word=None):
     film_pages = {tuple(f["page"]): f["title"] for f in features if f.get("page")}
     # each film's menu heading first, read as one line (Meet the Killer, Boris Karloff's: "LOU BUD
     # ABBOTT COSTELLO MEET THE ILLE BORIS KARLOF", where its page's pieces each name nothing)
-    out = {"Title %d" % f["title"]: [trim_menu_words(f["name"])] for f in features
+    out = {title_id(f["title"]): [trim_menu_words(f["name"])] for f in features
            if f.get("name") and trim_menu_words(f["name"])}
     for s, p in pages.items():
         if not p.get("image") or not os.path.exists(os.path.join(folder, p["image"])):
@@ -1240,14 +1366,14 @@ def feature_phrases(raw, folder, is_word=None):
                 f = next((t for k, t in film_pages.items() if k in pages and _menu_parent(pages, k) == s
                           and ((pages[k].get("route") or [{}])[-1]).get("button") == b["n"]), None)
                 if f is not None:
-                    mine = out.setdefault("Title %d" % f, [])
+                    mine = out.setdefault(title_id(f), [])
                     for ph in (trim_menu_words(x) for x in _area_phrases(path, b["rect"])):
                         if ph and ph not in mine and not _menu_words(ph) and not _instructions(ph):
                             mine.append(ph)
             continue
         read = (core.ocr(path) or []) + strip_phrases(path)
         told = [_plain(ph) for ph in read if _instructions(ph)]
-        mine = out.setdefault("Title %d" % owners[-1], [])
+        mine = out.setdefault(title_id(owners[-1]), [])
         for ph in (trim_menu_words(ph) for ph in read):
             if ph and ph not in mine and not _menu_words(ph) and not core.packaging(ph) and \
                     not any(_plain(ph) in t for t in told):
@@ -1766,6 +1892,10 @@ class Lost(Exception):
     """The crawl couldn't tell where it is in the menus."""
 
 
+class Unsupported(Lost):
+    """A disc whose kind of menus no crawl of ours can work: not tried."""
+
+
 class NoReader(Lost):
     """Nothing to read the menus with: a Blu-ray's crawl goes by RapidOCR's lines and their places."""
 
@@ -1964,10 +2094,16 @@ def heading_signs(line, others, frame):
     return signs
 
 
+def _has_words(text):
+    """Whether a line has letters to it, as a heading must: not a page's art read as text (3 Ninjas:
+    Knuckle Up's throwing stars, "***", the tallest and brightest thing on its page)."""
+    return bool(re.search(r"[^\W\d_]{2}", text or ""))
+
+
 def best_heading(free, page, frame=None):
     """Of the lines that could be a page's heading, the one with the most signs, at least two, the
     higher if level; else None. page: all its lines, to compare with."""
-    scored = [(len(heading_signs(l, [o for o in page if o is not l], frame)), -l[1][1], l[0]) for l in free]
+    scored = [(len(heading_signs(l, [o for o in page if o is not l], frame)), -l[1][1], l[0]) for l in free if _has_words(l[0])]
     best = max(scored, default=None)
     return best[2] if best and best[0] >= HEADING_SIGNS else None
 
@@ -1982,7 +2118,7 @@ def several_headings(free, page, frame=None, names=()):
     readings = [letters(n) for n in names]
 
     def heading(line):
-        if letters(line[0]) and any(letters(line[0]) in r for r in readings):
+        if not _has_words(line[0]) or any(letters(line[0]) in r for r in readings):
             return False
         others = [o for o in page if o is not line]
         named = len(line[0].split()) <= SECTION_WORDS and heading_kind(line[0])
@@ -2118,15 +2254,27 @@ def _play_text(text):
     return bool(film) and all(any(_edits(w, v) <= 2 for v in ("play", "start", "watch")) for w in rest)
 
 
+def _can_select(buttons, b):
+    """Whether the highlight can get to a button: arrows are all VLC has, and none may lead to it (Spider-Man's
+    hidden corner buttons). On a page with no arrows set at all, nothing's to be told."""
+    arrows = lambda o: [o.get(k) for k in ("up", "down", "left", "right")]
+    others = [o for o in buttons if o is not b and not o.get("auto")]
+    if not any(m and m != o["n"] for o in others for m in arrows(o)):
+        return True
+    return any(b["n"] in arrows(o) for o in others)
+
+
 def _routes(pages, start, learned=None, known=None):
     """{state: [(state, button), ...]}: the buttons to press from the start menu to reach each
-    state, by the disc's own links and those learned by pressing ({(state, button): state})."""
+    state, by the disc's own links and those learned by pressing ({(state, button): state}). Only
+    buttons the highlight can get to."""
     routes, queue = {start: []}, [start]
     while queue:
         st = queue.pop(0)
-        for b in _state_buttons(pages, st):
+        buttons = _state_buttons(pages, st)
+        for b in buttons:
             nxt = _goes(pages, st, b, learned, known)
-            if nxt and nxt not in routes and not b["auto"]:
+            if nxt and nxt not in routes and not b["auto"] and _can_select(buttons, b):
                 routes[nxt] = routes[st] + [(st, b["n"])]
                 queue.append(nxt)
     return routes
@@ -2362,6 +2510,136 @@ def _count(mask, rect):
     if x1 <= x0 or y1 <= y0:
         return 0
     return mask.crop((x0, y0, x1, y1)).histogram()[255]
+
+
+MENU_ONLY_SECONDS = 30      # a menu program this long, with no buttons, is something to watch
+
+
+def menu_only(pages, structure):
+    """The buttons that play something kept among the disc's menus, not a title: no title list has it, so
+    nothing can rip it (3 Ninjas: Knuckle Up's Jumanji trailer, the last of its Bonus Trailers: 2:52 in the
+    top menu's own video). [(button, its length)], each marked "menu_only"."""
+    programs = {p["pgc"]: p for p in structure.get("vmgm") or []}
+    out = []
+    for page in pages:
+        for b in page.get("buttons") or []:
+            cmd = b.get("cmd") or {}
+            target = programs.get(cmd.get("pgc")) if cmd.get("domain") == "vmgm" else None
+            if not target or target.get("buttons") or b.get("plays") or b.get("goes_to"):
+                continue
+            seconds = sum(c.get("seconds") or 0 for c in target.get("cells") or [])
+            if seconds >= MENU_ONLY_SECONDS and re.search(r"[A-Za-z]{2}", b.get("text") or "") and not _nav_only(b["text"]):
+                b["menu_only"] = round(seconds)
+                out.append((b, seconds))
+    return out
+
+
+READ_CONFIDENT = 0.90      # a button's reading this sure stands; a second reading this sure ends the search
+READ_LEAST = 0.80          # the least sure a line may be, to be kept at all
+READ_SHORTEST = 2          # letters and digits: fewer are no name ("w", off WALL-E's title 84)
+
+
+def _second_readings(pic, box, heads=()):
+    """What else can be read in a button's area (a box in the picture's pixels), cheapest first, as they're
+    wanted: the whole page's lines that fall in it, at its own size and twice it, then the area alone, grey,
+    inverted, at twice the size. Tried on 276 buttons against the names they should have (12 ways of showing
+    them, and these two sources of the page's lines): these do as well as all of them, and running the lot
+    and keeping the surest did worse: the more readings, the more chances of a sure wrong one. Last, on a
+    picture of a screen at an angle only (_keystone), the area made level (_flattened). heads: a page
+    heading's lines dipping into the area (_heading_boxes), no part of the button's words."""
+    from PIL import Image, ImageOps
+    inside = lambda q: box[0] <= (q[0] + q[2]) / 2 <= box[2] and box[1] <= (q[1] + q[3]) / 2 <= box[3]
+    over = lambda b, h: min(b[2], h[2]) > max(b[0], h[0]) and min(b[3], h[3]) - max(b[1], h[1]) > 0.5 * (b[3] - b[1])
+    own = lambda b: not any(over(b, h) for h in heads)
+    for scale in (1, 2):
+        yield [(t, q, sure) for t, q, sure in _page_lines(pic, scale) or [] if inside(q) and own(q)]
+    crop = pic.crop(box)
+    if crop.width and crop.height:
+        grey = ImageOps.autocontrast(ImageOps.grayscale(crop), cutoff=1)
+        at_page = lambda q: (q[0] / 2 + box[0], q[1] / 2 + box[1], q[2] / 2 + box[0], q[3] / 2 + box[1])     # (it's read at twice the size)
+        yield [l for l in rapid_lines(ImageOps.invert(grey.resize((grey.width * 2, grey.height * 2), Image.LANCZOS)).convert("RGB"), least=0.0) or []
+               if own(at_page(l[1]))]
+    point = _keystone(pic)          # a screen seen at an angle: the area made level, at twice the size
+    if point:
+        flat, spot = _flattened(pic, box, point)
+        if flat is not None:
+            def back(q):
+                xs, ys = zip(*(spot(x, y) for x, y in ((q[0], q[1]), (q[2], q[1]), (q[2], q[3]), (q[0], q[3]))))
+                return min(xs), min(ys), max(xs), max(ys)
+            yield [l for l in rapid_lines(flat, least=0.0) or [] if own(back(l[1]))]
+
+
+def _letters(text):
+    return len(re.findall(r"[^\W_]", text or ""))
+
+
+def _read_second(pic, box, heads=()):
+    """The first of _second_readings that's READ_CONFIDENT, else the surest above READ_LEAST: (its lines
+    joined, how sure: its least sure line), or None."""
+    best = sure_one = None
+    for lines in _second_readings(pic, box, heads):
+        kept = [l for l in lines if l[2] >= READ_LEAST]
+        # (rid of stray symbols, as a first reading is: _rapid_button)
+        text = " ".join(re.sub(r"[^\w'&:!?.,()\- ]+", "", " ".join(l[0] for l in kept).replace("/", " ")).replace("_", " ").split())
+        if not kept or _letters(text) < READ_SHORTEST:
+            continue
+        sure = min(l[2] for l in kept)
+        whole = all(l[2] >= READ_LEAST or l[2] < RAPID_LEAST for l in lines)     # (no line of words left out)
+        if sure >= READ_CONFIDENT:
+            if sure_one is None or _letters(text) > _letters(sure_one[0]):
+                sure_one = (text, sure)
+            if whole:
+                return sure_one
+        if best is None or sure > best[1]:
+            best = (text, sure)
+    return sure_one or best
+
+
+def read_again(pages, out_dir, log=print, sure=None):
+    """The buttons that play a title from its start, whose words aren't READ_CONFIDENT (or are nothing), and
+    whose title has no other button that is, read again (_read_second): the new words kept if surer than theirs
+    and they lose nothing (a surer reading of less is a part of the name: "STUART LITTLE" for "STUART LITTLE
+    2"). Off each page's saved picture, so only what's expected to say something costs anything: not a settings
+    button, nor a scene's. A tiny button's words are on its plate, if it has one. sure: {reading: how sure}
+    (_sure)."""
+    from PIL import Image
+    sure = _sure if sure is None else sure
+    how_sure = lambda b: sure.get(b.get("text") or "", 0.0) if b.get("text") else 0.0
+    plays = lambda b: b.get("plays") and b["plays"].get("chapter") in (1, None)
+    settled = {b["plays"]["title"] for page in pages for b in page.get("buttons") or [] if plays(b) and how_sure(b) >= READ_CONFIDENT}
+    changed = []
+    for page in pages:
+        path = os.path.join(out_dir, page.get("image") or "")
+        if not page.get("image") or not os.path.exists(path):
+            continue
+        wanted = [b for b in page["buttons"] if plays(b) and b["plays"]["title"] not in settled]
+        if not wanted:
+            continue
+        with Image.open(path) as im:
+            pic = im.convert("RGB")
+        sx, sy = pic.width / 720, pic.height / 480
+        found = plates(pic)
+        rects = [x["rect"] for x in page["buttons"]]
+        for b in wanted:
+            r, pad = b["rect"], 4
+            if r[2] - r[0] < TINY:
+                near = [k for k in found if _gap(r, k) < PLATE_REACH]
+                if not near:
+                    continue
+                r, pad = min(near, key=lambda k: _gap(b["rect"], k)), 0
+            box = (max(0, int((r[0] - pad) * sx)), max(0, int((r[1] - pad) * sy)),
+                   min(pic.width, int((r[2] + pad) * sx)), min(pic.height, int((r[3] + pad) * sy)))
+            got = _read_second(pic, box, _heading_boxes(pic, b["rect"], rects, (720, 480)))
+            was = b.get("text") or ""
+            if got and got[0] != was and got[1] > how_sure(b) and _letters(got[0]) >= _letters(was):
+                log("read again: button %d of page %s: \"%s\" is \"%s\" (%.2f)" % (b["n"], page["page"], was, got[0], got[1]))
+                changed.append((page, b, was, got[0], got[1]))
+                b["text"] = got[0]
+                if sure is _sure:
+                    _note_sure(got[0], got[1])
+                else:
+                    sure[got[0]] = got[1]
+    return changed
 
 
 def _clock(seconds):
@@ -3584,6 +3862,10 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
         result.append(page)
     c.pool.shutdown(wait=False)
     c.more.shutdown(wait=False)
+    if _rapid:
+        read_again(result, out_dir, log)
+    for b, seconds in menu_only(result, structure):
+        log("not rippable: \"%s\" (%s) plays from the disc's menu, it isn't a title" % (b["text"], _clock(seconds)))
     out = {"drive": drive, "titles": titles, "start": list(start), "minutes": round((time.time() - t0) / 60, 1),
            "pages": result, "chapters": {t["title"]: t["chapters"] for t in structure.get("titles", [])},
            "opening": opening}
@@ -3606,6 +3888,12 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
             log("  couldn't read the disc's titles for its Play All (%s)" % e)
     if _rapid:
         out["found"]["reader"] = "rapidocr"
+    return finish_crawl(out, out_dir)
+
+
+def finish_crawl(out, out_dir):
+    """A crawl's last steps, a DVD's or a Blu-ray's: each title's button to show, and the whole of it kept
+    (crawl.json, to go over again with no disc; crawl.txt, to read)."""
     out["found"]["pictures"] = title_pictures(out, out_dir)
     with open(os.path.join(out_dir, "crawl.json"), "w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=2)
@@ -3617,6 +3905,11 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
 # --------------------------------------------------------------------------
 # 5. What the menus say about the titles
 # --------------------------------------------------------------------------
+
+def title_id(n):
+    """A title as the menus' answer has it, as a scan's id: a DVD's number ("Title 5"), a Blu-ray's id as it is."""
+    return n if isinstance(n, str) and not n.isdigit() else "Title %d" % int(n)
+
 
 SMALL_WORDS = {"a", "an", "and", "as", "at", "by", "for", "from", "in", "of", "on", "or", "the", "to", "with"}
 LISTED_RE = re.compile(r"[\s(\[]*\(?(\d{1,2}):(\d\d)\)?[\s)\]]*$")      # "(10:35)" after an extra's name
@@ -4530,12 +4823,12 @@ def detected_tv_labels(found, titles, keep=()):
     film's disc: a TV disc's own episodes may have no button). Titles in keep (your labels,
     TheDiscDB's names) and those the scan sets aside as copies are left be."""
     out = {}
-    name = lambda n: n if isinstance(n, str) else "Title %d" % n      # (a Blu-ray's has its id already)
+    name = title_id
     episodes = {name(e["title"]): e for e in found.get("episodes") or []}
     extras = {name(e["title"]): e for e in found.get("extras") or []}
-    promos = {"Title %d" % n for n in found.get("promos") or []}
-    names = {"Title %d" % int(n): v for n, v in (found.get("promo_names") or {}).items()}
-    opening = {"Title %d" % n for n in found.get("opening") or []}
+    promos = {title_id(n) for n in found.get("promos") or []}
+    names = {title_id(n): v for n, v in (found.get("promo_names") or {}).items()}
+    opening = {title_id(n) for n in found.get("opening") or []}
     labelled = set()
     played = found.get("played")
     played = None if played is None else {name(t) for t in played}
@@ -4640,25 +4933,25 @@ def detected_labels(found, titles, keep=()):
     {} when the menus said nothing (then nothing changes)."""
     if not found or not (found.get("feature") or found.get("extras")):
         return {}
-    named = {"Title %d" % e["title"]: e["name"] for e in found.get("extras") or []}
-    kinds = {"Title %d" % e["title"]: e.get("kind") for e in found.get("extras") or []}
-    others = {"Title %d" % e["title"] for e in found.get("extras") or [] if e.get("other")}
+    named = {title_id(e["title"]): e["name"] for e in found.get("extras") or []}
+    kinds = {title_id(e["title"]): e.get("kind") for e in found.get("extras") or []}
+    others = {title_id(e["title"]) for e in found.get("extras") or [] if e.get("other")}
     # (a name put right: as read, to show: correct_names)
-    read_as = {"Title %d" % e["title"]: e["read"] for e in found.get("extras") or [] if e.get("read")}
-    read_as.update({"Title %s" % t: r for t, r in (found.get("promo_read") or {}).items()})
+    read_as = {title_id(e["title"]): e["read"] for e in found.get("extras") or [] if e.get("read")}
+    read_as.update({title_id(t): r for t, r in (found.get("promo_read") or {}).items()})
     said = lambda tid, note: note + (" (read as \"%s\")" % read_as[tid] if tid in read_as else "")
-    feature = "Title %d" % found["feature"] if found.get("feature") else None
+    feature = title_id(found["feature"]) if found.get("feature") else None
     # several films, each with its own menu: each a main movie (its heading in the note)
-    films = {"Title %d" % f["title"]: f.get("name") or "" for f in found.get("features") or []}
-    promos = {"Title %d" % n for n in found.get("promos") or []}
-    promo_names = {"Title %d" % int(n): name for n, name in (found.get("promo_names") or {}).items()}
+    films = {title_id(f["title"]): f.get("name") or "" for f in found.get("features") or []}
+    promos = {title_id(n) for n in found.get("promos") or []}
+    promo_names = {title_id(n): name for n, name in (found.get("promo_names") or {}).items()}
     # what a player shows before the menu: its previews (Jurassic World's preview reel)
-    opening = {"Title %d" % n for n in found.get("opening") or []}
+    opening = {title_id(n) for n in found.get("opening") or []}
     played = lambda tid: tid in named or tid == feature or tid in promos or tid in films
     # the feature named by its button only beside another cut ("Signature Edition")
     cuts = any(t["id"] in named and t.get("role") in ("feature", "version") for t in titles)
     # a page's Play All: the scan says what it plays (left unlabelled, never an ad)
-    play_alls = {"Title %d" % n for n in found.get("play_alls") or []}
+    play_alls = {title_id(n) for n in found.get("play_alls") or []}
     # copies the menus play, of titles they don't: labelled in their twin's place
     twins = {}
     for t in titles:
@@ -4701,7 +4994,7 @@ def detected_labels(found, titles, keep=()):
                         "note": "plays before the menu on a player (VLC skips it): previews, as a rule"}
         else:
             out[tid] = {"type": "Promo", "title": None, "note": "the menus: nothing plays it"}
-    places = {"Title %d" % int(n): p for n, p in (found.get("places") or {}).items()}
+    places = {title_id(n): p for n, p in (found.get("places") or {}).items()}
     for tid, label in out.items():
         if tid in places:
             label["place"] = places[tid]
@@ -4713,16 +5006,16 @@ def found_text(found):
     lines = []
     if found.get("features"):
         for f in found["features"]:
-            lines.append("Film:     title %d  %s" % (f["title"], f["name"] or "(its menu's heading not read)"))
+            lines.append("Film:     title %s  %s" % (f["title"], f["name"] or "(its menu's heading not read)"))
     elif found["feature"]:
-        lines.append("Feature:  title %d" % found["feature"])
+        lines.append("Feature:  title %s" % found["feature"])
     for e in found["extras"]:
         check = ""
         if e["listed"]:
             ok = abs(e["listed"] - (e["seconds"] or 0)) <= max(10, 0.03 * e["listed"])
             check = "  (menu says %s, plays %s%s)" % (_clock(e["listed"]), _clock(e["seconds"]), "" if ok else ": doesn't fit")
         kind = "  [%s]" % e["kind"] if e.get("kind") else ""
-        lines.append("Extra:    title %d  %s%s%s" % (e["title"], e["name"] or "(no name read)", kind, check))
+        lines.append("Extra:    title %s  %s%s%s" % (e["title"], e["name"] or "(no name read)", kind, check))
     if found["promos"]:
         lines.append("Trailers: title%s %s" % ("s" if len(found["promos"]) > 1 else "", ", ".join(map(str, found["promos"]))))
     if found.get("play_alls"):
@@ -4754,7 +5047,7 @@ def crawl_text(out):
                                            " (the disc's program)" if g.get("engine") else "")
             elif b.get("plays"):
                 pl = b["plays"]
-                does = "plays title %d (%s) from chapter %s%s" % (
+                does = "plays title %s (%s) from chapter %s%s" % (
                     pl["title"], _clock(pl["seconds"]), pl["chapter"],
                     ", as the first Play button did (not pressed)" if pl.get("assumed") == "play"
                     else ", the feature the scenes point to (not pressed)" if pl.get("assumed")
@@ -4763,9 +5056,11 @@ def crawl_text(out):
                 if b.get("before"):
                     does += ", after title%s %s" % ("s" if len(b["before"]) > 1 else "", ", ".join(map(str, b["before"])))
                 for o in pl.get("others") or []:
-                    does += "; or title %d (%s), by another route" % (o["title"], _clock(o.get("seconds")))
+                    does += "; or title %s (%s), by another route" % (o["title"], _clock(o.get("seconds")))
                 if pl.get("after"):
                     does += ", then title%s %s" % ("s" if len(pl["after"]) > 1 else "", ", ".join(map(str, pl["after"])))
+            elif b.get("menu_only"):
+                does = "plays from the disc's menu (%s): not a title, not rippable" % _clock(b["menu_only"])
             elif b.get("error"):
                 does = "?? " + b["error"]
             elif b.get("passed_by"):

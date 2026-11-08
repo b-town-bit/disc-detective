@@ -385,38 +385,35 @@ def describe_local_disc(repo, rel):
 
 
 def discdb_lookup(fp, repo=None, online=True, index=None):
-    """Online TheDiscDB first (always current), then the downloaded index, then a local clone."""
+    """The downloaded index first, then a local clone; thediscdb.com only for a disc neither has, for
+    what's been added since (no connection: said in errors, and the scan goes on)."""
     result = {"hit": None, "near": [], "errors": []}
-    if online:
-        try:
-            result["hit"] = discdb_online(fp["hash"])
-        except Exception as exc:  # network down, schema change, etc.
-            result["errors"].append("online lookup failed: %s" % exc)
-    if result["hit"] is not None and index is not None and not result["hit"].get("path"):
-        known = index_hit(index, fp["hash"])      # exact folder on GitHub, for the box art
-        if known:
-            result["hit"].update(path=known["path"], front=known["front"])
-    if result["hit"] is None and index is not None:
+    if index is not None:
         result["hit"] = index_hit(index, fp["hash"])
-        if result["hit"] is None and not repo:
-            result["near"] = index_near(index, fp)
     if result["hit"] is None and repo:
         idx = discdb_local_index(repo)
         rel = idx["hashes"].get(fp["hash"])
         if rel:
             result["hit"] = describe_local_disc(repo, rel)
-        else:
-            # near match: discs sharing several large, exact file sizes. Ignore sizes that
-            # are common across the database (standard 1 GB VOB splits, padding files).
-            votes = {}
-            big = sorted({s for _, s in fp["files"] if s >= 50_000_000})
-            useful = [s for s in big if 0 < len(idx["sizes"].get(str(s), [])) <= 3]
-            for s in useful:
-                for rel in set(idx["sizes"].get(str(s), [])):
-                    votes[rel] = votes.get(rel, 0) + 1
-            for rel, n in sorted(votes.items(), key=lambda kv: -kv[1])[:3]:
-                if n >= 2:
-                    result["near"].append({"path": rel, "shared_large_files": n, "of": len(big)})
+    if result["hit"] is None and online:
+        try:
+            result["hit"] = discdb_online(fp["hash"])
+        except Exception as exc:  # network down, schema change, etc.
+            result["errors"].append("online lookup failed: %s" % exc)
+    if result["hit"] is None and index is not None and not repo:
+        result["near"] = index_near(index, fp)
+    if result["hit"] is None and repo:
+        # near match: discs sharing several large, exact file sizes. Ignore sizes that
+        # are common across the database (standard 1 GB VOB splits, padding files).
+        votes = {}
+        big = sorted({s for _, s in fp["files"] if s >= 50_000_000})
+        useful = [s for s in big if 0 < len(idx["sizes"].get(str(s), [])) <= 3]
+        for s in useful:
+            for rel in set(idx["sizes"].get(str(s), [])):
+                votes[rel] = votes.get(rel, 0) + 1
+        for rel, n in sorted(votes.items(), key=lambda kv: -kv[1])[:3]:
+            if n >= 2:
+                result["near"].append({"path": rel, "shared_large_files": n, "of": len(big)})
     return result
 
 
@@ -2128,12 +2125,8 @@ def update_data(args, which=("discdb", "imdb"), force=False, log=print):
         if con is not None:
             con.close()
         done["imdb"] = imdb_index_info(args.imdb_dir)
-    if "credits" in which:
-        # (refreshed with the IMDb index, a month old at most: 1.1 GB each time)
-        info = imdb_credits_info(args.imdb_dir)
-        index = imdb_index_info(args.imdb_dir)
-        stale = not info or not info["current"] or (index and index["built"] > info["built"])
-        if stale or force:
+        # (its credits are part of it, built after it: 1.1 GB each time)
+        if force or imdb_credits_stale(args.imdb_dir):
             imdb_credits_build(args.imdb_dir, log=log)
         done["credits"] = imdb_credits_info(args.imdb_dir)
     return done
@@ -2420,6 +2413,12 @@ def imdb_credits_open(imdb_dir):
     import sqlite3
     path = os.path.join(imdb_dir, IMDB_CREDITS_DB)
     return sqlite3.connect(path) if os.path.exists(path) else None
+
+
+def imdb_credits_stale(imdb_dir):
+    """Whether the IMDb credits index wants building: there's none, or the IMDb index is newer."""
+    info, index = imdb_credits_info(imdb_dir), imdb_index_info(imdb_dir)
+    return not info or not info["current"] or bool(index and index["built"] > info["built"])
 
 
 def imdb_credits_info(imdb_dir):

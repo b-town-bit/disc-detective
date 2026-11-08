@@ -50,6 +50,60 @@ def test_the_program_that_runs_a_blu_rays_menus(tmp_path):
     assert bdmenus.project_title(str(tmp_path / "nowhere")) is None
 
 
+def index(first, top):
+    """index.bdmv with this first play and top menu: "bdj" or "hdmv"."""
+    obj = {"bdj": bytes([0x80, 0, 0, 0, 0x80, 0]) + b"00000" + b"\x00",
+           "hdmv": bytes([0x40, 0, 0, 0, 0x40, 0, 0, 3, 0, 0, 0, 0])}
+    return b"INDX0300" + struct.pack(">II", 40, 0) + b"\x00" * 24 + struct.pack(">I", 0) + obj[first] + obj[top] + struct.pack(">H", 0)
+
+
+def styled(tmp_path, first="hdmv", top="hdmv", files=()):
+    for name in files:
+        path = tmp_path / "BDMV" / "JAR" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+    (tmp_path / "BDMV").mkdir(exist_ok=True)
+    (tmp_path / "BDMV" / "index.bdmv").write_bytes(index(first, top))
+    return bdmenus.menu_style(str(tmp_path))
+
+
+def test_a_blu_rays_style_from_its_files(tmp_path):
+    assert styled(tmp_path) == {"menu": "HDMV", "framework": None}
+    assert styled(tmp_path, "hdmv", "bdj") == {"menu": "BD-J", "framework": None}
+    assert styled(tmp_path, "bdj", "hdmv") == {"menu": "BD-J", "framework": None}
+    assert bdmenus.menu_style(str(tmp_path / "nowhere")) == {"menu": None, "framework": None}
+    (tmp_path / "BDMV" / "index.bdmv").write_bytes(b"INDX")      # (broken: not a failed scan)
+    assert bdmenus.menu_style(str(tmp_path)) == {"menu": None, "framework": None}
+
+
+def test_a_frameworks_files_make_a_disc_java_whatever_starts_it(tmp_path):
+    a = tmp_path / "a"
+    a.mkdir()
+    assert styled(a, files=["03001/bluray-project.bin"]) == {"menu": "BD-J", "framework": "Sony"}
+    b = tmp_path / "b"
+    b.mkdir()
+    assert styled(b, files=["15631/menu_base.prop"]) == {"menu": "BD-J", "framework": "Warner"}
+    c = tmp_path / "c"
+    c.mkdir()
+    assert styled(c, files=["onQClient.cfg", "00003/playlists.xml"]) == {"menu": "BD-J", "framework": "onQ"}
+    d = tmp_path / "d"
+    d.mkdir()
+    assert styled(d, files=["00003/playlists.xml"])["framework"] is None     # (a common name: says nothing alone)
+
+
+def test_only_hdmv_can_be_crawled():
+    assert bdmenus.crawlable({"menu": "HDMV", "framework": None})
+    for style in ({"menu": "BD-J", "framework": "onQ"}, {"menu": "BD-J", "framework": "Warner"}, {"menu": "BD-J", "framework": None},
+                  {"menu": None, "framework": None}, None):
+        assert not bdmenus.crawlable(style)
+
+
+def test_a_styles_line_in_the_log():
+    assert bdmenus.style_line({"menu": "BD-J", "framework": "onQ"}) == "BD-J, onQ"
+    assert bdmenus.style_line({"menu": "HDMV", "framework": None}) == "HDMV"
+    assert bdmenus.style_line({"menu": None, "framework": None}) == "no menu program found"
+
+
 def test_a_menu_project_names_the_discs_playlists(tmp_path):
     """Muppets from Space: the film, its outtakes by name (the scan, by length, took them for
     junk), its own trailer, an Easter egg; an ad for another film at a film's frame rate among

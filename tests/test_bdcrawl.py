@@ -1,4 +1,5 @@
 """A TV Blu-ray's episode page read and pressed, on a pretend VLC that behaves as Chuck's menu does."""
+import json
 import os
 import sys
 import types
@@ -303,6 +304,301 @@ def test_the_bar_and_a_link_are_no_heading_however_they_stand_out():
 
 
 PLAIN = [line("First Date", 84, 100), line("Morgan and Herd", 84, 130), line("Tyler arrives", 84, 240), line("The Long Goodbye", 400, 100)]
+
+
+def test_the_buttons_spacing_says_where_one_name_stops_and_the_next_starts():
+    """3 Ninjas: Knuckle Up's trailers: a tight list, buttons 37 apart, its first name three lines long."""
+    row = lambda text, y, h=34: (text, (160, y, 460, y + h), 0.99)
+    lines = [row("ROUGHNECKS:", 118), row("STARSHIP TROOPERS CHRONICLES-", 144), row("THE PLUTO CAMPAIGN", 173),
+             row("BUDDY", 208), row("BEVERLY HILLS NINJA", 245), row("THE KARATE KID", 281), row("JUMANJI", 316)]
+    rects = [[141, y, 161, y + 26] for y in (122, 210, 248, 282, 318)]
+    assert menus._button_pitch(rects) == pytest.approx(37)
+    assert [b[0] for b in menus._blocks(lines, menus._button_pitch(rects))] == [
+        "ROUGHNECKS: STARSHIP TROOPERS CHRONICLES- THE PLUTO CAMPAIGN", "BUDDY", "BEVERLY HILLS NINJA", "THE KARATE KID", "JUMANJI"]
+    assert len(menus._blocks(lines)) == 1                     # (no buttons to go by: as near as they are, one)
+    # too few to say, or side by side: nothing to go by
+    assert menus._button_pitch(rects[:2]) is None
+    assert menus._button_pitch([[10 + 200 * i, 100, 30 + 200 * i, 120] for i in range(4)]) is None
+    assert menus._button_pitch([[100, y, 400, y + 20] for y in (100, 140, 180)]) is None    # (wide buttons have their own words)
+    # a name far off stays apart, the buttons wide apart or not
+    assert len(menus._blocks([row("ONE", 100), row("TWO", 400)], 500)) == 2
+
+
+def test_a_list_pairs_each_button_with_the_name_starting_by_it_however_long(monkeypatch):
+    """Knuckle Up's Roughnecks: three lines, its middle far from its button, but it starts where the others do."""
+    from PIL import Image
+    row = lambda text, y, width=300: (text, (160, y, 160 + width, y + 34), 0.99)
+    lines = [row("BONUS TRAILERS", 37, 258), row("ROUGHNECKS:", 118, 128), row("STARSHIP TROOPERS CHRONICLES-", 144, 330),
+             row("THE PLUTO CAMPAIGN", 173, 220), row("BUDDY", 208, 63), row("BEVERLY HILLS NINJA", 245, 200),
+             row("THE KARATE KID", 281, 146), row("JUMANJI", 316, 89)]
+    monkeypatch.setattr(menus, "_page_lines", lambda image, scale=1: lines)
+    rects = [[141, y, 161, y + 26] for y in (122, 210, 248, 282, 318)]
+    names = menus._tiny_labels(Image.new("RGB", (720, 480)), rects)
+    assert [names.get(tuple(r)) for r in rects] == ["ROUGHNECKS: STARSHIP TROOPERS CHRONICLES- THE PLUTO CAMPAIGN", "BUDDY",
+                                                    "BEVERLY HILLS NINJA", "THE KARATE KID", "JUMANJI"]
+
+
+def test_a_trailer_kept_among_the_menus_is_noted_as_not_rippable():
+    """Knuckle Up's Jumanji: no title has it, so it's a line in the case notes, not a row in a list."""
+    structure = {"vmgm": [{"pgc": 6, "buttons": [], "cells": [{"seconds": 171.3}, {"seconds": 1.3}]},
+                          {"pgc": 2, "buttons": [], "cells": [{"seconds": 10.0}]},
+                          {"pgc": 3, "buttons": [{"n": 1}], "cells": [{"seconds": 90.0}]}]}
+    jump = lambda pgc: {"op": "menu", "domain": "vmgm", "pgc": pgc}
+    jumanji = {"n": 1, "text": "JUMANJI", "cmd": jump(6)}
+    page = {"buttons": [jumanji,
+                        {"n": 2, "text": "A LOGO", "cmd": jump(2)},                       # (too short to be anything)
+                        {"n": 3, "text": "ANOTHER MENU", "cmd": jump(3)},                 # (a menu: it has buttons)
+                        {"n": 4, "text": "", "cmd": jump(6)},                             # (no words to go by)
+                        {"n": 5, "text": "TRAILER", "cmd": jump(6), "plays": {"title": 2}},
+                        {"n": 6, "text": "MAIN MENU", "cmd": jump(6)},                    # (only says where it goes)
+                        {"n": 7, "text": "BUDDY", "cmd": {"op": "link_tail_page"}}]}
+    found = menus.menu_only([page], structure)
+    assert found == [(jumanji, pytest.approx(172.6))] and jumanji["menu_only"] == 173
+    words = menus.crawl_text({"pages": [{"domain": 1, "page": 9, "program": 1, "image": "p.png", "buttons": [jumanji]}]})
+    assert "plays from the disc's menu (2:53): not a title, not rippable" in words
+    # nothing plays it, so nothing's found for it
+    assert menus.menu_titles({"pages": [{"domain": 1, "page": 9, "program": 1, "route": [], "buttons": [jumanji]}]})["extras"] == []
+
+
+def page_to_read_again(tmp_path, buttons):
+    from PIL import Image
+    Image.new("RGB", (720, 480)).save(tmp_path / "p.png")
+    return [{"page": 9, "image": "p.png", "buttons": buttons}]
+
+
+def button(n, text, title, rect=(100, 100, 300, 140)):
+    return {"n": n, "text": text, "rect": list(rect), "plays": {"title": title, "chapter": 1}}
+
+
+def lines_at(*found):
+    """A page's lines, each in the first button's area."""
+    return [(t, (120, 110, 280, 130), sure) for t, sure in found]
+
+
+def test_a_button_with_no_sure_words_is_read_again(monkeypatch, tmp_path):
+    monkeypatch.setattr(menus, "plates", lambda pic: [])
+    monkeypatch.setattr(menus, "rapid_lines", lambda *a, **k: pytest.fail("the page's lines were enough"))
+    monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: lines_at(("BLOOPERS", 0.97)))
+    b = button(1, "", 61)
+    assert [c[3] for c in menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={})] == ["BLOOPERS"]
+    assert b["text"] == "BLOOPERS"
+
+
+def test_the_search_goes_on_to_the_next_way_until_one_is_sure(monkeypatch, tmp_path):
+    monkeypatch.setattr(menus, "plates", lambda pic: [])
+    monkeypatch.setattr(menus, "_heading_boxes", lambda image, rect, others, frame_size: [])
+    seen = []
+    monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: seen.append(scale) or lines_at(("PART", 0.85)))
+    monkeypatch.setattr(menus, "rapid_lines", lambda *a, **k: seen.append("grey") or lines_at(("TRAILER", 0.99)))
+    b = button(1, "", 3)
+    menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={})
+    assert seen == [1, 2, "grey"] and b["text"] == "TRAILER"
+    # none sure: the surest above the least; none above it, or a scrap: nothing
+    monkeypatch.setattr(menus, "rapid_lines", lambda *a, **k: lines_at(("WEAK", 0.81)))
+    b = button(1, "", 3)
+    menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={})
+    assert b["text"] == "PART"
+    for found in (("JUNK", 0.65), ("w", 0.99)):
+        monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: lines_at(found))
+        monkeypatch.setattr(menus, "rapid_lines", lambda *a, **k: lines_at(found))
+        b = button(1, "", 3)
+        assert not menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={})
+        assert b["text"] == ""
+
+
+def test_a_second_reading_never_loses_words_nor_beats_a_surer_one(monkeypatch, tmp_path):
+    monkeypatch.setattr(menus, "plates", lambda pic: [])
+    monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: lines_at(("STUART LITTLE", 1.0)))
+    monkeypatch.setattr(menus, "rapid_lines", lambda *a, **k: [])
+    b = button(1, "STUART LITTLE 2", 13)
+    assert not menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={"STUART LITTLE 2": 0.85})
+    assert b["text"] == "STUART LITTLE 2"
+    # the same length, surer: put right
+    monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: lines_at(("CLOSE SHAVE", 0.93)))
+    b = button(1, "CLOSE HAVE", 3)
+    menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={"CLOSE HAVE": 0.85})
+    assert b["text"] == "CLOSE SHAVE"
+
+
+def test_a_headings_line_dipping_into_a_button_is_left_out_of_every_second_reading(monkeypatch, tmp_path):
+    """Enchanted's "Fantasy / Comes To Life", over its Happy Working Song button."""
+    heading = ("Comes To Life", (120, 102, 280, 118), 0.99)
+    name = ("Happy Working Song", (120, 120, 280, 136), 0.98)
+    monkeypatch.setattr(menus, "plates", lambda pic: [])
+    monkeypatch.setattr(menus, "_heading_boxes", lambda image, rect, others, frame_size: [heading[1]])
+    monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: [heading, name])
+    b = button(1, "", 38)
+    menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={})
+    assert b["text"] == "Happy Working Song"
+    # (the area alone, read at twice the size: its lines' places, back on the page)
+    monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: [])
+    crop = lambda q: tuple(2 * (v - o) for v, o in zip(q, (96, 96, 96, 96)))
+    monkeypatch.setattr(menus, "rapid_lines", lambda *a, **k: [(heading[0], crop(heading[1]), 0.99), (name[0], crop(name[1]), 0.98)])
+    b = button(1, "", 38)
+    menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={})
+    assert b["text"] == "Happy Working Song"
+
+
+def slanted_lines(point, rows):
+    """Lines whose slants run to point (x, y): each 100 px wide, centred at (cx, cy)."""
+    import math
+    out = []
+    for cx, cy in rows:
+        a = math.atan2(point[1] - cy, point[0] - cx)
+        dx, dy = 50 * math.cos(a), 50 * math.sin(a)
+        out.append(("WORD", ((cx - dx, cy - dy - 6), (cx + dx, cy + dy - 6), (cx + dx, cy + dy + 6), (cx - dx, cy - dy + 6)), 0.99))
+    return out
+
+
+def test_a_picture_of_a_screen_at_an_angle_is_known_by_its_lines_slants(monkeypatch):
+    """Spider-Man's Oscorp pages: a monitor seen from its left, its lines +2 degrees at the top, -8 below."""
+    from PIL import Image
+    pic = Image.new("RGB", (720, 480))
+    rows = [(x, y) for x in (200, 330, 450) for y in (90, 170, 250, 350)]
+    monkeypatch.setattr(menus, "_page_corners", lambda image: slanted_lines((2400, 160), rows))
+    vx, vy = menus._keystone(pic)
+    assert abs(vx - 2400) < 1 and abs(vy - 160) < 1
+    # level lines, or lines all at one slant (a turned picture, not one at an angle): none
+    monkeypatch.setattr(menus, "_page_corners", lambda image: slanted_lines((10 ** 9, 0), rows))
+    assert menus._keystone(pic) is None
+    monkeypatch.setattr(menus, "_page_corners", lambda image: slanted_lines((10 ** 9, 10 ** 8), rows))
+    assert menus._keystone(pic) is None
+    # slants that run to no one point: none (a menu's own tilted lettering)
+    lines = slanted_lines((2400, 160), rows)
+    lines[0], lines[5] = slanted_lines((300, -2000), [rows[0]])[0], slanted_lines((-900, 2500), [rows[5]])[0]
+    monkeypatch.setattr(menus, "_page_corners", lambda image: lines)
+    assert menus._keystone(pic) is None
+    # too few lines, or lines too short to judge by
+    monkeypatch.setattr(menus, "_page_corners", lambda image: slanted_lines((2400, 160), rows[:3]))
+    assert menus._keystone(pic) is None
+
+
+def test_an_area_made_level_is_put_back_on_the_page_where_it_was():
+    from PIL import Image
+    pic = Image.new("RGB", (720, 480))
+    box = (400, 300, 480, 340)
+    flat, spot = menus._flattened(pic, box, (2400, 160))
+    # twice the size, about
+    assert 1.6 < (flat.width * flat.height / ((box[2] - box[0]) * (box[3] - box[1]))) ** 0.5 < 2.4
+    x, y = spot(flat.width / 2, flat.height / 2)
+    assert box[0] < x < box[2] and box[1] < y < box[3]
+    # its corners: no further out than the box's own (the box is all there)
+    for u, v in ((0, 0), (flat.width, 0), (flat.width, flat.height), (0, flat.height)):
+        x, y = spot(u, v)
+        assert box[0] - 12 < x < box[2] + 12 and box[1] - 12 < y < box[3] + 12
+
+
+def test_a_button_on_a_screen_at_an_angle_is_read_last_made_level(monkeypatch, tmp_path):
+    """Spider-Man's "Changing Kids Cutdown" (read as "22"): only on a page _keystone takes for one."""
+    monkeypatch.setattr(menus, "plates", lambda pic: [])
+    monkeypatch.setattr(menus, "_heading_boxes", lambda image, rect, others, frame_size: [])
+    monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: lines_at(("22", 0.57)))
+    sizes = []
+
+    def rapid(image, least=None, corners=None):
+        sizes.append(image.size)
+        return [("Changing Kids Cutdown", (4, 4, image.width - 4, image.height - 4), 0.96)] if len(sizes) == 2 else []
+    monkeypatch.setattr(menus, "rapid_lines", rapid)
+    monkeypatch.setattr(menus, "_keystone", lambda pic: None)
+    b = button(1, "22", 23)
+    menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={"22": 0.57})
+    assert b["text"] == "22" and len(sizes) == 1            # (no screen at an angle: only the grey reading)
+    sizes.clear()
+    monkeypatch.setattr(menus, "_keystone", lambda pic: (2400, 160))
+    menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={"22": 0.57})
+    assert b["text"] == "Changing Kids Cutdown" and len(sizes) == 2
+
+
+def test_a_sure_reading_that_left_a_line_out_doesnt_end_the_search(monkeypatch, tmp_path):
+    """Spider-Man's Stan Lee's Mutants, Monsters & Marvels: MONSTERS read at 0.77 once (left out, the rest
+    sure), all four lines sure on a later reading."""
+    monkeypatch.setattr(menus, "plates", lambda pic: [])
+    monkeypatch.setattr(menus, "_heading_boxes", lambda image, rect, others, frame_size: [])
+    readings = {1: [("STAN LEE'S", 0.95), ("MUTANTS,", 0.94), ("MONSTERS", 0.77), ("&MARVELS", 0.99)],
+                2: [("STAN LEE'S", 1.0), ("MUTANTS,", 0.93), ("MONSTERS", 0.94), ("&MARVELS", 0.99)]}
+    monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: lines_at(*readings[scale]))
+    monkeypatch.setattr(menus, "rapid_lines", lambda *a, **k: pytest.fail("a whole sure reading ends it"))
+    b = button(3, "", 10)
+    menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={})
+    assert b["text"] == "STAN LEE'S MUTANTS, MONSTERS &MARVELS"
+    # a speck read unsure (under RapidOCR's own least) is no line left out
+    readings[1][2] = ("MONSTERS", 0.95)
+    readings[1].append((".", 0.3))
+    monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: lines_at(*readings[1]) if scale == 1 else pytest.fail("it was sure"))
+    b = button(3, "", 10)
+    menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={})
+    assert b["text"] == "STAN LEE'S MUTANTS, MONSTERS &MARVELS"
+
+
+def test_a_second_reading_is_rid_of_stray_symbols_as_a_first_is(monkeypatch, tmp_path):
+    monkeypatch.setattr(menus, "plates", lambda pic: [])
+    monkeypatch.setattr(menus, "_heading_boxes", lambda image, rect, others, frame_size: [])
+    monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: lines_at(('THEATRICAL TRAILER*', 0.99)))
+    b = button(1, "TheatriCAl TrAiler", 4)
+    menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={"TheatriCAl TrAiler": 0.84})
+    assert b["text"] == "THEATRICAL TRAILER"
+    # (nothing's changed that the symbols alone made look new)
+    b = button(1, "Theatrical Trailer", 4)
+    monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: lines_at(('Theatrical Trailer*', 0.99)))
+    assert not menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={"Theatrical Trailer": 0.84})
+
+
+def test_only_a_title_not_yet_surely_named_is_read_again(monkeypatch, tmp_path):
+    monkeypatch.setattr(menus, "plates", lambda pic: [])
+    monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: pytest.fail("nothing to read again"))
+    sure = {"BLOOPERS": 0.99}
+    other = button(2, "BLOOPERS", 61, (100, 200, 300, 240))
+    scene = {"n": 3, "text": "", "rect": [100, 300, 300, 340], "plays": {"title": 5, "chapter": 4}}     # (a scene's)
+    place = {"n": 4, "text": "", "rect": [100, 400, 300, 440]}                                         # (a setting's)
+    menus.read_again(page_to_read_again(tmp_path, [button(1, "", 61), other, scene, place]), str(tmp_path), log=lambda s: None, sure=sure)
+
+
+def test_a_tiny_button_is_read_again_by_its_plate_or_not_at_all(monkeypatch, tmp_path):
+    monkeypatch.setattr(menus, "_page_lines", lambda pic, scale=1: [("STAN LEE'S", (180, 320, 320, 340), 0.99)])
+    monkeypatch.setattr(menus, "rapid_lines", lambda *a, **k: [])
+    monkeypatch.setattr(menus, "plates", lambda pic: [])
+    b = button(3, "", 10, (307, 314, 323, 342))
+    assert not menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={})
+    monkeypatch.setattr(menus, "plates", lambda pic: [(171, 309, 336, 381)])
+    menus.read_again(page_to_read_again(tmp_path, [b]), str(tmp_path), log=lambda s: None, sure={})
+    assert b["text"] == "STAN LEE'S"
+
+
+def test_a_button_no_arrow_reaches_is_no_way_to_go():
+    """Spider-Man's music videos page: its hidden button 4 leads to the main menu, but no arrow goes to it."""
+    b = lambda n, up, down, left, right, to, **kw: dict({"n": n, "up": up, "down": down, "left": left, "right": right, "auto": False, "to": to}, **kw)
+    hidden = b(4, 3, 2, 4, 1, "main")
+    buttons = [b(1, 3, 2, 2, 1, None), b(2, 1, 3, 2, 1, None), b(3, 2, 1, 3, 3, None), hidden]
+    assert not menus._can_select(buttons, hidden)
+    assert all(menus._can_select(buttons, x) for x in buttons[:3])
+    # no arrows set on the page, a page of one, or only an auto-action button leading to it: as they stand
+    plain = [dict(x, up=0, down=0, left=0, right=0) for x in buttons]
+    assert menus._can_select(plain, plain[3]) and menus._can_select([hidden], hidden)
+    auto = [dict(buttons[0], up=4, auto=True), dict(buttons[1], up=1, down=1, left=2, right=1), hidden]
+    assert not menus._can_select(auto, hidden)
+
+
+def test_routes_go_round_a_button_no_arrow_reaches(monkeypatch):
+    start, music, main = (1, 1, 1), (1, 2, 1), (1, 3, 1)
+    arrows = lambda n, **kw: dict({"n": n, "up": 0, "down": 0, "left": 0, "right": 0, "auto": False}, **kw)
+    buttons = {start: [arrows(1, down=2), arrows(2, up=1)],
+               music: [arrows(1, down=2), arrows(2, up=1), arrows(3)],
+               main: [arrows(1)]}
+    goes = {(start, 1): music, (music, 3): main}
+    monkeypatch.setattr(menus, "_state_buttons", lambda pages, st: buttons.get(st, []))
+    monkeypatch.setattr(menus, "_goes", lambda pages, st, b, learned=None, known=None: goes.get((st, b["n"])))
+    routes = menus._routes({}, start)
+    assert music in routes and main not in routes
+    goes[(music, 2)] = main
+    assert menus._routes({}, start)[main] == [(start, 1), (music, 2)]
+
+
+def test_art_read_as_text_is_no_heading():
+    """3 Ninjas: Knuckle Up's Bonus Trailers: its throwing stars, read as "***", the tallest thing on the page."""
+    art, head = tall("***", 84, 60, 240), tall("BONUS TRAILERS", 84, 60, 240)
+    assert not menus.several_headings([art, head], [art, head] + PLAIN)
+    assert menus.best_heading([art], [art] + PLAIN) is None
+    assert menus.best_heading([art, head], [art, head] + PLAIN) == "BONUS TRAILERS"
 
 
 def test_a_page_of_several_headings_gives_its_titles_no_type():
@@ -821,27 +1117,93 @@ def test_a_title_left_out_of_the_menus_reads_as_other_with_nothing_to_confirm():
 class Wanting:
     """The app's say on when to ask a disc's menus, without its window."""
     from disc_detective.app import App as _App
-    stakeout_in_scan, files_in_scan, menus_wanted, scan_menus_mode, more_films = (
-        _App.stakeout_in_scan, _App.files_in_scan, _App.menus_wanted, _App.scan_menus_mode, staticmethod(_App.more_films))
+    stakeout_in_scan, menus_wanted, scan_menus_mode, more_films = (
+        _App.stakeout_in_scan, _App.menus_wanted, _App.scan_menus_mode, staticmethod(_App.more_films))
 
     def __init__(self, mode, on=True):
         self.settings = {"menu_detect": on, "detect_in_scan": mode}
 
 
-def test_a_blu_rays_menu_files_are_read_as_the_setting_says_a_dvds_menus_are():
+def test_the_scan_only_crawls_a_dvd_as_the_setting_says():
     fresh = {"format": "Blu-ray", "path": "E:\\", "kind": "movie", "status": "unidentified", "candidates": []}
     mine = dict(fresh, status="identified (your case files)", personal_hit=True, kind="tv", labels={"a": {}}, match={"season": 1})
-    unknown = dict(mine, labels={})
-    assert Wanting("unknown").files_in_scan(fresh) and Wanting("unsure").files_in_scan(fresh)
-    assert Wanting("unknown").files_in_scan(unknown) and not Wanting("unsure").files_in_scan(unknown)
-    assert Wanting("unknown").files_in_scan(mine) and Wanting("unsure").files_in_scan(mine)     # (known: for its buttons)
     assert not Wanting("unknown").menus_wanted(mine)
-    assert not Wanting("never").files_in_scan(mine) and not Wanting("unknown", on=False).files_in_scan(mine)
-    assert not Wanting("unknown").stakeout_in_scan(dict(mine, format="DVD"), "vlc")             # (a DVD's stakeout: no)
-    assert not Wanting("never").files_in_scan(fresh) and not Wanting("unknown", on=False).files_in_scan(fresh)
-    assert not Wanting("unknown").files_in_scan(dict(fresh, from_sample=True))
-    assert not Wanting("unknown").files_in_scan(dict(fresh, format="DVD"))
+    assert not Wanting("unknown").stakeout_in_scan(dict(mine, format="DVD"), "vlc")
     assert Wanting("unknown").stakeout_in_scan(dict(fresh, format="DVD"), "vlc") and not Wanting("unknown").stakeout_in_scan(fresh, "vlc")
+
+
+def test_during_a_scan_goes_by_each_formats_own_switch():
+    """During a scan only runs ahead what Detect titles would, on any Blu-ray, film or show, of any style."""
+    disc = {"path": "E:\\", "status": "unidentified", "candidates": []}
+
+    def wanting(mode, dvd=False, blu=False):
+        w = Wanting(mode)
+        w.settings.update(menu_detect=dvd, bluray_menus=blu)
+        return w
+    for kind in ("tv", "movie"):
+        film = dict(disc, format="Blu-ray", kind=kind)
+        assert wanting("unknown", blu=True).stakeout_in_scan(film, "vlc") and wanting("weak", blu=True).stakeout_in_scan(film, "vlc")
+        assert not wanting("unknown", dvd=True).stakeout_in_scan(film, "vlc")       # (the DVD switch says nothing of it)
+        assert not wanting("never", blu=True).stakeout_in_scan(film, "vlc")
+        assert not wanting("unknown", blu=True).stakeout_in_scan(film, None)        # (no VLC)
+    dvd = dict(disc, format="DVD", kind="movie")
+    assert wanting("unknown", dvd=True).stakeout_in_scan(dvd, "vlc")
+    assert not wanting("unknown", blu=True).stakeout_in_scan(dvd, "vlc")            # (nor the Blu-ray switch of a DVD)
+    known = dict(disc, format="Blu-ray", kind="tv", personal_hit=True, labels={"a": {}}, match={"season": 1}, status="identified (your case files)")
+    assert not wanting("unknown", blu=True).stakeout_in_scan(known, "vlc")          # (its titles known: no call to)
+
+
+def test_a_blu_rays_crawl_in_a_scan_feeds_the_search(monkeypatch):
+    """The crawl's readings named and settled as a DVD's are: what it says changes the answer."""
+    from disc_detective import app
+    a = app.App.__new__(app.App)
+    a.settings = {"bluray_menus": True, "detect_in_scan": "unknown"}
+    a._before, a._stakeouts = None, {}
+    raw = {"tv": {"readings": []}, "pages": [], "found": {}}
+    a._menu_files = lambda rep: None
+    a._stakeout = lambda rep, vlc: raw
+    a._menus_witness = lambda drive, args, rep, staked=False: rep
+    a._name_titles = lambda got, rep: {"episodes": [], "settles": {"answer": "Show"}}
+    settled = []
+    a._settle_by_menus = lambda drive, args, rep, got: settled.append(got) or dict(rep, settled=True)
+    monkeypatch.setattr(menus, "find_vlc", lambda setting=None: "vlc")
+    monkeypatch.setattr(menus, "feature_phrases", lambda *args: [])
+    monkeypatch.setattr(core, "word_checker", lambda *args: None)
+    rep = {"format": "Blu-ray", "path": "E:\\", "content_hash": "AB", "kind": "tv", "status": "unidentified",
+           "candidates": []}
+    got = a._menus_seen("E:\\", types.SimpleNamespace(), dict(rep))
+    assert settled == [raw] and got["settled"] and got["staked_out"] and a._stakeouts["AB"] is raw
+    # the switch off: the scan as it was
+    a.settings["bluray_menus"] = False
+    a._stakeouts, settled[:] = {}, []
+    a._stakeout = lambda rep, vlc: pytest.fail("no crawl with the switch off")
+    got = a._menus_seen("E:\\", types.SimpleNamespace(), dict(rep))
+    assert not settled and "menu_raw" not in got
+
+
+def test_a_blu_rays_menu_files_are_part_of_any_scan_whatever_the_settings(monkeypatch):
+    """Nothing played, nothing to wait for: better results for free, every setting off."""
+    from disc_detective import app
+    a = app.App.__new__(app.App)
+    a.settings, a._before, a._stakeouts = {}, None, {}
+    asked = []
+    a._menu_files = lambda rep: asked.append(rep) or {"tv": {"readings": []}}
+    a._menus_witness = lambda drive, args, rep, staked=False: rep
+    a._name_titles = lambda raw, rep: {"episodes": []}
+    a._settle_by_menus = lambda drive, args, rep, raw: rep
+    monkeypatch.setattr(menus, "feature_phrases", lambda *args: [])
+    monkeypatch.setattr(core, "word_checker", lambda *args: None)
+    got = a._menus_seen("E:\\", types.SimpleNamespace(), {"format": "Blu-ray", "path": "E:\\", "content_hash": "AB", "kind": "movie"})
+    assert asked and got["menu_raw"] == {"tv": {"readings": []}} and got["menu_found"] == {"episodes": []}
+    assert not got.get("staked_out")
+    # Sony's menu project too
+    read = []
+    monkeypatch.setattr(bdmenus, "menu_project", lambda root: read.append(root) or [])
+    app.App._bd_menus_seen(types.SimpleNamespace(settings={}), "E:\\", None, {"format": "Blu-ray", "kind": "movie"})
+    assert read == ["E:\\"]
+    # a saved sample or a DVD: no files to read
+    assert app.App._menu_files({"format": "Blu-ray", "path": "E:\\", "from_sample": True}) is None
+    assert app.App._menu_files({"format": "DVD", "path": "E:\\"}) is None
 
 
 def test_the_menu_files_say_which_disc_of_the_set(tmp_path):
@@ -867,12 +1229,149 @@ def test_a_blu_ray_stakeout_says_so_when_rapidocr_cant_run(monkeypatch):
     a.post = lambda *args: None
     a._menu_files = lambda rep: None
     monkeypatch.setattr(menus, "rapid_missing", lambda: True)
+    monkeypatch.setattr(bdmenus, "menu_style", lambda root: {"menu": "HDMV", "framework": None})
     monkeypatch.setattr(bdcrawl, "crawl", lambda *args: pytest.fail("no crawl without a reader"))
     with pytest.raises(menus.NoReader):
         a._stakeout({"format": "Blu-ray", "path": "E:\\", "content_hash": "AB", "titles": []}, "vlc")
     assert issubclass(menus.NoReader, menus.Lost)             # (never an error for a scan)
 
 
+def test_an_unsupported_menu_style_is_logged_and_not_crawled(monkeypatch, caplog):
+    from disc_detective.app import App
+    a = App.__new__(App)
+    a.post = lambda *args: pytest.fail("nothing to tell: no stakeout")
+    a._menu_files = lambda rep: None
+    monkeypatch.setattr(bdcrawl, "crawl", lambda *args: pytest.fail("not this style"))
+    rep = {"format": "Blu-ray", "path": "E:\\", "content_hash": "AB", "titles": []}
+    for style in ({"menu": "BD-J", "framework": "onQ"}, {"menu": "BD-J", "framework": None}, {"menu": None, "framework": None}):
+        monkeypatch.setattr(bdmenus, "menu_style", lambda root: style)
+        caplog.clear()
+        with caplog.at_level("INFO", logger=core.logger.name), pytest.raises(menus.Unsupported):
+            a._stakeout(rep, "vlc")
+        assert "menus: menu style not yet supported" in caplog.text
+    assert issubclass(menus.Unsupported, menus.Lost)
+
+
+def test_a_scan_goes_on_after_an_unsupported_menu_style(monkeypatch, caplog):
+    from disc_detective import app
+    a = app.App.__new__(app.App)
+    a.settings = {"bluray_menus": True, "detect_in_scan": "unknown"}
+    a._before, a._stakeouts = None, {}
+    a._menu_files = lambda rep: None
+
+    def unsupported(rep, vlc):
+        raise menus.Unsupported("BD-J, onQ")
+    a._stakeout = unsupported
+    told = []
+    a.tell = "tell"
+    a.post = lambda fn, line: told.append(line)
+    a._menus_witness = lambda drive, args, rep, staked=False: rep
+    monkeypatch.setattr(menus, "find_vlc", lambda setting=None: "vlc")
+    rep = {"format": "Blu-ray", "path": "E:\\", "content_hash": "AB", "kind": "movie", "status": "unidentified", "candidates": []}
+    with caplog.at_level("INFO", logger=core.logger.name):
+        got = a._menus_seen("E:\\", types.SimpleNamespace(), dict(rep))
+    assert got["path"] == "E:\\" and "menu_raw" not in got and "AB" not in a._stakeouts
+    assert "no menu answered" not in caplog.text
+    assert told == ["Could not go on Stakeout"]
+
+
+def test_a_dvd_films_crawl_keeps_its_feature(monkeypatch):
+    """A DVD's crawl has "tv" readings besides its pages, whatever the disc is: a film goes by its pages, its
+    Play Movie the feature, not one more extra (3 Ninjas: Knuckle Up)."""
+    from disc_detective import app
+    a = app.App.__new__(app.App)
+    a.scan_args = lambda: types.SimpleNamespace(imdb_dir=None, offline=True, db=None, tmdb_key=None)
+    monkeypatch.setattr(a, "_name_episodes", lambda *args: pytest.fail("no episodes on a film"), raising=False)
+    monkeypatch.setattr(core, "imdb_open", lambda *args, **kw: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(core, "library_open", lambda *args: types.SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(core, "film_credits", lambda *args, **kw: [])
+    raw = {"tv": {"readings": [{"title": 1, "text": "PLAY MOVIE", "seconds": 5277, "bonus": True}]},
+           "pages": [{"domain": 1, "page": 5, "program": 1}], "suspects": 1,
+           "found": {"feature": 1, "feature_name": "", "extras": [], "promos": [], "promo_names": {}, "play_alls": [], "opening": []}}
+    found = a._name_titles(raw, {"kind": "movie", "content_hash": "AB", "match": {"name": "Film", "imdb_id": "tt1"}})
+    assert found["feature"] == 1
+
+
+def film_crawl():
+    """What a film Blu-ray's buttons might play: one Play, two extras."""
+    press = lambda title, name, seconds, n: {"title": title, "number": None, "name": name, "seconds": seconds, "box": (70, 50 * n, 300, 50 * n + 20),
+                                             "order": n, "image": "bd_page.png", "vlc": n}
+    return [press("00800.mpls", "Play Movie", 7200.0, 1)], [press("00810.mpls", "Gag Reel", 300.0, 1), press("00811.mpls", "Theatrical Trailer", 120.0, 2)]
+
+
+def test_a_blu_rays_crawl_comes_as_pages_for_the_shared_rules(tmp_path):
+    pressed, extras = film_crawl()
+    c = types.SimpleNamespace(extras_heading=("BONUS FEATURES", False), playing=9)
+    raw = bdcrawl.crawl_result("E:\\", c, pressed, extras, str(tmp_path))
+    bar, films, more = raw["pages"]
+    assert [b["text"] for b in bar["buttons"]] == ["Episodes", "Special Features"]
+    assert films["route"] == [{"page": 0, "program": 1, "button": 1}] and more["route"] == [{"page": 0, "program": 1, "button": 2}]
+    assert more["heading_line"] == "BONUS FEATURES" and more["buttons"][1]["plays"] == {"title": "00811.mpls", "chapter": 1, "seconds": 120.0}
+    assert raw["found"]["feature"] == "00800.mpls" and [e["title"] for e in raw["found"]["extras"]] == ["00810.mpls", "00811.mpls"]
+    # (the shared rules' answer, as labels on a Blu-ray's ids)
+    titles = [{"id": t, "role": "extra", "duration": 300} for t in ("00800.mpls", "00810.mpls", "00811.mpls")]
+    labels = menus.detected_labels(raw["found"], titles)
+    assert labels["00800.mpls"]["type"] == "MainMovie" and labels["00810.mpls"]["title"] == "Gag Reel"
+    assert labels["00811.mpls"]["type"] == "Trailer"
+    # kept, to go over again with no disc
+    kept = json.load(open(tmp_path / "crawl.json", encoding="utf-8"))
+    assert menus.menu_titles(kept)["feature"] == "00800.mpls" and kept["tv"]["readings"][0]["title"] == "00800.mpls"
+    words = (tmp_path / "crawl.txt").read_text(encoding="utf-8")
+    assert "plays title 00810.mpls" in words and "Feature:  title 00800.mpls" in words
+
+
+def test_a_shows_blu_ray_keeps_its_readings_and_a_film_goes_by_its_pages(monkeypatch, tmp_path):
+    from disc_detective import app
+    v = FakeVlc()
+    got = crawl(monkeypatch, v, tmp_path)
+    c = types.SimpleNamespace(extras_heading=(None, False), playing=1)
+    raw = bdcrawl.crawl_result("E:\\", c, got, v.extras, str(tmp_path))
+    assert raw["tv"]["readings"] == bdcrawl.readings_of(got + v.extras)                # (a show: as it was)
+    assert raw["pages"][1]["buttons"][0]["text"] == "7) " + NAMES[0]
+    a = app.App.__new__(app.App)
+    a.scan_args = lambda: types.SimpleNamespace(imdb_dir=None, offline=True, db=None, tmdb_key=None)
+    asked = []
+    a._name_episodes = lambda *args: asked.append("episodes") or {}
+    monkeypatch.setattr(core, "imdb_open", lambda *args, **kw: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(core, "library_open", lambda *args: types.SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(core, "film_credits", lambda *args, **kw: [])
+    a._name_titles(raw, {"kind": "tv", "content_hash": "AB", "match": {}})
+    assert asked == ["episodes"]
+    asked.clear()
+    found = a._name_titles(raw, {"kind": "movie", "content_hash": "AB", "match": {"name": "Film", "imdb_id": "tt1"}})
+    assert not asked and found["feature"] == raw["found"]["feature"]
+
+
+def test_a_title_id_is_a_dvds_number_or_a_blu_rays_own():
+    from disc_detective import app
+    assert menus.title_id(5) == menus.title_id("5") == "Title 5" and menus.title_id("00800.mpls") == "00800.mpls"
+    assert app.menu_title_number("Title 5") == 5 and app.menu_title_number("00800.mpls") == "00800.mpls"
+    assert menus.found_text({"feature": "00800.mpls", "extras": [], "promos": []}) == "Feature:  title 00800.mpls"
+
+
+def test_detect_titles_is_offered_by_each_formats_own_switch():
+    from disc_detective import app
+    App = app.App
+    settings = {}
+    can = lambda **rep: App.can_detect(type("A", (), {"settings": settings, "rep": dict(rep, path="E:\\")})())
+    assert not can(format="Blu-ray", kind="tv") and not can(format="DVD", kind="tv")      # (off until you say)
+    settings["bluray_menus"] = True
+    assert can(format="Blu-ray", kind="tv") and can(format="Blu-ray", kind="movie") and not can(format="DVD", kind="movie")
+    assert not can(format="Blu-ray", kind="tv", from_sample=True)
+    settings.update(bluray_menus=False, menu_detect=True)
+    assert not can(format="Blu-ray", kind="tv") and can(format="DVD", kind="movie") and can(format="DVD", kind="tv")
+    assert not app.menus_on(settings, "4K") and not app.menus_on(settings, None)
+
+
+def test_each_scan_of_a_blu_ray_logs_its_style(tmp_path, caplog):
+    from disc_detective.app import App
+    root = wb_disc(tmp_path)
+    with caplog.at_level("INFO", logger=core.logger.name):
+        App._menu_style({"format": "Blu-ray", "kind": "tv", "path": root, "content_hash": "4C7D8D17" + "0" * 24, "label": "A_DISC"})
+        assert "menus: BD-J, Warner  [4C7D8D17 A_DISC]" in caplog.text
+        caplog.clear()
+        App._menu_style({"format": "DVD", "path": root})
+    assert "menus:" not in caplog.text
 def test_rapidocr_really_reads_a_picture():
     """The real thing, models and all, on whichever Python this is (not on 3.15: no runtime for it yet)."""
     pytest.importorskip("onnxruntime")

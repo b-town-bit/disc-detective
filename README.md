@@ -55,8 +55,8 @@ tesseract, have a go, if installed:
 (or, from a copy of the repo, `pip install -e ".[windows-ocr]"`).
 
 On first launch it offers to download its data: the TheDiscDB index (about 4 MB)
-and IMDb's public title data (about 300 MB, indexed locally). It keeps both up to
-date on its own.
+and IMDb's public title and credits data (about 1.4 GB, indexed locally). It keeps
+both up to date on its own.
 
 ## Use
 
@@ -106,4 +106,6 @@ Disc data from [TheDiscDB](https://thediscdb.com), title data from IMDb's
 non-commercial datasets, episode lists from [TVmaze](https://www.tvmaze.com)
 (CC BY-SA), optional posters from TMDB. See [THIRD_PARTY.md](THIRD_PARTY.md).
 
-MIT License.
+Copyright (c) 2026 Brady Field. Source-available under the
+[PolyForm Noncommercial License 1.0.0](LICENSE): free to use, change and share for
+non-commercial purposes. Versions released before 2026-11-07 were released under the MIT License.
