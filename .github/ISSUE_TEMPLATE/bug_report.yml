@@ -1,0 +1,33 @@
+name: Something went wrong
+description: The app crashed, froze, or did something it shouldn't
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Disc Detective version
+      description: Shown in "About / credits", at the bottom of the main window.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Windows, macOS or Linux, and its version. From source or a packaged release?
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: >
+        The end of ~/.disc_detective/logs/disc_detective.log around when it happened.
+        Look it over first: it names your discs and folders.
+      render: text

@@ -34,24 +34,29 @@ The app then shows the poster or box art so you can confirm at a glance.
 
 ## Install
 
-Needs Python 3.9+ with Tkinter (included in the python.org installer for Windows
-and macOS).
+Needs Python 3.9 to 3.14 with Tkinter (included in the python.org installer for Windows
+and macOS). Python 3.15 isn't supported yet: some of what it uses doesn't run on it.
 
 ```
 pip install "git+https://github.com/b-town-bit/disc-detective"
 ```
 
-That brings along its one dependency, **Pillow** (for posters and box art). To run
-from a downloaded copy of the repo instead, `pip install pillow` once, then
-double-click **Disc Detective.pyw** (Windows) or run `python -m disc_detective`.
+That brings along what it depends on: **Pillow** (for posters and box art) and **RapidOCR**
+(for reading disc menus), about 250 MB in all. RapidOCR fetches one of its models the first
+time it reads a menu, so have a connection for that. To run from a downloaded copy of the
+repo instead, `pip install pillow rapidocr onnxruntime` once, then double-click
+**Disc Detective.pyw** (Windows) or run `python -m disc_detective`.
 
 Optional: **MakeMKV** for ripping,
 **tesseract** for reading text off cover art, a free **TMDB** key (in Settings) for
-extra posters.
+extra posters. Where RapidOCR can't make out a DVD's menu buttons, Windows' own OCR, then
+tesseract, have a go, if installed:
+`pip install "disc-detective[windows-ocr] @ git+https://github.com/b-town-bit/disc-detective"`
+(or, from a copy of the repo, `pip install -e ".[windows-ocr]"`).
 
 On first launch it offers to download its data: the TheDiscDB index (about 4 MB)
-and IMDb's public title data (about 300 MB, indexed locally). It keeps both up to
-date on its own.
+and IMDb's public title and credits data (about 1.4 GB, indexed locally). It keeps
+both up to date on its own.
 
 ## Use
 
@@ -101,4 +106,6 @@ Disc data from [TheDiscDB](https://thediscdb.com), title data from IMDb's
 non-commercial datasets, episode lists from [TVmaze](https://www.tvmaze.com)
 (CC BY-SA), optional posters from TMDB. See [THIRD_PARTY.md](THIRD_PARTY.md).
 
-MIT License.
+Copyright (c) 2026 Brady Field. Source-available under the
+[PolyForm Noncommercial License 1.0.0](LICENSE): free to use, change and share for
+non-commercial purposes. Versions released before 2026-11-07 were released under the MIT License.

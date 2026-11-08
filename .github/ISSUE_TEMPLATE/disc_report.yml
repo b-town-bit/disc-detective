@@ -1,0 +1,40 @@
+name: A disc it got wrong
+description: A disc it didn't identify, or whose titles, episodes or extras it named wrongly
+labels: [disc]
+body:
+  - type: input
+    id: disc
+    attributes:
+      label: The disc
+      description: Its title, season and disc number if a set, and edition. For example "Chuck Season 2 Disc 1 (Blu-ray)".
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: Format
+      options: [DVD, Blu-ray, 4K Blu-ray]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What it got wrong
+      description: What it said, and what's right. Titles by their number in the app, if it's about titles.
+    validations:
+      required: true
+  - type: input
+    id: fingerprint
+    attributes:
+      label: Disc fingerprint
+      description: >
+        The 8-character code on the disc's scan line in the log ("scan 65F7B55A  DVD ..."), or the
+        whole fingerprint from Help TheDiscDB's "Copy fingerprint". It lets us match the disc in TheDiscDB.
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: >
+        The scan's lines from ~/.disc_detective/logs/disc_detective.log. Look them over first.
+        Please don't attach anything that came from decrypting the disc.
+      render: text

@@ -48,7 +48,7 @@ def test_your_library_remembers(tmp_path, imdb_dir):
     core.set_field(con, rep["content_hash"][:8], "truth", "Gone in 60 Seconds (2000)")
     con.close()
     rep2, _ = run(disc, tmp_path, imdb_dir=imdb_dir, offline=True)
-    assert rep2["status"] == "identified (your library)"
+    assert rep2["status"] == "identified (your case files)"
     assert rep2["best_guess"] == "Gone in 60 Seconds (2000)"
     assert core.is_probable(rep2["candidates"]) and rep2["candidates"][0]["year"] == 2000
 
@@ -180,7 +180,7 @@ def test_confirmed_collection_rebuilds_from_its_ids(tmp_path, imdb_dir):
     assert truth.startswith("Wallace & Gromit Collection {films:00001.mpls=tt")
     core.set_truth(args.db, rep["content_hash"], truth)
     rep2, _ = run(disc, tmp_path, imdb_dir=imdb_dir, offline=True, label="WALLACE_AND_GROMIT")
-    assert rep2["status"] == "identified (your library)" and rep2["kind"] == "collection"
+    assert rep2["status"] == "identified (your case files)" and rep2["kind"] == "collection"
     assert rep2["candidates"][0]["why"].startswith("your answer")
     assert [(i["title_id"], i["imdb_id"]) for i in rep2["candidates"][0]["items"]] == films
     assert rep2["best_guess"] == "Wallace & Gromit Collection"
@@ -242,7 +242,7 @@ def test_a_bonus_disc_is_extras_named_after_its_film_disc(tmp_path, imdb_dir):
     assert not [t for t in rep2["titles"] if t["role"] in ("feature", "episode", "version")]
     assert rep2["bonus_of"].startswith("Gone in 60 Seconds (2000) {imdb-tt")
     assert rep2["best_guess"] == "Gone in 60 Seconds (2000)"
-    assert rep2["identified_by"] == "your library (the set's film disc)"
+    assert rep2["identified_by"] == "your case files (the set's film disc)"
     # with no film disc in the library: still extras, searched under the title without "Bonus"
     rep3, _ = run(bonus, tmp_path, imdb_dir=imdb_dir, offline=True, label="GONE_IN_60_SECONDS_BONUS",
                   db=str(tmp_path / "empty.sqlite"))
@@ -269,3 +269,150 @@ def test_shorts_can_run_newest_first(imdb):
     c = core.imdb_collection(imdb, [("Wallace And Gromit", False)], titles, {"mastered": "2010-01"})
     assert [i["year"] for i in c["items"]] == [2008, 1995, 1993, 1989]
     assert "newest first" in c["why"]
+
+
+def test_interactual_disc_id_names_the_film(tmp_path):
+    """Spider-Man (2002), disc 1: volume label DVD_VIDEO, but InterActual Player's disc.id (its
+    DVD-ROM software) names the film. Any other disc.id, or none, says nothing."""
+    (tmp_path / "disc.id").write_bytes(b"[InterActual]\r\nid=100000150000180000018\r\nver=1.00.02.0731\r\n"
+                                       b"name=Spiderman 2002 disc 1\r\nowner=Coulumbia Tri Star Home Video\r\n")
+    assert core.interactual_name(str(tmp_path)) == "Spiderman 2002 disc 1"
+    lp = core.parse_label(core.interactual_name(str(tmp_path)))
+    assert (lp["query"], lp["year"], lp["disc"]) == ("Spiderman", 2002, 1)
+    (tmp_path / "disc.id").write_bytes(b"name=Something Else\r\n")
+    assert core.interactual_name(str(tmp_path)) is None
+    (tmp_path / "disc.id").unlink()
+    assert core.interactual_name(str(tmp_path)) is None
+
+
+def test_a_dvds_own_text_names_the_film(tmp_path):
+    """Spider-Man 2: volume label DVD_VIDEO, no DVD-ROM files, but VIDEO_TS.IFO points to text
+    data naming the disc; a picture format in it isn't the name (Muppets from Space's
+    "MUPPETS PAN-SCAN"); no text data, no name."""
+    vts = tmp_path / "VIDEO_TS"
+    vts.mkdir()
+
+    def ifo(text, sector=1):
+        head = bytearray(b"DVDVIDEO-VMG" + bytes(2048 - 12))
+        head[0xD4:0xD8] = sector.to_bytes(4, "big")
+        txt = b"Sony" + bytes(8) + b"\x00\x01\x00\x00\x01Aen" + bytes(40) + b"\x00\x3b" + text + b"\t" + text + b"\t"
+        (vts / "VIDEO_TS.IFO").write_bytes(bytes(head) + txt.ljust(2048, b"\x00"))
+    ifo(b"Spider-Man 2 (Special Edition)")
+    assert core.dvd_text_name(str(vts)) == "Spider-Man 2 (Special Edition)"
+    assert core.parse_label(core.dvd_text_name(str(vts)))["query"] == "Spider Man 2"
+    ifo(b"MUPPETS PAN-SCAN")
+    assert core.dvd_text_name(str(vts)) == "MUPPETS"
+    ifo(b"Anything", sector=0)
+    assert core.dvd_text_name(str(vts)) is None
+
+
+def test_an_editions_name_isnt_the_titles():
+    """IRON_GIANT_SIGNATURE_EDITION is The Iron Giant: an edition's name goes with the EDITION,
+    CUT or VERSION after it; the same words in a title stay (Ultimate Avengers, Blood Diamond)."""
+    q = lambda label: core.parse_label(label)["query"]
+    assert q("IRON_GIANT_SIGNATURE_EDITION") == "Iron Giant"
+    assert q("ALIEN_25TH_ANNIVERSARY_EDITION") == "Alien"
+    assert q("BLADE_RUNNER_FINAL_CUT") == "Blade Runner"
+    assert q("ULTIMATE_AVENGERS") == "Ultimate Avengers"
+    assert q("BLOOD_DIAMOND") == "Blood Diamond"
+    assert q("SPIDER_MAN_2_SPECIAL_EDITION") == "Spider Man 2"            # a sequel's number stays
+
+
+def test_a_shows_disc_with_no_episodes_is_its_bonus_disc():
+    show = {"kind": "tv", "name": "Psych"}
+    after = [{"id": "Title 2", "role": "extra", "duration": 2592}, {"id": "Title 3", "role": "junk", "duration": 26}]
+    assert core.not_the_film({"kind": "unknown"}, after, show)
+    # episodes on it, or already called something else: not
+    assert not core.not_the_film({"kind": "unknown"}, after + [{"id": "Title 5", "role": "episode", "duration": 2592}], show)
+    assert not core.not_the_film({"kind": "tv"}, after, show)
+    assert not core.not_the_film({"kind": "unknown", "extras_disc": True}, after, show)
+    assert not core.not_the_film({"kind": "unknown"}, [], show)
+
+
+def test_a_disc_with_none_of_its_film_is_its_extras_disc():
+    """Speed Racer's DVD game disc (SRTMDGFF2_DES): named Speed Racer by you, but nothing on it
+    is the film (its longest title 30 minutes, the film 135): the film's special-features disc.
+    A 47-minute special whose one title is the special stays the film."""
+    game = [{"id": "Title %d" % n, "role": "extra", "duration": d} for n, d in ((1, 397), (2, 1816), (3, 305))]
+    film = {"name": "Speed Racer", "year": 2008, "kind": "movie", "runtime": 135}
+    assert core.not_the_film({"kind": "unknown"}, game, film)
+    assert core.not_the_film({"kind": "unknown"}, game, dict(film, runtime=None))     # (90 minutes, then)
+    special = [{"id": "Title 1", "role": "extra", "duration": 47 * 60}]
+    assert not core.not_the_film({"kind": "unknown"}, special, {"kind": "movie", "runtime": 47})
+    # a disc the scan found the film on, or one already an extras disc: not this
+    assert not core.not_the_film({"kind": "unknown"}, game + [{"id": "Title 9", "role": "feature", "duration": 8100}], film)
+    assert not core.not_the_film({"kind": "movie"}, game, film)
+    assert not core.not_the_film({"kind": "unknown", "extras_disc": True}, game, film)
+
+
+def test_a_films_credits_as_words(tmp_path, monkeypatch):
+    """The film's people (cast, characters, crew), from TMDB once, kept in your case files:
+    words for reading its menus ("Hogarth Hughes", The Iron Giant's)."""
+    import json
+    calls = []
+
+    def fake_get(key, path, **params):
+        calls.append(path)
+        if path.startswith("/find/"):
+            return {"movie_results": [{"id": 10386}], "tv_results": []}
+        return {"cast": [{"name": "Eli Marienthal", "character": "Hogarth Hughes"},
+                         {"name": "Christopher McDonald", "character": "Kent Mansley"}],
+                "crew": [{"name": "Brad Bird", "job": "Director"}]}
+    monkeypatch.setattr(core, "tmdb_get", fake_get)
+    db, imdb = str(tmp_path / "library.sqlite"), str(tmp_path / "imdb")
+    words = core.film_credit_words("tt0129167", "KEY", home=str(tmp_path), db=db, imdb_dir=imdb)
+    assert {"hogarth", "hughes", "mansley", "bird", "marienthal"} <= words
+    con = core.library_open(db)
+    assert ("Brad Bird", None, "director") in core.film_credits(con, "tt0129167")
+    assert con.execute("SELECT source FROM credits_fetched").fetchone()[0] == "tmdb"
+    calls.clear()                               # kept: no TMDB the next time, nor offline
+    assert core.film_credit_words("tt0129167", None, online=False, home=str(tmp_path), db=db, imdb_dir=imdb) == words
+    assert not calls
+    assert core.film_credit_words(None, "KEY", db=db) == set()
+    # none to be had (no key): not marked as fetched, asked again another time
+    assert core.film_credits(con, "tt0000001", None, imdb, home=str(tmp_path)) == []
+    assert con.execute("SELECT 1 FROM credits_fetched WHERE imdb_id='tt0000001'").fetchone() is None
+
+
+def test_the_imdb_credits_index(tmp_path, monkeypatch):
+    """IMDb's credits, read as they download: the well-known titles' cast and crew, searchable by
+    name and by character; a film's credits from it, not TMDB, when it's there."""
+    import sqlite3
+    idx = sqlite3.connect(":memory:")
+    idx.executescript("CREATE TABLE titles (id INTEGER PRIMARY KEY); CREATE TABLE ratings (id INTEGER PRIMARY KEY, votes INT);"
+                      "INSERT INTO titles VALUES (129167), (5); INSERT INTO ratings VALUES (129167, 200000), (5, 3);")
+    monkeypatch.setattr(core, "imdb_open", lambda *a, **k: idx)
+    rows = {"title.principals.tsv.gz": [
+                ["tt0129167", "1", "nm0547093", "actor", "\\N", '["Hogarth Hughes"]'],
+                ["tt0129167", "2", "nm0083348", "director", "\\N", "\\N"],
+                ["tt0129167", "3", "nm0000001", "cinematographer", "\\N", "\\N"],     # (not kept: the job)
+                ["tt0000005", "1", "nm0000002", "actor", "\\N", '["Somebody"]']],        # (not kept: too few votes)
+            "name.basics.tsv.gz": [["nm0547093", "Eli Marienthal"], ["nm0083348", "Brad Bird"], ["nm0000002", "X"]]}
+    monkeypatch.setattr(core, "_remote_tsv", lambda name: iter(rows[name]))
+    imdb = tmp_path / "imdb"
+    imdb.mkdir()
+    info = core.imdb_credits_build(str(imdb), log=lambda m: None)
+    assert info["people"] == 2 and info["current"]
+    con = core.imdb_credits_open(str(imdb))
+    assert con.execute("SELECT rowid FROM people_fts WHERE people_fts MATCH 'marienthal'").fetchone()[0] == 547093
+    assert con.execute("SELECT title FROM credits WHERE rowid IN (SELECT rowid FROM characters_fts "
+                       "WHERE characters_fts MATCH 'hogarth')").fetchone()[0] == 129167
+    con.close()
+    monkeypatch.setattr(core, "tmdb_get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no TMDB")))
+    lib = core.library_open(str(tmp_path / "library.sqlite"))
+    got = core.film_credits(lib, "tt0129167", "KEY", str(imdb), home=str(tmp_path))
+    assert sorted(got) == [("Brad Bird", None, "director"), ("Eli Marienthal", "Hogarth Hughes", "actor")]
+    assert lib.execute("SELECT source FROM credits_fetched").fetchone()[0] == "imdb"
+
+
+def test_a_disc_named_by_its_menus(tmp_path, imdb_dir):
+    """Nothing names it (a catalogue number for a label, no cover art): what its menus show,
+    read as cover art is (the app's second look: menus.menu_phrases), names it, loosely
+    searched ("the wan princess"), the feature's length deciding. Rush Hour / Rush Hour 2's
+    double feature, its posters on its menu, was named this way."""
+    disc = fixtures.make_movie_bluray(str(tmp_path / "7000077241_1"), minutes=90)
+    rep, _ = run(disc, tmp_path, imdb_dir=imdb_dir, offline=True)
+    assert rep["status"].startswith("unidentified")
+    rep, _ = run(disc, tmp_path, imdb_dir=imdb_dir, offline=True, menu_phrases=["the wan princess"])
+    assert rep["menu_ocr"] == ["the wan princess"] and "the wan princess" in rep["facts"]["cover_phrases"]
+    assert rep["candidates"][0]["name"] == "The Swan Princess" and core.is_probable(rep["candidates"])
