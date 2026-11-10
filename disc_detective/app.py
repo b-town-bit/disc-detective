@@ -289,7 +289,8 @@ def detected_for(rep, found):
     or TheDiscDB named are left be."""
     from . import menus
     keep = set(rep.get("labels") or {}) | discdb_named(rep)
-    di.prefer_played(rep, menu_played(found), menu_unread(found), keep)
+    di.prefer_played(rep, menu_played(found), menu_unread(found), keep,
+                     feature=menu_title_id(found["feature"]) if found.get("feature") else None)
     if found.get("tv"):
         return menus.detected_tv_labels(found, rep.get("titles") or [], keep=keep)
     menu_play_alls(rep.get("titles") or [], found)
@@ -427,6 +428,20 @@ def hidden_roles(include_extras):
     return TitlePicker.HIDDEN + (() if include_extras else ("extra",))
 
 
+def under_more(role, kind, include_extras):
+    """Whether Edit titles keeps a title under Show more, waiting there to be confirmed or not (never
+    counted UNCONFIRMED): by what it's down as (kind: the menus' type, TheDiscDB's, yours), the film and
+    episodes always in view, an ad never, an extra unless extras are ripped (Include extras); else, a
+    repeat, a play-all, a piece of the film, by the scan's role (hidden_roles)."""
+    if kind in ("MainMovie", "Episode"):
+        return False
+    if kind == "Promo":
+        return True
+    if kind:
+        return not include_extras
+    return role in hidden_roles(include_extras)
+
+
 def more_text(hidden):
     """The Show more tick's words, for these rows hidden."""
     extras = "extras, " if any(t["role"] == "extra" for t in hidden) else ""
@@ -499,6 +514,15 @@ def suspect_line(verb, k, n):
     if n <= 1:
         return "%s suspect…" % verb
     return "%s suspect %d…" % (verb, k) if k >= n else "%s suspect %d of %d…" % (verb, k, n)
+
+
+def time_left(seconds):
+    """A wait still to go, in words: "under a minute left", "about 3 min left"; "" when not known."""
+    if seconds is None:
+        return ""
+    if seconds < 50:
+        return "under a minute left"
+    return "about %d min left" % max(1, round(seconds / 60))
 
 
 def suspect_report(found):
@@ -1191,6 +1215,7 @@ class App:
         self._watch_asking = False    # (the watcher's question to the drive, not answered yet)
         self._case_serial = None      # the case's disc's volume serial number, as the drive first said it
         self.detecting = False        # Detect titles under way
+        self.detect_stop = threading.Event()  # (set: Detect titles called off, at the crawl's next step)
         self.mkv = None                # the rip under way, in MakeMKV's hands
         self.cancelled = False
         self.busy = False
@@ -2703,8 +2728,18 @@ class App:
             di.logger.info("the disc's menu files settle %d of its titles: saved", saved)
 
     def stakeout_in_scan(self, rep, vlc):
-        """Whether the scan goes on stakeout ahead of being asked: VLC to do it with, and its menus wanted."""
-        return bool(vlc) and self.menus_wanted(rep)
+        """Whether the scan goes on stakeout ahead of being asked: VLC to do it with (or a Blu-ray's menus
+        read from its files, needing none), and its menus wanted."""
+        return bool(vlc or self.reads_without_vlc(rep)) and self.menus_wanted(rep)
+
+    @staticmethod
+    def reads_without_vlc(rep):
+        """Whether a disc's menus can be read with no VLC: a Blu-ray, the hdmv-menus library installed and
+        MakeMKV's own library to open it with (its menus HDMV, or not, the stakeout itself sees)."""
+        if not rep or rep.get("format") != "Blu-ray":
+            return False
+        from . import bdhdmv
+        return bdhdmv.available() and bdhdmv.aacs_library() is not None
 
     def scan_menus_mode(self, rep):
         """Settings > Disc: "never", or when the scan asks the menus of a disc like this."""
@@ -2737,8 +2772,12 @@ class App:
         vlc = menus.find_vlc(self.settings.get("vlc") or None)
         asked = self._menus_again == (rep or {}).get("content_hash")      # (Detect titles found several films)
         self._menus_again = None
-        if not rep or not vlc or rep.get("format") != "DVD":
+        # (a Blu-ray's: its stakeout's pages only, drawn from its files, no VLC needed or looked through)
+        blu = bool(rep) and rep.get("format") == "Blu-ray" and staked
+        if not rep or not (blu or (vlc and rep.get("format") == "DVD")):
             return rep
+        if blu:
+            vlc = None
         unnamed = str(rep.get("status", "")).startswith("unidentified")
         several = not unnamed and self.more_films(rep)
         # (a stakeout just now: its pictures are there to read, for a guess too)
@@ -2874,13 +2913,11 @@ class App:
         rep = self.rep or {}
         if not rep.get("staked_out"):
             return []
-        # (the rows Edit titles asks you to confirm: a title it lists, the menus' word on it, not yours)
-        # (not an extra that isn't being ripped: it isn't asking anything of you)
-        hide = not self.extras.get()
-        listed = {t["id"] for t in rep.get("titles") or [] if t.get("role") in TitlesDialog.ORDER
-                  and not (hide and t.get("role") == "extra")}
-        return [tid for tid, lab in (rep.get("detected") or {}).items() if tid in listed and tid not in (rep.get("labels") or {})
-                and lab.get("note") != NOT_IN_MENUS]
+        # (the rows Edit titles asks you to confirm: a title it lists in view, the menus' word on it, not
+        # yours; not one under Show more, an ad or an extra that isn't being ripped: it asks nothing of you)
+        roles = {t["id"]: t.get("role") for t in rep.get("titles") or [] if t.get("role") in TitlesDialog.ORDER}
+        return [tid for tid, lab in (rep.get("detected") or {}).items() if tid in roles and tid not in (rep.get("labels") or {})
+                and lab.get("note") != NOT_IN_MENUS and not under_more(roles[tid], lab.get("type"), self.extras.get())]
 
     def show_waiting(self):
         """The rip card's "3 UNCONFIRMED" pill: titles the scan's stakeout named that wait for you
@@ -2961,9 +2998,10 @@ class App:
         self.engine_lbl.config(text="MakeMKV linked" if have_mkv else "MakeMKV not found",
                                style="InsetOk.TLabel" if have_mkv else "InsetWarn.TLabel",
                                image=th.check() if have_mkv else "", compound="left")
-        if menus_on(self.settings, (self.rep or {}).get("format")):
-            from . import menus
-            have_vlc = bool(menus.find_vlc(self.settings.get("vlc") or None))
+        from . import menus
+        have_vlc = menus_on(self.settings, (self.rep or {}).get("format")) and bool(menus.find_vlc(self.settings.get("vlc") or None))
+        # (a Blu-ray whose menus are read from its files: no VLC needed, nothing to warn of)
+        if menus_on(self.settings, (self.rep or {}).get("format")) and (have_vlc or not self.reads_without_vlc(self.rep)):
             self.vlc_lbl.config(text="VLC linked" if have_vlc else "VLC not found",
                                 style="InsetOk.TLabel" if have_vlc else "InsetWarn.TLabel",
                                 image=th.check() if have_vlc else "", compound="left")
@@ -2994,12 +3032,13 @@ class App:
         if self.busy or not self.can_detect():
             return
         vlc = menus.find_vlc(self.settings.get("vlc") or None)
-        if not vlc:
-            self.detect_outcome("A stakeout needs VLC: install it, or set its folder in Settings", th.WAX)
+        if not vlc and not self.reads_without_vlc(self.rep):
+            self.detect_outcome(self.NO_VLC_STAKEOUT, th.WAX)
             return
         # one thing at a time on the drive: the lab (MakeMKV) steps aside for the stakeout, and
         # picks up again once it's over
         lab = self.stop_prescan("The lab waits out the stakeout…")
+        self.detect_stop.clear()
         self.detecting = True
         self.set_busy(True)
         self.story_reset()
@@ -3020,9 +3059,14 @@ class App:
             found = self._name_titles(raw, rep)
             # the answer in its turn, once the last suspect has had their moment
             self.post(self.tell, lambda: self.detect_done(rep, found, None))
+        except menus.Cancelled:
+            di.logger.info("Detect titles called off")
+            self.post(self.tell, lambda: self.detect_done(rep, None, self.CANCELLED_STAKEOUT))
         except menus.NoReader as exc:
             di.logger.warning("%s", exc)
             self.post(self.tell, lambda: self.detect_done(rep, None, self.NO_READER_STAKEOUT))
+        except menus.NoVlc:
+            self.post(self.tell, lambda: self.detect_done(rep, None, self.NO_VLC_STAKEOUT))
         except menus.Unsupported:
             self.post(self.tell, lambda: self.detect_done(rep, None, self.UNSUPPORTED_STAKEOUT))
         except menus.Lost as exc:    # (no menu answered: not an error, unless the disc went)
@@ -3036,6 +3080,28 @@ class App:
                 msg = self.GONE_STAKEOUT
             self.post(self.tell, lambda: self.detect_done(rep, None, msg))
 
+    def _crawl_progress(self):
+        """What a crawl tells as it goes (menus.CRAWL_STAGES: a DVD's, a Blu-ray's, from VLC or the disc's own
+        files alike), in the app's words, on the status line (posted: the crawl runs off the Tk thread)."""
+        count = {"before": 0, "total": 0}     # (a player's presses, counted from 1 each round)
+
+        def progress(stage, k=0, n=0):
+            if stage == "setup":
+                line = "Opening the case files…"
+            elif stage == "start":
+                line = "Going on stakeout…"
+            elif stage == "page":        # each page read: a suspect questioned (quick)
+                line = suspect_line("Questioning", k, n)
+            elif stage == "press":       # each button pressed: a suspect; a new round joins those heard
+                if k == 1:
+                    count["before"] = count["total"]
+                count["total"] = count["before"] + n
+                line = suspect_line("Interrogating", count["before"] + k, count["total"])
+            else:
+                return
+            self.post(self.tell, line)
+        return progress
+
     def _stakeout(self, rep, vlc):
         """The stakeout itself (off the Tk thread): VLC plays the disc's menus, their buttons are
         pressed and read. What it finds as read, the film not known yet (menus.crawl's result:
@@ -3043,21 +3109,22 @@ class App:
         from . import menus
         t0 = time.time()
         di.logger.info("menus: setting up the stakeout on %s", rep["path"])
-        count = {"before": 0, "total": 0}     # the crawl counts each round's presses from 1
+        # (called off: Cancelled at the crawl's next step, on its own thread, whichever crawl it is)
+        worker = threading.get_ident()
+
+        def check():
+            stop = getattr(self, "detect_stop", None)
+            if stop is not None and stop.is_set() and threading.get_ident() == worker:
+                raise menus.Cancelled()
 
         def log(line):
             di.logger.info("menus: %s", line.strip())
-            q = re.match(r"\s*questioning .*\((\d+) of (\d+)\)", line)
-            if q:                        # each page read: a suspect questioned (quick)
-                self.post(self.tell, suspect_line("Questioning", int(q.group(1)), int(q.group(2))))
-                return
-            m = re.match(r"\s*\[(\d+)/(\d+)\]", line)
-            if m:                        # each button pressed: a suspect
-                i, n = int(m.group(1)), int(m.group(2))
-                if i == 1:               # a new round: its suspects join those already heard
-                    count["before"] = count["total"]
-                count["total"] = count["before"] + n
-                self.post(self.tell, suspect_line("Interrogating", count["before"] + i, count["total"]))
+            check()
+        told = self._crawl_progress()
+
+        def progress(stage, k=0, n=0):
+            check()
+            told(stage, k, n)
         root = rep["path"]
         if rep.get("format") == "Blu-ray":        # (its menus decide as they run: only watching says)
             from . import bdcrawl, bdmenus
@@ -3071,17 +3138,36 @@ class App:
             if menus.rapid_missing():
                 raise menus.NoReader("RapidOCR can't run here: pip install rapidocr onnxruntime, with a connection "
                                      "for its model the first time")
-            self.post(self.tell, "Going on stakeout…")
+            # (HDMV menus read from the disc's own files by the hdmv-menus library, when it's installed:
+            # every menu, every button and what it plays, nothing played; else, or if it can't, VLC's crawl)
+            from . import bdhdmv
+            if bdhdmv.available():
+                try:
+                    got = bdhdmv.read(root, rep.get("titles") or [], menus.menu_dir(rep["content_hash"]), log, progress=progress,
+                                      tv=rep.get("kind") == "tv",
+                                      # (a quick crawl, one button for each title; every one, if Settings ask)
+                                      scope="language" if self.settings.get("menu_every_title") else "titles",
+                                      is_word=di.word_checker(self.scan_args().imdb_dir))
+                except (menus.Cancelled, menus.Unsupported):
+                    raise                # (called off; a Java menu after all: no VLC crawl to fall back to)
+                except Exception:
+                    di.logger.exception("reading the HDMV menus failed: the crawl instead")
+                    got = None
+                if got is not None:
+                    return got
+            if not vlc:                  # (read from its files, or nothing: no VLC to crawl with)
+                raise menus.NoVlc(self.NO_VLC_STAKEOUT)
             log("reading the pop-up menu of %s with VLC %s" % (root, vlc))
-            return bdcrawl.crawl(root, vlc, rep.get("titles") or [], menus.menu_dir(rep["content_hash"]), log)
+            return bdcrawl.crawl(root, vlc, rep.get("titles") or [], menus.menu_dir(rep["content_hash"]), log, progress)
+        progress("setup")                # (its menu data read, or the copy kept)
         structure = menu_data(root, rep["content_hash"], vlc, log, t0)
         out = menus.menu_dir(rep["content_hash"])
-        self.post(self.tell, "Going on stakeout…")
         log("reading the menus of %s with VLC %s" % (root, vlc))
         args = self.scan_args()
         # (the IMDb index as a dictionary: which of Windows OCR's two readings has real words)
         result = menus.crawl(root, vlc, structure, out, log=log, is_word=di.word_checker(args.imdb_dir),
-                             tv=rep.get("kind") == "tv", every_title=bool(self.settings.get("menu_every_title")))
+                             tv=rep.get("kind") == "tv", every_title=bool(self.settings.get("menu_every_title")),
+                             progress=progress)
         result["suspects"] = sum(1 for p in result["pages"] for b in p["buttons"] if "chain" in b)
         return result
 
@@ -3093,15 +3179,31 @@ class App:
         from . import menus
         args = self.scan_args()
         log = lambda line: di.logger.info("menus: %s", line.strip())
+        titles, is_word, names = self._menu_dictionary(rep, args, log)
         if rep.get("kind") == "tv" or (raw.get("tv") or {}).get("exact"):
-            return self._name_episodes(raw, rep, args, log)
+            return self._name_episodes(raw, rep, args, log, is_word, names)
         found = raw["found"]
+        match = rep.get("match") or {}
+        # (and by the words read well elsewhere in the menus: "Iagic" by "Magic")
+        found = menus.correct_names(found, names, is_word, lambda t: di.title_fix(titles, t, match.get("year")),
+                                    seen=menus.disc_words(raw, is_word, names))
+        found = menus.plain_names(found, is_word)
+        # a trailers page of other films' trailers: ads (Spider-Man's xXx, Mr. Deeds...)
+        found = menus.trailer_ads(found, match.get("name"), lambda n: di.known_film(titles, n))
+        for line in menus.found_text(found).splitlines():
+            log(line)
+        return dict(found, suspects=raw.get("suspects", 0))
+
+    @staticmethod
+    def _menu_dictionary(rep, args, log):
+        """What a stakeout's readings are put right by, a film's or a show's: (the IMDb index, its words
+        (is_word: the titles' words and the people's), the people in the disc's credits [names])."""
         try:                             # names OCR made up out of the backdrop: plain names
             titles = di.imdb_open(args.imdb_dir, allow_download=False, log=lambda m: None)
             is_word = di.title_words(titles)
         except Exception:
             titles = is_word = None
-        # the film's people (its characters, cast and crew: extras are named after them,
+        # the film's or show's people (its characters, cast and crew: extras are named after them,
         # "Hogarth Hughes"): names no title has, words too; and names to put misreadings right by
         match = rep.get("match") or {}
         lib = di.library_open(args.db)
@@ -3113,18 +3215,14 @@ class App:
         names = [x for r in credits for x in r[:2] if x]
         people = {w for n in names for w in re.findall(r"[^\W\d_]{2,}", n.lower())}
         if is_word and people:
-            log("the film's credits: %d words of names" % len(people))
+            log("the %s's credits: %d words of names" % ("show" if rep.get("kind") == "tv" else "film", len(people)))
             is_word = (lambda known: lambda w: w.lower() in people or known(w))(is_word)
-        found = menus.correct_names(found, names, is_word, lambda t: di.title_fix(titles, t, match.get("year")))
-        found = menus.plain_names(found, is_word)
-        # a trailers page of other films' trailers: ads (Spider-Man's xXx, Mr. Deeds...)
-        found = menus.trailer_ads(found, match.get("name"), lambda n: di.known_film(titles, n))
-        for line in menus.found_text(found).splitlines():
-            log(line)
-        return dict(found, suspects=raw.get("suspects", 0))
+        return titles, is_word, names
 
-    def _name_episodes(self, raw, rep, args, log):
-        """A TV disc's stakeout: the menus' words read against the show's episode list. Off the
+    def _name_episodes(self, raw, rep, args, log, is_word=None, names=()):
+        """A TV disc's stakeout: the menus' words read against the show's episode list; the rest, its
+        bonus features, put right as a film's extras are (menus.fix_tv_readings: by the show's people,
+        the button's other readings, the disc's words; is_word, names: _menu_dictionary's). Off the
         Tk thread (TVmaze)."""
         from . import menus
         tv = raw.get("tv") or menus.tv_titles(raw)
@@ -3138,6 +3236,8 @@ class App:
         got = di.numbered_episodes(tv["readings"], orders, tv.get("season") or match.get("season"), order) \
             if orders and tv.get("exact") else None
         got = got or (di.menu_episodes(tv["readings"], orders, match.get("season"), order) if orders else None)
+        tv = menus.fix_tv_readings(tv, set((got or {}).get("picks") or {}), names, is_word, raw.get("also"),
+                                   menus.disc_words(raw, is_word, names), raw.get("sure"))
         found = menus.tv_found(tv, (got or {}).get("picks"))
         for line in menus.found_tv_text(found).splitlines():
             log(line)
@@ -3192,9 +3292,11 @@ class App:
         return again
 
     GONE_STAKEOUT = "The disc was removed: stakeout aborted"
+    CANCELLED_STAKEOUT = "Stakeout called off"
     NO_MENU_STAKEOUT = "No menu answered: nothing to stake out on this disc"
     UNSUPPORTED_STAKEOUT = "Could not go on Stakeout"
     NO_READER_STAKEOUT = "No stakeout: RapidOCR isn't working here, details in the case notes"
+    NO_VLC_STAKEOUT = "A stakeout needs VLC: install it, or set its folder in Settings"
 
     def detect_outcome(self, text, colour):
         """How the stakeout went: in Edit titles, where it was asked for, while that's open; else
@@ -3625,7 +3727,15 @@ class App:
         self.cancelled = True
         if self.mkv:
             self.mkv.stop()
+        self.stop_detect()
         self.set_status("Cancelling…")
+
+    def stop_detect(self):
+        """Detect titles called off: its crawl stops at its next step (menus.Cancelled, through its progress
+        and its log). A call into the hdmv-menus library (opening a disc) finishes first, seconds at most."""
+        if self.detecting:
+            self.detect_stop.set()
+            self.tell("Calling off the stakeout…")
 
     def on_close(self):
         if self.busy and not messagebox.askyesno(APP, "A job is still running. Quit anyway?"):
@@ -4244,8 +4354,16 @@ class TitlesDialog:
         except tk.TclError:
             return False
 
-    def close(self):
+    def close(self, ask=True):
+        """The window closed: Cancel, Escape, its close box (ask: while Detect titles reads this disc's menus,
+        whether to stop it, then stopped); Save's, asking nothing (the reading goes on, its labels kept)."""
         from . import menus
+        if ask and self.app.detecting and self.app.rep is self.rep:
+            # (Detect titles still reading this disc's menus: asked first, then called off with the window)
+            if not messagebox.askyesno(APP, "Detect titles is still reading this disc's menus. Stop it?",
+                                       parent=self.top):
+                return
+            self.app.stop_detect()
         menus.stop_watching()                   # (a title it played in VLC: closed with it)
         for w in (self.viewer, self.guide):
             if w is not None and w.alive():
@@ -4319,16 +4437,19 @@ class TitlesDialog:
             else:
                 self.heads[head] = ttk.Label(g, text=head, style="Cap.TLabel")
             self.heads[head].grid(row=0, column=c, sticky="w", padx=(0, 8), pady=(0, 4))
-        # what the menus found, to confirm, comes first and always shows (the ads too)
-        # (but for extras when they aren't being ripped: those wait under Show more)
-        roles = hidden_roles(self.app.extras.get())
-        found = {tid for tid in self.found() if not ("extra" in roles and self.role_of(tid) == "extra")}
+        # in view: the film or the episodes (the extras too, when they're ripped); the rest under Show more,
+        # confirmed there or not (under_more): each part in order, by type, then the menus' pages
+        include = self.app.extras.get()
         detected = (self.rep or {}).get("detected") or {}
-        first = sorted((t for t in self.rows if t["id"] in found),
-                       key=lambda t: found_order(t["id"], self.state[t["id"]]["was"], detected))
-        rest = [t for t in self.rows if t["id"] not in found]
-        hidden = [t for t in rest if t["role"] in roles]
-        shown = first + [t for t in rest if self.show_all.get() or t["role"] not in roles]
+
+        def order(t):
+            # (a copy, or a Play All as the scan has it: nothing to do with it there, so last of all)
+            key = found_order(t["id"], self.state[t["id"]]["was"], detected, t.get("episode_index") or 0)
+            return (self.inert(t),) + key[:1] + (self.ORDER[t["role"]],) + key[1:]
+        under = lambda t: under_more(t["role"], self.state[t["id"]]["was"].get("type"), include)
+        hidden = sorted((t for t in self.rows if under(t)), key=order)
+        shown = sorted((t for t in self.rows if not under(t)), key=order) + (hidden if self.show_all.get() else [])
+        self.shown = [t["id"] for t in shown]     # (the rows, in their order)
         self.vars, self.episode_boxes = {}, {}
         for r, t in enumerate(shown, 1):
             self.add_row(g, r, t)
@@ -4347,8 +4468,11 @@ class TitlesDialog:
         if self.top.state() != "withdrawn":    # grown (Detect titles' rows, Show more): still on screen
             keep_on_screen(self.top)
 
-    def role_of(self, tid):
-        return next((t["role"] for t in self.rows if t["id"] == tid), None)
+    def inert(self, t):
+        """Whether a row has nothing to change: a copy (only what it copies to say), or a Play All as the
+        scan has it (the titles it plays)."""
+        copy = t["role"] == "duplicate" and re.match(r"same video as (.+?)\s*$", t.get("note") or "")
+        return bool(copy) or (t["role"] == "play-all" and self.state[t["id"]]["from"] == "scan")
 
     def found(self):
         """The rows Detect titles has a word on (to confirm, or not)."""
@@ -4632,7 +4756,11 @@ class TitlesDialog:
         v = self.viewer
         if v is None or not v.alive():
             v = self.viewer = MenuPicture(self.top)
-        v.show(tid, self.pictures[tid])
+        pic = dict(self.pictures[tid])
+        said = ((self.rep or {}).get("detected") or {}).get(tid) or {}
+        if said.get("read") and said.get("title"):  # (its name put right: as read, and as put right)
+            pic.update(read_as=said["read"], name=said["title"])
+        v.show(tid, pic)
 
     def show_types(self):
         """What each type is for (one window, kept to the front)."""
@@ -4697,7 +4825,7 @@ class TitlesDialog:
         finally:
             con.close()
         answer = self.films_answer()
-        self.close()
+        self.close(ask=False)
         if answer:                                # which film is which: the disc's answer, investigated again
             self.app.use_answer(answer)
         else:
@@ -4778,6 +4906,17 @@ class MenuPicture:
         body.pack(fill="both", expand=True)
         self.head = ttk.Label(body, text="", style="Title.TLabel", background=th.PARCHMENT)
         self.head.pack(anchor="w")
+        # what it was read as: the name, a link when it was put right (read as, put right as: pointed at,
+        # or clicked), then how to look at it
+        said = ttk.Frame(body, style="Desk.TFrame")
+        said.pack(anchor="w", pady=(2, 0))
+        self.said = ttk.Label(said, text="", style="DeskSub.TLabel")
+        self.said.pack(side="left")
+        self.fixed = th.link(said, "", self._toggle_fix)
+        self.said_end = ttk.Label(said, text="", style="DeskSub.TLabel")
+        th.Tooltip(self.fixed, lambda: self.fix_text)
+        self.fix_note = ttk.Label(body, text="", style="DeskSub.TLabel", wraplength=640, justify="left")
+        self.fix_text = ""
         self.read = ttk.Label(body, text="", style="DeskSub.TLabel", wraplength=640, justify="left")
         self.read.pack(anchor="w", pady=(2, 8))
         self.pic = ttk.Label(body, style="DeskSub.TLabel")
@@ -4797,6 +4936,32 @@ class MenuPicture:
         except tk.TclError:
             return False
 
+    def _said(self, lead, pic, words):
+        """The first line: lead (“Detect titles read it as”) and its name; a name put right (pic's
+        read_as, name) as a link, its reading shown pointed at or clicked."""
+        name, read_as = pic.get("name"), pic.get("read_as")
+        self.fix_note.pack_forget()
+        self.fixed.pack_forget()
+        self.said_end.pack_forget()
+        if name and read_as and name != read_as:
+            self.fix_text = "Read as “%s”, corrected to “%s”" % (read_as, name)
+            self.fix_note.config(text=self.fix_text + ".")
+            self.said.config(text=lead + " ")
+            self.fixed.config(text="“%s”" % name)
+            self.fixed.pack(side="left")
+            self.said_end.config(text=".")
+            self.said_end.pack(side="left")
+        else:
+            self.fix_text = ""
+            self.said.config(text="%s “%s”." % (lead, words) if words else "")
+
+    def _toggle_fix(self):
+        """A click on the corrected name: its reading shown, or hidden again."""
+        if self.fix_note.winfo_manager():
+            self.fix_note.pack_forget()
+        else:
+            self.fix_note.pack(anchor="w", before=self.read)
+
     def show(self, tid, pic):
         """The page's picture: the rest of the menu dimmed, the button's area (a gold dashed box)
         as it is; the words its name was read from outlined in red only while the pointer is on
@@ -4808,7 +4973,8 @@ class MenuPicture:
         self.head.config(text="%s plays from this button" % tid)
         words = (pic.get("text") or "").strip()
         if pic.get("alone"):                      # (only the button: the disc's own image of it)
-            self.read.config(text="Its button in the disc's menu, as the disc has it." + (" Read as “%s”." % words if words else ""))
+            self._said("Read as", pic, words)
+            self.read.config(text="Its button in the disc's menu, as the disc has it.")
             with Image.open(pic["image"]) as im:
                 buf = io.BytesIO()
                 im.convert("RGB").save(buf, "PNG")
@@ -4822,12 +4988,14 @@ class MenuPicture:
             return
         button = list(pic.get("button") or pic["rect"])
         shown = list(pic["rect"])                 # (the words read, or the button's area: nothing read)
-        # (the picture is the page as it was read: the menu's own highlight can be on another button)
-        self.read.config(text=("Detect titles read it as “%s”." % words if words else
-                               "Detect titles couldn't read its words.") +
-                         " The gold dashed box is the button on the menu" +
+        # (the picture is the page as it was read: the menu's own highlight can be on another button, unless it's
+        # the page drawn with this one selected, a Blu-ray's: "lit")
+        self._said("Detect titles read it as", pic, words)
+        self.read.config(text=("" if words else "Detect titles couldn't read its words. ") +
+                         "The gold dashed box is the button on the menu" +
                          ("; point at it, or click it, to see the words it was read from (in red)." if words else ".") +
-                         " The menu's own highlight may be on another button.")
+                         (" It's shown selected, as a player shows it." if pic.get("lit") else
+                          " The menu's own highlight may be on another button."))
         with Image.open(pic["image"]) as im:
             im = im.convert("RGB")
         sx, sy = im.width / self.FRAME[0], im.height / self.FRAME[1]

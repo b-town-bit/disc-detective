@@ -12,8 +12,9 @@ license-files = ["LICENSE", "THIRD_PARTY.md"]
 # 3.15 once our dependencies support it (RapidOCR's onnxruntime): then a new release
 requires-python = ">=3.9,<3.15"
 # Pillow: posters and box art (Tk can't show JPEGs by itself). RapidOCR: reading menus, the best
-# reader, and all a Blu-ray's menus are read with
-dependencies = ["Pillow", "rapidocr", "onnxruntime"]
+# reader, and all a Blu-ray's menus are read with. hdmv-menus: a Blu-ray's HDMV menus read from its
+# own files, nothing played (our own library, MIT: github.com/b-town-bit/hdmv-menus; without it, VLC's crawl)
+dependencies = ["Pillow", "rapidocr", "onnxruntime", "hdmv-menus>=0.1,<0.2"]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-timeout", "ruff"]

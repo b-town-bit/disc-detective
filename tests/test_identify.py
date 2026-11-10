@@ -374,6 +374,61 @@ def test_a_films_credits_as_words(tmp_path, monkeypatch):
     assert con.execute("SELECT 1 FROM credits_fetched WHERE imdb_id='tt0000001'").fetchone() is None
 
 
+def test_tmdbs_credits_are_kept_six_months_at_most(tmp_path):
+    """TMDB's terms: nothing of theirs is kept over six months. Their credits older than that
+    go when the library opens (fetched again when next needed); IMDb's stay."""
+    import datetime
+    db = str(tmp_path / "library.sqlite")
+    con = core.library_open(db)
+    then = (datetime.datetime.now() - datetime.timedelta(days=200)).isoformat(timespec="seconds")
+    recent = datetime.datetime.now().isoformat(timespec="seconds")
+    for imdb_id, source, when in (("tt1", "tmdb", then), ("tt2", "tmdb", recent), ("tt3", "imdb", then)):
+        con.execute("INSERT INTO credits VALUES (?,?,?,?,?)", (imdb_id, "Somebody", None, "actor", source))
+        con.execute("INSERT INTO credits_fetched VALUES (?,?,?)", (imdb_id, source, when))
+    con.commit()
+    con.close()
+    con = core.library_open(db)
+    assert sorted(r[0] for r in con.execute("SELECT imdb_id FROM credits_fetched")) == ["tt2", "tt3"]
+    assert sorted(r[0] for r in con.execute("SELECT imdb_id FROM credits")) == ["tt2", "tt3"]
+    con.close()
+
+
+def test_tmdbs_pictures_are_kept_six_months_at_most(tmp_path):
+    """TMDB's downloads in the art folder over six months old go, with the pictures made from
+    them; TheDiscDB's and the disc's own stay, however old."""
+    import json
+    import os
+    import time
+    art = tmp_path / "art"
+    art.mkdir()
+    old = time.time() - 200 * 86400
+
+    def put(name, source=None, aged=False):
+        p = art / name
+        p.write_text(json.dumps({"source": source, "what": "poster"}) if source else "x")
+        if aged:
+            os.utime(p, (old, old))
+    put("tt1_tmdb.jpg", aged=True)                      # an old TMDB download ...
+    put("tt1_tmdb.id", aged=True)
+    put("tt1_342x513.png")                              # ... and the picture made from it lately
+    put("tt1_342x513.json", "TMDB")
+    put("tt2_342x513.png", aged=True)                   # TheDiscDB's, old
+    put("tt2_342x513.json", "TheDiscDB", aged=True)
+    put("tt3_tmdb.jpg")                                 # TMDB's, recent
+    put("tt4_tmdb.coll", aged=True)                     # a collection lookup
+    put("tmdb_movie_5.jpg", aged=True)
+    put("tmdbcoll_9_342x513.png", aged=True)
+    put("tmdbcoll_9_342x513.json", "TMDB", aged=True)
+    put("opt_abc.jpg", aged=True)                       # the chooser's: TMDB's ...
+    put("opt_abc_120x180.png")
+    put("opt_abc_120x180.json", "TMDB")
+    put("opt_def.jpg", aged=True)                       # ... and TheDiscDB's
+    put("opt_def_120x180.json", "TheDiscDB")
+    assert core.tmdb_art_expire(str(art)) == 11
+    assert sorted(os.listdir(art)) == ["opt_def.jpg", "opt_def_120x180.json", "tt2_342x513.json",
+                                       "tt2_342x513.png", "tt3_tmdb.jpg"]
+
+
 def test_the_imdb_credits_index(tmp_path, monkeypatch):
     """IMDb's credits, read as they download: the well-known titles' cast and crew, searchable by
     name and by character; a film's credits from it, not TMDB, when it's there."""

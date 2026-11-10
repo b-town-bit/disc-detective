@@ -34,6 +34,11 @@ The app then shows the poster or box art so you can confirm at a glance.
 
 ## Install
 
+**Windows** is fully supported. **Linux** and **macOS** are previews: the tests run on both,
+but nobody has tried them with a real disc drive, MakeMKV or VLC yet. If you use one of them,
+[bug reports](../../issues/new/choose) help a lot, and so would someone to look after it (see
+[Contributing](CONTRIBUTING.md#looking-after-linux-or-macos)).
+
 Needs Python 3.9 to 3.14 with Tkinter (included in the python.org installer for Windows
 and macOS). Python 3.15 isn't supported yet: some of what it uses doesn't run on it.
 
@@ -41,10 +46,11 @@ and macOS). Python 3.15 isn't supported yet: some of what it uses doesn't run on
 pip install "git+https://github.com/b-town-bit/disc-detective"
 ```
 
-That brings along what it depends on: **Pillow** (for posters and box art) and **RapidOCR**
-(for reading disc menus), about 250 MB in all. RapidOCR fetches one of its models the first
+That brings along what it depends on: **Pillow** (for posters and box art), **RapidOCR**
+(for reading disc menus) and **hdmv-menus** (for reading a Blu-ray's menus from its own files),
+about 250 MB in all. RapidOCR fetches one of its models the first
 time it reads a menu, so have a connection for that. To run from a downloaded copy of the
-repo instead, `pip install pillow rapidocr onnxruntime` once, then double-click
+repo instead, `pip install pillow rapidocr onnxruntime hdmv-menus` once, then double-click
 **Disc Detective.pyw** (Windows) or run `python -m disc_detective`.
 
 Optional: **MakeMKV** for ripping,

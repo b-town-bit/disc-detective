@@ -28,11 +28,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         # the oldest and newest supported
         python: ["3.9", "3.14"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      # pictures of the app's windows on each system (the newest Python's run), saved below
+      DISC_DETECTIVE_SCREENSHOTS: ${{ matrix.python == '3.14' && format('{0}/screenshots', github.workspace) || '' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -47,3 +50,13 @@ jobs:
       - name: Tests (Windows)
         if: runner.os == 'Windows'
         run: pytest -q
+      - name: Tests (macOS)
+        if: runner.os == 'macOS'
+        run: pytest -q
+      - name: Screenshots
+        if: always() && matrix.python == '3.14'
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ runner.os }}
+          path: screenshots/
+          if-no-files-found: ignore

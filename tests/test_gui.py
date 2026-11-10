@@ -585,6 +585,31 @@ def test_extras_are_in_the_title_lists_only_when_theyre_ripped(gui, tmp_path, mo
     d.refill()
     assert "Title 3" in d.vars and d.heads["CONFIRM?"].cget("text") == "CONFIRM?"
     d.close()
+    # an ad the menus named, though it waits to be confirmed: under Show more, not counted, after the
+    # extras there; and what's down as an extra by the menus, though the scan took it for an ad, is one
+    rep["detected"].update({"Title 4": {"type": "Promo", "title": "Previews", "season": "", "episode": ""}})
+    rep["titles"].append({"id": "Title 5", "role": "promo", "duration": 250})
+    rep["detected"]["Title 5"] = {"type": "Featurette", "title": "On Set", "season": "", "episode": ""}
+    assert app.titles_waiting() == []
+    d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
+    assert set(d.vars) == {"Title 1"}
+    d.show_all.set(True)
+    d.refill()
+    assert [t for t in d.vars] == ["Title 1", "Title 3", "Title 5", "Title 4"]
+    d.close()
+    app.extras.set(True)
+    assert sorted(app.titles_waiting()) == ["Title 3", "Title 5"]
+    d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
+    assert [t for t in d.vars] == ["Title 1", "Title 3", "Title 5"]
+    d.close()
+    # a copy and a Play All, nothing to change on either: last of all, under the ads
+    rep["titles"] += [{"id": "Title 6", "role": "duplicate", "duration": 6000, "note": "same video as Title 1"},
+                      {"id": "Title 7", "role": "play-all", "duration": 500, "note": "plays Title 3, Title 5"}]
+    d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
+    d.show_all.set(True)
+    d.refill()
+    assert d.shown[-3] == "Title 4" and set(d.shown[-2:]) == {"Title 6", "Title 7"}
+    d.close()
 
 
 def test_imdb_credits_are_part_of_imdbs_data(tmp_path, monkeypatch):
@@ -1255,10 +1280,14 @@ def test_what_the_menus_found_is_saved_once_confirmed(gui, tmp_path, monkeypatch
     assert sorted(d.found()) == ["Title 1", "Title 2", "Title 5"]
     assert "Title 6" not in d.vars
     assert d.state["Title 3"]["from"] == "scan"
-    # what's to confirm comes first, an ad too (shown though promos are tucked away): film, extras, promos
-    assert list(d.vars)[:3] == ["Title 1", "Title 2", "Title 5"]
-    boxes = [w for w in d.area.inner.winfo_children() if w.winfo_class() == "TCheckbutton"]
-    assert len(boxes) == 3                                      # a Confirm? box only on what the menus found
+    # in view: the film, then the extras (ripped); an ad, though it's to confirm, waits under Show more
+    assert list(d.vars) == ["Title 1", "Title 2", "Title 3", "Title 4"]
+    boxes = lambda: [w for w in d.area.inner.winfo_children() if w.winfo_class() == "TCheckbutton"]
+    assert len(boxes()) == 2                                    # a Confirm? box only on what the menus found
+    d.show_all.set(True)
+    d.refill()
+    assert list(d.vars)[:4] == ["Title 1", "Title 2", "Title 3", "Title 4"] and set(d.vars) >= {"Title 5", "Title 6"}
+    assert len(boxes()) == 3                                    # (the ad's, there)
     d.vars["Title 3"]["title"].set("Bloopers")                  # changed: saved, no confirming needed
     d.vars["Title 2"]["title"].set("Making Of Film")
     assert d.state["Title 2"]["ok"]                             # yours now: confirmed for you
@@ -1471,7 +1500,7 @@ def test_the_menu_button_that_plays_a_title(gui, tmp_path, monkeypatch):
     d.show_picture("Title 2")
     v = d.viewer
     assert v.alive() and v.head.cget("text") == "Title 2 plays from this button"
-    assert "Making Of" in v.read.cget("text") and v.photo is not None
+    assert "Making Of" in v.said.cget("text") and v.photo is not None
     d.show_picture("Title 1")
     assert d.viewer is v and "couldn't read" in v.read.cget("text")      # one window, reused
     # the guide to the types (TYPE's help): every type in the list, one window
@@ -1557,10 +1586,10 @@ def test_detect_titles_button(gui, tmp_path, monkeypatch):
     assert {t["id"]: t["role"] for t in rep["titles"]} == {"Title 1": "feature", "Title 2": "promo", "Title 3": "extra"}
     assert d.news_lbl.cget("text") == "The suspects named the film and 1 extra"
     assert d.news_dot.itemcget(1, "fill") == dd_app.th.GREEN_DOT
-    # the rows not yours take the menus' word (an ad now: shown, at the top, to confirm)
+    # the rows not yours take the menus' word (an ad now: under Show more, though it's to confirm)
     assert pump(lambda: d.state["Title 2"]["from"] == "menus", 5)
     assert d.state["Title 2"]["type"] == "Promo" and d.state["Title 3"]["title"] == "Making Of"
-    assert list(d.vars)[:2] == ["Title 1", "Title 3"] and "Title 2" in d.vars and not d.state["Title 3"]["ok"]
+    assert list(d.vars) == ["Title 1", "Title 3"] and not d.state["Title 3"]["ok"]
     d.close()
     # with Edit titles closed, the outcome goes to the footer, and the strip folds away
     app.show_plan_summary()
@@ -1913,7 +1942,18 @@ def test_a_menu_picture_shows_the_words_read_on_demand(tmp_path):
         Image.new("RGB", (120, 40), (40, 60, 90)).save(small)
         v.show("00051.mpls", {"image": small, "rect": [0, 0, 120, 40], "button": [0, 0, 120, 40], "text": "Pilot", "alone": True})
         root.update()
-        assert v.photo.width() == 120 and "Pilot" in v.read.cget("text") and not v.photos
+        assert v.photo.width() == 120 and "Pilot" in v.said.cget("text") and not v.photos
+        # a name put right: the name as a link; pointed at or clicked, what it was read as
+        v.show("00052.mpls", {"image": small, "rect": [0, 0, 120, 40], "button": [0, 0, 120, 40], "text": "Meville's Cactus",
+                              "alone": True, "read_as": "Meville's Cactus", "name": "Neville's Cactus"})
+        root.update()
+        assert v.fixed.winfo_manager() and v.fixed.cget("text") == "“Neville's Cactus”"
+        assert v.fix_text == "Read as “Meville's Cactus”, corrected to “Neville's Cactus”"
+        assert not v.fix_note.winfo_manager()
+        v.fixed.event_generate("<Button-1>")
+        assert v.fix_note.winfo_manager() and v.fix_note.cget("text") == v.fix_text + "."
+        v.fixed.event_generate("<Button-1>")
+        assert not v.fix_note.winfo_manager()
         v.show("Title 30", {"image": path, "rect": [186, 297, 291, 340], "button": [66, 275, 375, 364],
                             "text": "DELETED SCENES"})
         root.update()
@@ -2561,3 +2601,97 @@ def test_the_menus_put_a_guess_in_order_without_saving_it(gui, monkeypatch):
                                                                                    ("Title 2", "Hold That Ghost")]
     assert rep["candidates"][0]["name"] == "In the Navy & Hold That Ghost"
     assert any("In the Navy (1941)" in n and n.startswith("Title 1") for n in rep["plex_names"])
+
+
+def test_every_crawls_progress_reads_the_same_on_the_status_line(monkeypatch):
+    """App._crawl_progress: what a crawl tells (menus.CRAWL_STAGES), a DVD's or a Blu-ray's, in the same
+    words: the case files opened, the stakeout begun, each page a suspect questioned, each press one
+    interrogated (a new round's joining those heard); posted, not told on the crawl's own thread."""
+    from disc_detective import app as appmod
+    told = []
+    fake = type("A", (), {"post": lambda self, fn, *a: told.append(a[0]), "tell": None})()
+    progress = appmod.App._crawl_progress(fake)
+    for stage in [("setup",), ("start",), ("page", 1, 3), ("press", 1, 2), ("press", 2, 2), ("press", 1, 1), ("nothing",)]:
+        progress(*stage)
+    assert told[:3] == ["Opening the case files…", "Going on stakeout…", appmod.suspect_line("Questioning", 1, 3)]
+    assert told[3:] == [appmod.suspect_line("Interrogating", k, n) for k, n in ((1, 2), (2, 2), (3, 3))]
+
+
+def test_closing_edit_titles_while_its_menus_are_read_asks_and_stops_the_reading(gui, tmp_path, monkeypatch):
+    """Edit titles closed (Cancel, Escape, its close box) while Detect titles reads its disc's menus: asked
+    first; no, it stays open and the reading goes on; yes, the reading is called off (its crawl stops at its
+    next step) and the window closes. Save asks nothing: the reading goes on."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    rep = {"content_hash": "7" * 32, "format": "Blu-ray", "kind": "movie", "best_guess": "Film (2001)", "path": str(tmp_path),
+           "candidates": [{"kind": "movie", "name": "Film", "year": 2001, "imdb_id": "tt0000001", "score": 90}],
+           "titles": [{"id": "00001.mpls", "role": "feature", "duration": 6000}], "labels": {}}
+    app.rep, app.detecting = rep, True
+    asked = []
+    monkeypatch.setattr(dd_app.messagebox, "askyesno", lambda *a, **k: asked.append(a[1]) or False)
+    d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
+    d.close()
+    assert asked and "Stop it?" in asked[0] and d.alive() and not app.detect_stop.is_set()
+    monkeypatch.setattr(dd_app.messagebox, "askyesno", lambda *a, **k: True)
+    d.close()
+    assert not d.alive() and app.detect_stop.is_set()
+    app.detect_stop.clear()
+    d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
+    d.close(ask=False)                          # (Save's)
+    assert not d.alive() and not app.detect_stop.is_set()
+    app.detecting = False
+
+
+SHOTS = os.environ.get("DISC_DETECTIVE_SCREENSHOTS")      # (read now: the isolation fixture clears the environment)
+
+
+def screenshot(window, path, pump):
+    """A window's picture as it's drawn on screen, saved (best effort: a system that won't let a program see the
+    screen gives none)."""
+    from PIL import ImageGrab
+    pump(lambda: False, 0.5)                    # (drawn: the window mapped and its pictures loaded)
+    window.update_idletasks()
+    x, y = window.winfo_rootx(), window.winfo_rooty()
+    box = (x, y, x + window.winfo_width(), y + window.winfo_height())
+    try:
+        try:
+            picture = ImageGrab.grab(bbox=box, all_screens=True)
+        except TypeError:                       # (an older Pillow: no all_screens)
+            picture = ImageGrab.grab(bbox=box)
+    except OSError as e:                        # (a hidden desktop's, temp/hidden_tests.py: no screen to see)
+        pytest.skip("this system won't show the screen: %s" % e)
+    picture.save(path)
+
+
+@pytest.mark.skipif(not SHOTS, reason="set DISC_DETECTIVE_SCREENSHOTS to a folder for pictures of the windows")
+def test_screenshots(gui, tmp_path, imdb_dir, monkeypatch):
+    """Pictures of the main windows on this system (CI saves them for each one): how the app looks where nobody
+    here can run it. The main window with a scanned disc, each Settings tab, Edit titles and the first-run offer."""
+    root, made, pump = gui
+    os.makedirs(SHOTS, exist_ok=True)
+    shot = lambda w, name: screenshot(w, os.path.join(SHOTS, name + ".png"), pump)
+    monkeypatch.setenv("DISC_DETECTIVE_IMDB", imdb_dir)
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    orig = core.default_args
+    monkeypatch.setattr(core, "default_args", lambda **kw: orig(**dict(kw, offline=True)))
+    app = dd_app.App(root)
+    shot(root, "1-main-empty")
+    app.source.set(fixtures.make_tv_bluray(str(tmp_path / "JUSTIFIED")))
+    app.source_changed()
+    app.outdir.set(str(tmp_path / "Rips"))
+    app.scan()
+    assert pump(lambda: app.rep is not None and not app.busy, 60), app.status.cget("text")
+    shot(root, "2-main-scanned")
+    d = dd_app.SettingsDialog(root, app)
+    for i, t in enumerate(d.tabs.tabs()):
+        d.tabs.select(t)
+        shot(d.top, "3-settings-%d-%s" % (i + 1, d.tabs.tab(t, "text").lower()))
+    d.close()
+    t = dd_app.TitlesDialog(root, app, app.rep["content_hash"], shown_title(app), rep=app.rep)
+    shot(t.top, "4-edit-titles")
+    t.close(ask=False)
+    fr = dd_app.FirstRunDialog(root, app, ["discdb", "imdb"])
+    shot(fr.top, "5-first-run")
+    fr.top.destroy()
+    assert len(os.listdir(SHOTS)) >= 5

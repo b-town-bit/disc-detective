@@ -38,6 +38,11 @@ Disc menus are read with [RapidOCR](https://github.com/RapidAI/RapidOCR) (Apache
 PaddleOCR's models on [ONNX Runtime](https://onnxruntime.ai) (MIT) and
 [OpenCV](https://opencv.org) (Apache-2.0), installed as dependencies.
 
+## hdmv-menus
+A Blu-ray's HDMV menus are read from its own files with [hdmv-menus](https://github.com/b-town-bit/hdmv-menus)
+(MIT), this project's own library, installed as a dependency. It ships no decryption: an encrypted disc is read
+through a libaacs-compatible library already on the computer (MakeMKV's).
+
 ## TMDB (optional)
 With a TMDB key, posters and a fallback search come from [TMDB](https://www.themoviedb.org).
 
