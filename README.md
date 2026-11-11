@@ -53,10 +53,14 @@ time it reads a menu, so have a connection for that. To run from a downloaded co
 repo instead, `pip install pillow rapidocr onnxruntime hdmv-menus` once, then double-click
 **Disc Detective.pyw** (Windows) or run `python -m disc_detective`.
 
-Optional: **MakeMKV** for ripping,
-**tesseract** for reading text off cover art, a free **TMDB** key (in Settings) for
-extra posters. Where RapidOCR can't make out a DVD's menu buttons, Windows' own OCR, then
-tesseract, have a go, if installed:
+Optional programs: **MakeMKV** for ripping (and reading a Blu-ray's menus), **VLC** for
+Detect titles on DVDs, and **FFmpeg** for previewing a Blu-ray's titles. Settings >
+Integrations > Programs shows which you have. On Windows, Install there runs each one's own
+installer from its publisher, through winget, once you agree; elsewhere it gives the download
+page. Find… points it at a copy of your own (a portable one, say); Automatic goes back to the
+one it found. A free **TMDB** key (also in Settings) adds extra posters. Where RapidOCR can't
+make out a DVD's menu buttons or cover art, Windows' own OCR has a go, then Tesseract if you
+already have it installed:
 `pip install "disc-detective[windows-ocr] @ git+https://github.com/b-town-bit/disc-detective"`
 (or, from a copy of the repo, `pip install -e ".[windows-ocr]"`).
 

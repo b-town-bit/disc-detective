@@ -32,6 +32,8 @@ import sys
 import threading
 import time
 
+from . import tools
+
 SECTOR = 2048
 MENU_TYPES = {2: "title", 3: "root", 4: "subpicture", 5: "audio", 6: "angle", 7: "chapter"}
 SINS = {1: "top_cell", 2: "next_cell", 3: "prev_cell", 5: "top_program", 6: "next_program", 7: "prev_program",
@@ -730,7 +732,7 @@ def _button_text(image, rect, frame_size=(720, 480), pad=4, others=()):
         win = max(wins, key=lambda s: (_real(s), _score(s)), default="")
         if _score(win) > 0:
             return win
-    if not shutil.which("tesseract"):
+    if not tools.which("tesseract"):
         return ""
     grey = ImageOps.autocontrast(ImageOps.grayscale(colour), cutoff=1)
     # menu lettering is light on dark as often as dark on light: tesseract wants dark on light
@@ -746,7 +748,7 @@ def _button_text(image, rect, frame_size=(720, 480), pad=4, others=()):
     def read(img, psms):
         img.save(tmp)
         for psm in psms:
-            out = subprocess.run(["tesseract", tmp, "stdout", "--psm", psm], capture_output=True, text=True,
+            out = subprocess.run([tools.which("tesseract"), tmp, "stdout", "--psm", psm], capture_output=True, text=True,
                                  encoding="utf-8", errors="replace", timeout=20, **_no_console()).stdout
             got = [_tidy(re.sub(r"[^\w'&:!?.,()\- ]+", "", s).replace("_", " ").strip()) for s in out.splitlines()]
             got = [g for g in got if g]
@@ -1308,7 +1310,7 @@ def _clean_share(line):
 def _tesseract_page(image, rects, sx, sy):
     """Tesseract's reading of a page with its buttons blanked (page_text's), or ""."""
     from PIL import Image, ImageDraw, ImageOps, ImageStat
-    if not shutil.which("tesseract"):
+    if not tools.which("tesseract"):
         return ""
     grey = ImageOps.autocontrast(ImageOps.grayscale(image.convert("RGB")), cutoff=1)
     if ImageStat.Stat(grey).mean[0] < 128:
@@ -1320,7 +1322,7 @@ def _tesseract_page(image, rects, sx, sy):
     tmp = _tmp_png()
     try:
         grey.save(tmp)
-        out = subprocess.run(["tesseract", tmp, "stdout", "--psm", "11"], capture_output=True, text=True,
+        out = subprocess.run([tools.which("tesseract"), tmp, "stdout", "--psm", "11"], capture_output=True, text=True,
                              encoding="utf-8", errors="replace", timeout=30, **_no_console()).stdout
     except (OSError, subprocess.SubprocessError):
         return ""

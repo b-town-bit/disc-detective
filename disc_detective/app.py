@@ -34,6 +34,7 @@ from tkinter import font as tkfont
 from . import core as di
 from . import i18n
 from . import makemkv
+from . import tools
 from .makemkv import MAKEMKV_SWITCHES, NO_MINIMUM, makemkv_source
 from . import theme as th
 
@@ -159,6 +160,15 @@ def load_settings():
             return json.load(fh)
     except (OSError, ValueError):
         return {}
+
+
+def relaunch_command():
+    """How to start the app again, as it was started: a packaged build's own program; else this Python,
+    the app imported from its own package's folder (a .pyw, python -m, or an installed package alike)."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
+    pkg = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return [sys.executable, "-c", "import sys; sys.path.insert(0, %r); from disc_detective.app import main; main()" % pkg]
 
 
 def save_settings(d):
@@ -1189,6 +1199,7 @@ class App:
         self._notes = collections.deque(maxlen=5000)   # the technical log, for the case notes window
         self.notes_win = None
         self.settings = load_settings()
+        tools.choose(self.settings)          # (a copy of FFmpeg's or Tesseract's chosen in Settings)
         for area in i18n.DOMAINS:     # (each area its own language: "interface_language", "log_language")
             i18n.set_language(area, self.settings.get("%s_language" % area))
         self.rep = None
@@ -1250,6 +1261,7 @@ class App:
                 self.post(self._on_progress, label, done, total)
         di.progress = prog
         root.after(400, self.maybe_first_run)
+        root.after(600, self.resume_installs)
         root.after(100, self._poll)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -2091,6 +2103,47 @@ class App:
 
     def open_settings(self):
         SettingsDialog(self.root, self)
+
+    RESTART_WAIT = 30         # seconds a restarted app waits for the one before it to close
+
+    def restart_to_install(self, keys):
+        """Install these tools in a fresh copy of the app: they're asked for in its settings, it's started,
+        and this one closes, letting go of their files (a library it loaded: VLC's, MakeMKV's). Agreed to
+        already: the new copy installs them first thing, before loading anything. Not mid-scan or mid-rip."""
+        if self.busy or getattr(self, "detecting", False):
+            messagebox.showinfo(APP, "Wait for the case at hand to finish, then try again.", parent=self.root)
+            return False
+        self.settings["install_on_start"] = {"tools": list(keys), "after": os.getpid()}
+        save_settings(self.settings)
+        di.logger.info("restarting to install %s", ", ".join(keys))
+        try:
+            subprocess.Popen(relaunch_command(), cwd=os.getcwd(), creationflags=NO_WINDOW)
+        except OSError as exc:
+            self.settings.pop("install_on_start", None)
+            save_settings(self.settings)
+            messagebox.showerror(APP, "Couldn't start %s again: %s" % (APP, exc), parent=self.root)
+            return False
+        self.root.after(100, self.root.destroy)
+        return True
+
+    def resume_installs(self, waited=0.0):
+        """At startup: tools left to install by the copy before (restart_to_install), once it has closed:
+        Settings opened at them, each installed in turn."""
+        job = self.settings.get("install_on_start")
+        if not job:
+            return
+        if tools.still_running(job.get("after")) and waited < self.RESTART_WAIT:
+            self.root.after(500, lambda: self.resume_installs(waited + 0.5))
+            return
+        self.settings.pop("install_on_start", None)
+        save_settings(self.settings)
+        keys = [k for k in job.get("tools") or [] if k in tools.BY_KEY]
+        if not keys:
+            return
+        d = SettingsDialog(self.root, self)
+        d.tabs.select(len(d.tabs.tabs()) - 1)          # (Integrations, where its programs are)
+        d.queue = keys
+        d.next_install()
 
     # ---- disc data downloads (first run, Settings > Update now) ----
     def start_data_update(self, which, force, ui):
@@ -4779,19 +4832,21 @@ class TitlesDialog:
         if self.app.busy or getattr(self.app, "mkv_scan", None):
             self.show_outcome("The disc is busy: watch it once the scan or rip is done", th.WAX)
             return
+        # (a Blu-ray's playlist: ffplay, by its own number, whenever it's installed; else VLC, for a title
+        # the stakeout saw it play, by VLC's number for it)
         place = self.seen_playing().get(tid)
-        if place:
-            from . import bdmenus
-            if not bdmenus.watch_vlc(self.vlc, self.rep["path"], place["title"]):
-                self.show_outcome("VLC's player wasn't found beside it: reinstall VLC, or set its folder in Settings", th.WAX)
-            return
-        if tid.endswith(".mpls"):                 # (a Blu-ray's playlist: ffplay)
+        if tid.endswith(".mpls") and (self.ffplay or not place):
             from . import bdmenus
             t = next((x for x in self.rep.get("titles") or [] if x["id"] == tid), {})
             name = ((self.state.get(tid) or {}).get("title") or "").strip()
             if not bdmenus.watch_playlist(self.rep["path"], tid, self.ffplay, title="%s  %s" % (tid, name) if name else tid,
                                           video=t.get("video_info")):
                 self.show_outcome("ffmpeg's player (ffplay) wasn't found: install ffmpeg to watch Blu-ray titles", th.WAX)
+            return
+        if place:
+            from . import bdmenus
+            if not bdmenus.watch_vlc(self.vlc, self.rep["path"], place["title"]):
+                self.show_outcome("VLC's player wasn't found beside it: reinstall VLC, or set its folder in Settings", th.WAX)
             return
         if not menus.watch_title(self.vlc, self.rep["path"], int(tid.split()[1])):
             self.show_outcome("VLC's player wasn't found beside it: reinstall VLC, or set its folder in Settings",
@@ -6240,24 +6295,34 @@ class SettingsDialog:
         r += 1
 
         tab("Integrations")
-        head("MakeMKV")
-        self.mkv = tk.StringVar(value=st.get("makemkv", ""))
-        ttk.Entry(f, textvariable=self.mkv, width=38).grid(row=r, column=0, columnspan=2, sticky="we")
-        ttk.Button(f, text="Browse…", command=self.browse).grid(row=r, column=2, sticky="e", padx=(6, 0))
-        r += 1
-        self.mkv_note = ttk.Label(f, text="", style="Sub.TLabel")
-        self.mkv_note.grid(row=r, column=0, columnspan=3, sticky="w")
-        self.mkv.trace_add("write", lambda *a: self.refresh_mkv())
-        r += 1
-
-        head("VLC")
-        self.vlc = tk.StringVar(value=st.get("vlc", ""))
-        ttk.Entry(f, textvariable=self.vlc, width=38).grid(row=r, column=0, columnspan=2, sticky="we")
-        ttk.Button(f, text="Browse…", command=self.browse_vlc).grid(row=r, column=2, sticky="e", padx=(6, 0))
-        r += 1
-        self.vlc_note = ttk.Label(f, text="", style="Sub.TLabel")
-        self.vlc_note.grid(row=r, column=0, columnspan=3, sticky="w")
-        self.vlc.trace_add("write", lambda *a: self.refresh_vlc())
+        # the programs it works with: each one's standing, and its publisher's installer a press away (winget,
+        # with your consent; its own window and licence), or its download page; or a copy of your own (Find…)
+        head("Programs")
+        self.tool_rows, self.installing, self.queue, self.failed = {}, None, [], {}
+        self.paths, self.tool_paths, self.tool_tips = {}, {}, {}
+        for t in tools.LISTED:
+            k = t["key"]
+            self.paths[k] = tk.StringVar(value=st.get(k, ""))
+            ttk.Label(f, text=t["name"]).grid(row=r, column=0, sticky="nw", padx=(0, 12), pady=3)
+            note = ttk.Label(f, text="", style="Sub.TLabel", wraplength=300, justify="left")
+            note.grid(row=r, column=1, sticky="w", pady=3)
+            # (a path: one line, ✓ before it, an ellipsis if it's too long; the whole of it on hover)
+            note.bind("<Configure>", lambda e, k=k: self.fit_tool_path(k))
+            self.tool_tips[k] = th.Tooltip(note, lambda k=k: (self.tool_paths.get(k) or ("", ""))[1])
+            cell = ttk.Frame(f)
+            cell.grid(row=r, column=2, sticky="ne", pady=3)
+            btn = ttk.Button(cell, text="Install…", style="Small.TButton", command=lambda k=k: self.get_tools([k]))
+            btn.pack(side="left")
+            pick = ttk.Button(cell, text="Find…", style="Small.TButton", command=lambda k=k: self.pick_tool(k))
+            pick.pack(side="left", padx=(4, 0))
+            auto = ttk.Button(cell, text="Automatic", style="Small.TButton", command=lambda k=k: self.paths[k].set(""))
+            auto.pack(side="left", padx=(4, 0), after=pick)
+            self.tool_rows[k] = (note, btn, pick, auto)
+            r += 1
+        self.mkv, self.vlc = self.paths["makemkv"], self.paths["vlc"]
+        self.all_btn = ttk.Button(f, text="Install all missing…", style="Small.TButton",
+                                  command=lambda: self.get_tools(self.missing_tools()))
+        self.all_btn.grid(row=r, column=1, columnspan=2, sticky="e", pady=(2, 0))
         r += 1
 
         head("Posters")
@@ -6294,10 +6359,11 @@ class SettingsDialog:
         top.protocol("WM_DELETE_WINDOW", self.close)
         centre_over(top, root)
         self.refresh_status()
-        self.refresh_mkv()
-        self.refresh_vlc()
-        for var in (self.key, self.gkey, self.mkv, self.vlc, self.order,
-                    self.detect, self.bluray_menus, self.in_scan, self.every_title):   # saved as you go
+        self.refresh_tools()
+        for var in self.paths.values():
+            var.trace_add("write", lambda *a: self.refresh_tools())
+        for var in (self.key, self.gkey, self.order, self.detect, self.bluray_menus, self.in_scan,
+                    self.every_title, *self.paths.values()):   # saved as you go
             var.trace_add("write", lambda *a: self.save())
 
     def refresh_status(self):
@@ -6312,34 +6378,166 @@ class SettingsDialog:
             human_count(i["titles"]), people, i["built"], "" if i["current"] and c and c["current"] else " (rebuild needed)"))
             if i else "not downloaded yet")
 
-    def refresh_mkv(self):
-        p = self.mkv.get().strip()
-        if p:
-            self.mkv_note.config(text="Using this file" if os.path.isfile(p) else "File not found")
+    def tool_settings(self):
+        """Settings as they stand in this window (a path typed in, not yet saved, counts)."""
+        return dict(self.app.settings, **{k: v.get() for k, v in self.paths.items()})
+
+    def missing_tools(self):
+        return [t["key"] for t in tools.LISTED if not tools.find(t["key"], self.tool_settings())]
+
+    def chosen_tool(self, k):
+        """A copy of a program chosen with Find…: (its path, whether it's there), or None."""
+        p = self.paths[k].get().strip()
+        if not p:
+            return None
+        if k == "vlc":
+            from . import menus
+            ok = menus.find_vlc(p) == p
         else:
-            found = di.find_makemkvcon()
-            self.mkv_note.config(text=("Found automatically: %s" % found) if found else
-                                 "Not found. Install MakeMKV, or browse to makemkvcon.")
+            ok = os.path.isfile(p) and (k == "makemkv" or tools.runs(k, p))
+        return p, ok
 
-    def refresh_vlc(self):
-        from . import menus
-        p = self.vlc.get().strip()
-        if p:
-            self.vlc_note.config(text="Using this folder" if menus.find_vlc(p) == p else "VLC not found in this folder")
+    def pick_tool(self, k):
+        """Find…: a copy of your own, used instead of the one found (VLC: its folder)."""
+        name = tools.BY_KEY[k]["name"]
+        if k == "vlc":
+            p = filedialog.askdirectory(title="Find VLC's folder", parent=self.top)
         else:
-            found = menus.find_vlc()
-            self.vlc_note.config(text=("Found automatically: %s" % found) if found else
-                                 "Not found. Install VLC to read DVD menus, or browse to its folder.")
-
-    def browse_vlc(self):
-        p = filedialog.askdirectory(title="Find VLC's folder", parent=self.top)
+            exe = {"makemkv": "makemkvcon", "ffmpeg": "ffmpeg"}.get(k, k)
+            types = [("Programs", "*.exe"), ("All files", "*")] if os.name == "nt" else [("All files", "*")]
+            p = filedialog.askopenfilename(title="Find %s (%s)" % (name, exe), filetypes=types, parent=self.top)
         if p:
-            self.vlc.set(os.path.normpath(p))
+            self.paths[k].set(os.path.normpath(p))
 
-    def browse(self):
-        p = filedialog.askopenfilename(title="Find makemkvcon", parent=self.top)
-        if p:
-            self.mkv.set(os.path.normpath(p))
+    PATH_CHARS = 44           # a program's path, on one line: about as wide as the other rows' notes
+
+    def fit_tool_path(self, k):
+        shown = self.tool_paths.get(k)
+        if shown:
+            fit_label(self.tool_rows[k][0], shown[0], "Sub.TLabel")
+
+    def tool_note(self, k, text=None, path=None, tip=None):
+        """A program's note: a message, wrapped; or a path (found, or yours), ✓ and one line, its whole in a
+        tooltip (tip: what it says, the path itself if not given)."""
+        note = self.tool_rows[k][0]
+        if path:
+            self.tool_paths[k] = ("✓ " + path, tip or path)
+            note.config(wraplength=0, width=self.PATH_CHARS)
+            fit_label(note, self.tool_paths[k][0], "Sub.TLabel")
+        else:
+            self.tool_paths.pop(k, None)
+            self.tool_tips[k].hide()
+            note.config(text=text, wraplength=300, width=0)
+
+    def refresh_tools(self):
+        """Each program's line: where it was found, or the copy you chose; or what it's for, and Install
+        (winget) or its download page. Find… for a copy of your own; Automatic, back to the one found."""
+        if not getattr(self, "tool_rows", None):
+            return
+        winget = tools.winget()
+        missing = []
+        for t in tools.LISTED:
+            k = t["key"]
+            note, btn, pick, auto = self.tool_rows[k]
+            chosen = self.chosen_tool(k)
+            found = tools.find(k, self.tool_settings())
+            pick.config(state="disabled" if self.installing else "normal")
+            if chosen:
+                auto.pack(side="left", padx=(4, 0), after=pick)
+            else:
+                auto.pack_forget()
+            if self.installing == k:
+                self.tool_note(k, "Installing… its installer's window may be behind this one.")
+                btn.pack_forget()
+            elif chosen:
+                if chosen[1]:
+                    self.tool_note(k, path=chosen[0], tip="Set by you: %s" % chosen[0])
+                else:
+                    self.tool_note(k, "Not found where you set it: %s" % chosen[0])
+                btn.pack_forget()
+            elif found and k not in self.failed:
+                self.tool_note(k, path=found)
+                btn.pack_forget()
+            else:
+                missing.append(k)
+                why = self.failed.get(k)
+                broken = tools.found_broken(k) if k in ("ffmpeg", "tesseract") else None
+                if why:
+                    text = "Not installed: %s." % (why[:1].upper() + why[1:])
+                elif broken:
+                    text = "Found at %s, but it won't run: its install may not have finished." % broken
+                else:
+                    text = "Not installed: %s." % t["for"]
+                self.tool_note(k, text)
+                btn.config(text="Install…" if winget else "Download page", state="disabled" if self.installing else "normal")
+                btn.pack(side="left", before=pick)
+        if winget and len(missing) >= 2 and not self.installing:
+            self.all_btn.grid()
+        else:
+            self.all_btn.grid_remove()
+
+    def get_tools(self, keys):
+        """Install these programs, after asking: each one's publisher and licence named, and where its installer
+        comes from. One at a time, each installer's own window shown. No winget: the first one's download page."""
+        if not keys or self.installing:
+            return
+        if not tools.winget():
+            for k in keys[:1]:
+                messagebox.showinfo(APP, "%s: %s" % (tools.BY_KEY[k]["name"], tools.how_to_get(k)), parent=self.top)
+                webbrowser.open(tools.BY_KEY[k]["page"])
+            return
+        listed = "\n".join("• %s, from %s (%s)" % (tools.BY_KEY[k]["name"], tools.BY_KEY[k]["publisher"],
+                                                   tools.BY_KEY[k]["license"]) for k in keys)
+        if not messagebox.askyesno(APP, (
+                "Install %s?\n\n%s\n\nEach installer comes from its publisher, through winget (Microsoft's package "
+                "manager; where each one comes from: %s). Its own window opens, with its licence for you to agree to, "
+                "and Windows may ask for permission.") % (
+                " and ".join(tools.BY_KEY[k]["name"] for k in keys) if len(keys) <= 2 else "%d programs" % len(keys),
+                listed, tools.WINGET_REPO), parent=self.top):
+            return
+        # (a tool whose files this app has loaded, its library, can't be replaced while it runs: its installer
+        # would stop partway, "Error opening file for writing". Asked to restart the app first)
+        held = [k for k in keys if any(tools.loaded_from(d) for d in tools.folders_of(k, self.tool_settings()))]
+        if held:
+            if messagebox.askyesno(APP, "%s has %s's files open, so the installer couldn't replace them. Restart %s "
+                                        "and install first thing?" % (APP, " and ".join(tools.BY_KEY[k]["name"] for k in held), APP),
+                                   parent=self.top):
+                self.app.restart_to_install(keys)
+            return
+        self.queue = list(keys)
+        self.next_install()
+
+    def next_install(self):
+        if not self.queue:
+            self.installing = None
+            self.refresh_tools()
+            return
+        k = self.installing = self.queue.pop(0)
+        self.failed.pop(k, None)
+        self.refresh_tools()
+
+        def work():
+            ok, last = tools.install(k, lambda line: di.logger.info("%s", line))
+            self.app.post(self.installed, k, ok, last)
+        self.app.run_bg(work)
+
+    def installed(self, k, ok, last):
+        """One program's installer done: found now, or why not, in its line; then the next."""
+        try:
+            alive = bool(self.top.winfo_exists())
+        except tk.TclError:
+            alive = False
+        found = tools.find(k, self.app.settings)
+        di.logger.info("%s %s", tools.BY_KEY[k]["name"], ("installed: %s" % found) if ok and found else ("not installed (%s)" % last))
+        if not alive:                     # (the window closed meanwhile: what's left isn't installed)
+            self.installing, self.queue = None, []
+            return
+        # (the installer's word first: one that stopped partway can leave a copy that's there but broken)
+        if not ok:
+            self.failed[k] = last
+        elif not found:
+            self.failed[k] = "installed, but not found where it's usually put"
+        self.next_install()
 
     def test_key(self):
         key = self.key.get().strip()
@@ -6401,8 +6599,9 @@ class SettingsDialog:
         st = self.app.settings
         st["tmdb_key"] = self.key.get().strip()
         st["gemini_key"] = self.gkey.get().strip()
-        st["makemkv"] = self.mkv.get().strip()
-        st["vlc"] = self.vlc.get().strip()
+        for k, var in self.paths.items():
+            st[k] = var.get().strip()
+        tools.choose(st)
         st["menu_detect"] = bool(self.detect.get())
         st["bluray_menus"] = bool(self.bluray_menus.get())
         st["episode_order"] = self.order.get()
@@ -6463,10 +6662,11 @@ def text_readers():
     found = lambda m: importlib.util.find_spec(m) is not None
     return [name for name, ok in (("RapidOCR", found("rapidocr") and found("onnxruntime")),
                                   ("Windows OCR", os.name == "nt" and found("winrt")),
-                                  ("Tesseract", bool(shutil.which("tesseract")))) if ok]
+                                  ("Tesseract", bool(tools.which("tesseract")))) if ok]
 
 
 def main():
+    tools.keep_off_path()                # (first: before anything loads a library through PATH)
     try:
         di.setup_logging()
     except OSError:

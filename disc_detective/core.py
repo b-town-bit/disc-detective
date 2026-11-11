@@ -67,6 +67,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 from . import i18n
+from . import tools
 from .i18n import N_
 
 VERSION = "0.3"
@@ -1883,8 +1884,40 @@ def mastering_date(fp):
     return d.strftime("%Y-%m") if 1996 <= d.year <= _dt.datetime.now().year else None
 
 
+def first_frame(src, dest):
+    """A video file's first picture saved as a PNG (a DVD's JACKET_P still: an MPEG program stream), or
+    None: by OpenCV (it comes with RapidOCR, its own copy of FFmpeg's decoder inside), else an ffmpeg
+    you installed."""
+    try:
+        import cv2
+    except ImportError:
+        cv2 = None
+    if cv2 is not None:
+        try:
+            cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+            try:
+                ok, frame = cap.read()
+            finally:
+                cap.release()
+            if ok and frame is not None:
+                done, png = cv2.imencode(".png", frame)     # (encoded, then written: any folder's name)
+                if done:
+                    with open(dest, "wb") as fh:
+                        fh.write(png.tobytes())
+                    return dest
+        except Exception as exc:
+            logger.debug("OpenCV couldn't read %s: %s", src, exc)
+    ff = tools.which("ffmpeg")
+    if ff:
+        subprocess.run([ff, "-loglevel", "error", "-y", "-f", "mpeg", "-i", src, "-frames:v", "1", dest],
+                       capture_output=True, timeout=30, **NO_CONSOLE)
+        if os.path.exists(dest) and os.path.getsize(dest):
+            return dest
+    return None
+
+
 def extract_cover(root, fmt, outdir, bd_meta=None):
-    """Save embedded cover art. DVD JACKET_P stills need ffmpeg (MPEG program stream)."""
+    """Save embedded cover art. A DVD's JACKET_P stills are MPEG program streams (first_frame)."""
     os.makedirs(outdir, exist_ok=True)
     if fmt == "DVD":
         jp = find_child(root, "JACKET_P")
@@ -1892,13 +1925,10 @@ def extract_cover(root, fmt, outdir, bd_meta=None):
             return None
         cands = sorted(glob.glob(os.path.join(jp, "*.MP2")) + glob.glob(os.path.join(jp, "*.mp2")),
                        key=os.path.getsize, reverse=True)
-        if not cands or not shutil.which("ffmpeg"):
-            return {"found": cands[0] if cands else None, "image": None,
-                    "note": "install ffmpeg to decode" if cands else ""}
-        out = os.path.join(outdir, "cover.png")
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "mpeg", "-i", cands[0],
-                        "-frames:v", "1", out], capture_output=True, timeout=30, **NO_CONSOLE)
-        return {"found": cands[0], "image": out if os.path.exists(out) else None, "note": ""}
+        if not cands:
+            return {"found": None, "image": None, "note": ""}
+        out = first_frame(cands[0], os.path.join(outdir, "cover.png"))
+        return {"found": cands[0], "image": out, "note": "" if out else "couldn't decode it"}
     thumbs = (bd_meta or {}).get("thumbnails") or []
     thumbs = [t for t in thumbs if os.path.isfile(t)]
     if not thumbs:
@@ -2015,7 +2045,7 @@ def _tesseract_phrases(image):
     """Tesseract's phrases off cover art. A DVD's menu still is small (720x480), so it is
     enlarged in grey first; only confident words count, and a phrase ends at any word tesseract
     wasn't sure of, so logo lettering and fine print drop out."""
-    if not image or not shutil.which("tesseract"):
+    if not image or not tools.which("tesseract"):
         return None
     src = image
     try:
@@ -2031,7 +2061,7 @@ def _tesseract_phrases(image):
     phrases = []
     for psm in ("11", "3"):
         try:
-            tsv = subprocess.run(["tesseract", src, "stdout", "--psm", psm, "tsv"],
+            tsv = subprocess.run([tools.which("tesseract"), src, "stdout", "--psm", psm, "tsv"],
                                  capture_output=True, text=True, encoding="utf-8", errors="replace",
                                  timeout=60, **NO_CONSOLE).stdout
         except Exception:
@@ -3654,7 +3684,7 @@ def image_converter():
         import PIL  # noqa: F401
         return "Pillow"
     except ImportError:
-        return "ffmpeg" if shutil.which("ffmpeg") else None
+        return "ffmpeg" if tools.which("ffmpeg") else None
 
 
 def to_png(src, dest, box):
@@ -3673,7 +3703,7 @@ def to_png(src, dest, box):
             return dest
         except Exception:
             return None
-    ff = shutil.which("ffmpeg")
+    ff = tools.which("ffmpeg")
     if ff:
         subprocess.run([ff, "-loglevel", "error", "-y", "-i", src, "-vf", "scale=%d:%d:force_original_aspect_ratio=decrease" % (bw, bh),
                         "-frames:v", "1", dest], capture_output=True, timeout=30, **NO_CONSOLE)
@@ -6994,8 +7024,7 @@ def status(rep, key):
         return "unidentified; the cover art likely shows the title (save it with --out DIR)" if not rep["cover"].get("saved") \
             else "unidentified; cover art saved - the title is likely on it (%s)" % rep["cover"]["image"]
     if rep.get("cover") and rep["cover"].get("found") and not rep["cover"].get("image"):
-        return ("unidentified; the disc carries its cover art, but reading it needs ffmpeg "
-                "(and tesseract for the title on it)")
+        return "unidentified; the disc carries its cover art, but it couldn't be decoded"
     if (rep.get("label_parsed") or {}).get("placeholder"):
         return ("unidentified; the label %s is the authoring tool's default, not a title: enter it yourself"
                 % rep["label_parsed"]["raw"])

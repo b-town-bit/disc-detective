@@ -1,4 +1,6 @@
 """Volume labels: season / disc / years / noise words / run-together words."""
+import os
+
 import pytest
 
 from disc_detective.core import parse_label
@@ -88,11 +90,30 @@ def test_disc_metadata_names_lose_the_format():
     assert meta_title("The Dark Knight") == "The Dark Knight"
 
 
-def test_cover_art_needs_ffmpeg_to_read():
+def test_cover_art_that_wont_decode_says_so():
     from disc_detective.core import status
     rep = {"label_parsed": parse_label("DVD_VIDEO"), "candidates": [], "search_queries": [], "discdb": {"hit": None},
-           "cover": {"found": "JACKET_P/J00___5L.MP2", "image": None, "note": "install ffmpeg to decode"}}
-    assert "needs ffmpeg" in status(rep, None)
+           "cover": {"found": "JACKET_P/J00___5L.MP2", "image": None, "note": "couldn't decode it"}}
+    assert "couldn't be decoded" in status(rep, None)
+
+
+def test_a_dvds_cover_still_is_read_without_ffmpeg(tmp_path, monkeypatch):
+    """A DVD's JACKET_P still (an MPEG-2 frame in a program stream, named .MP2): decoded by OpenCV, which comes
+    with RapidOCR; no ffmpeg installed."""
+    pytest.importorskip("cv2")
+    import shutil
+    from disc_detective import core, tools
+    monkeypatch.setattr(tools, "which", lambda name: None)
+    jp = tmp_path / "DVD" / "JACKET_P"
+    jp.mkdir(parents=True)
+    shutil.copy(os.path.join(os.path.dirname(__file__), "data", "jacket_still.mp2"), jp / "J00___5L.MP2")
+    got = core.extract_cover(str(tmp_path / "DVD"), "DVD", str(tmp_path / "out"))
+    assert got["image"] and got["note"] == ""
+    from PIL import Image
+    with Image.open(got["image"]) as im:
+        assert im.size == (720, 480)
+        r, g, b = im.convert("RGB").getpixel((360, 240))[:3]
+        assert r > 150 and g < 80 and b < 80                # (the still's red)
 
 
 def test_cover_text_is_read_as_phrases(tmp_path):

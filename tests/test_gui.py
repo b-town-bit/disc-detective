@@ -2820,3 +2820,166 @@ def test_icons_belong_to_the_tk_that_made_them():
             tk.Label(second, image=b)            # (a picture of this Tk's)
     finally:
         second.destroy()
+
+
+def test_settings_lists_the_programs_and_installs_one_after_asking(gui, monkeypatch):
+    """Settings > Integrations > Programs: each tool where it was found, or what it's for and Install. Install asks
+    first (its publisher and licence named): no, nothing runs; yes, its installer (winget's) runs, and then it's
+    found. No winget: its download page instead."""
+    root, made, pump = gui
+    from disc_detective import tools
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    have = {"makemkv": "C:/MakeMKV/makemkvcon64.exe", "vlc": None, "ffmpeg": None, "tesseract": None}
+    monkeypatch.setattr(tools, "find", lambda key, settings=None: have[key])
+    monkeypatch.setattr(tools, "winget", lambda: "winget.exe")
+    ran = []
+
+    def install(key, log=None):
+        ran.append(key)
+        have[key] = "C:/%s/%s.exe" % (key, key)
+        return True, "Successfully installed"
+    monkeypatch.setattr(tools, "install", install)
+    d = dd_app.SettingsDialog(root, app)
+    note, btn = d.tool_rows["makemkv"][:2]
+    assert d.tool_paths["makemkv"] == ("✓ C:/MakeMKV/makemkvcon64.exe", "C:/MakeMKV/makemkvcon64.exe")
+    assert note.cget("text").startswith("✓ C:/") and not btn.winfo_manager()
+    note, btn = d.tool_rows["vlc"][:2]
+    assert "Not installed: plays DVD menus" in note.cget("text") and btn.cget("text") == "Install…"
+    assert d.all_btn.winfo_manager()                                     # (two missing: all of them, after asking)
+    assert "tesseract" not in d.tool_rows and d.missing_tools() == ["vlc", "ffmpeg"]   # (not listed: used if there)
+    asked = []
+    monkeypatch.setattr(dd_app.messagebox, "askyesno", lambda title, text, **k: asked.append(text) or False)
+    btn.invoke()
+    assert asked and "VLC, from VideoLAN (GPL-2.0)" in asked[0] and not ran
+    monkeypatch.setattr(dd_app.messagebox, "askyesno", lambda title, text, **k: True)
+    btn.invoke()
+    assert pump(lambda: ran == ["vlc"] and d.installing is None, 5)
+    assert d.tool_paths["vlc"][1] == "C:/vlc/vlc.exe"
+    monkeypatch.setattr(tools, "winget", lambda: None)                  # (no winget: the download page)
+    opened = []
+    monkeypatch.setattr(dd_app.webbrowser, "open", opened.append)
+    d.refresh_tools()
+    assert d.tool_rows["ffmpeg"][1].cget("text") == "Download page" and not d.all_btn.winfo_manager()
+    d.tool_rows["ffmpeg"][1].invoke()
+    assert opened == [tools.BY_KEY["ffmpeg"]["page"]] and ran == ["vlc"]
+    d.close()
+
+
+def test_an_install_that_stopped_isnt_reported_installed(gui, monkeypatch):
+    """The installer stopped partway (Tesseract's, exit code 2) and left its program behind: the installer's word
+    counts, not the file being there. Not installed, saying why, Install offered again."""
+    root, made, pump = gui
+    from disc_detective import tools
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    have = {"makemkv": "C:/MakeMKV/makemkvcon64.exe", "vlc": "C:/VLC", "ffmpeg": None, "tesseract": None}
+    monkeypatch.setattr(tools, "find", lambda key, settings=None: have[key])
+    monkeypatch.setattr(tools, "winget", lambda: "winget.exe")
+    monkeypatch.setattr(tools, "found_broken", lambda key: None)
+
+    def install(key, log=None):
+        have[key] = "C:/ffmpeg/bin/ffmpeg.exe"                         # (left behind: there, though broken)
+        return False, "the installer stopped before it finished (exit code 2)"
+    monkeypatch.setattr(tools, "install", install)
+    monkeypatch.setattr(dd_app.messagebox, "askyesno", lambda *a, **k: True)
+    d = dd_app.SettingsDialog(root, app)
+    d.tool_rows["ffmpeg"][1].invoke()
+    assert pump(lambda: d.installing is None and "ffmpeg" in d.failed, 5)
+    note, btn = d.tool_rows["ffmpeg"][:2]
+    assert note.cget("text") == "Not installed: The installer stopped before it finished (exit code 2)."
+    assert btn.winfo_manager() and btn.cget("text") == "Install…"
+    d.close()
+
+
+def test_a_program_of_your_own_is_set_with_find_and_cleared_with_automatic(gui, monkeypatch, tmp_path):
+    """Programs, each one's row: Find… sets a copy of your own (saved, used from then on: FFmpeg's, wherever it's
+    run); one that isn't there says so; Automatic goes back to the one found, or Install."""
+    root, made, pump = gui
+    from disc_detective import tools
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    monkeypatch.setattr(tools, "winget", lambda: "winget.exe")
+    monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tools, "runs", lambda name, path: True)
+    mine = tmp_path / "ffmpeg.exe"
+    mine.write_bytes(b"")
+    d = dd_app.SettingsDialog(root, app)
+    note, btn, pick, auto = d.tool_rows["ffmpeg"]
+    assert note.cget("text").startswith("Not installed") and btn.winfo_manager() and not auto.winfo_manager()
+    monkeypatch.setattr(dd_app.filedialog, "askopenfilename", lambda **k: str(mine))
+    pick.invoke()
+    assert d.tool_paths["ffmpeg"] == ("✓ %s" % mine, "Set by you: %s" % mine)
+    assert not btn.winfo_manager() and auto.winfo_manager()
+    assert dd_app.load_settings()["ffmpeg"] == str(mine) and tools.which("ffmpeg") == str(mine)
+    mine.unlink()
+    d.refresh_tools()
+    assert note.cget("text") == "Not found where you set it: %s" % mine and "ffmpeg" not in d.tool_paths
+    auto.invoke()
+    assert note.cget("text").startswith("Not installed") and btn.winfo_manager() and not auto.winfo_manager()
+    assert dd_app.load_settings()["ffmpeg"] == "" and tools.which("ffmpeg") is None
+    d.close()
+
+
+def test_a_long_program_path_is_one_line_its_whole_on_a_click(gui, monkeypatch):
+    """A path too long for its row: ✓ and one line, ending in an ellipsis; hovering shows it all."""
+    root, made, pump = gui
+    from disc_detective import tools
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    long = "C:/Users/someone/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-9.0.2-full_build/bin/ffmpeg.exe"
+    have = {"makemkv": "C:/MakeMKV/makemkvcon64.exe", "vlc": "C:/VLC", "ffmpeg": long, "tesseract": "C:/t.exe"}
+    monkeypatch.setattr(tools, "find", lambda key, settings=None: have[key])
+    monkeypatch.setattr(tools, "winget", lambda: "winget.exe")
+    d = dd_app.SettingsDialog(root, app)
+    note = d.tool_rows["ffmpeg"][0]
+    assert pump(lambda: str(note.cget("text")).endswith("…"), 3)
+    assert str(note.cget("text")).startswith("✓ C:/Users/") and "\n" not in str(note.cget("text"))
+    assert d.tool_rows["makemkv"][0].cget("text") == "✓ C:/MakeMKV/makemkvcon64.exe"     # (short: whole)
+    d.tool_tips["ffmpeg"].show()                 # (the pointer resting on it)
+    tip = d.tool_tips["ffmpeg"].tip
+    assert tip is not None
+    labels = [w for w in tip.winfo_children()[0].winfo_children()]
+    assert labels[0].cget("text") == long
+    d.close()
+
+
+def test_a_tool_whose_files_the_app_has_open_is_installed_after_a_restart(gui, monkeypatch):
+    """Install, the app having the tool's files open (VLC's library, after Detect titles): its installer couldn't
+    replace them, so a restart is offered. Yes: the install is kept for the next start, the app started again,
+    this one closed. That next start waits for this one to close, then installs it, not asking again."""
+    root, made, pump = gui
+    from disc_detective import tools
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    have = {"makemkv": "C:/MakeMKV/makemkvcon64.exe", "vlc": "C:/VLC", "ffmpeg": "C:/ffmpeg.exe", "tesseract": "C:/t.exe"}
+    monkeypatch.setattr(tools, "find", lambda key, settings=None: have[key])
+    monkeypatch.setattr(tools, "winget", lambda: "winget.exe")
+    monkeypatch.setattr(tools, "folders_of", lambda key, settings=None: ["C:/VLC"] if key == "vlc" else [])
+    monkeypatch.setattr(tools, "loaded_from", lambda folder: ["C:/VLC/libvlc.dll"] if folder == "C:/VLC" else [])
+    started, ran = [], []
+    monkeypatch.setattr(dd_app.subprocess, "Popen", lambda cmd, **kw: started.append(cmd))
+    monkeypatch.setattr(tools, "install", lambda key, log=None: ran.append(key) or (True, "Successfully installed"))
+    closing = []
+    real_after = app.root.after
+    monkeypatch.setattr(app.root, "after", lambda ms, fn=None, *a: closing.append(fn) if fn == app.root.destroy else None)
+    asked = []
+    monkeypatch.setattr(dd_app.messagebox, "askyesno", lambda title, text, **k: asked.append(text) or True)
+    d = dd_app.SettingsDialog(root, app)
+    d.get_tools(["vlc"])
+    assert len(asked) == 2 and "VLC's files open" in asked[1]           # (agreed to, then the restart offered)
+    assert started == [dd_app.relaunch_command()] and closing == [app.root.destroy] and not ran
+    job = dd_app.load_settings()["install_on_start"]
+    assert job == {"tools": ["vlc"], "after": os.getpid()}
+    d.close()
+    # (the next start: the settings as saved; its own window, so the polling the after-patch held back runs)
+    monkeypatch.setattr(app.root, "after", real_after)
+    alive = {"old": True}
+    monkeypatch.setattr(tools, "still_running", lambda pid: alive["old"])
+    app.settings = dd_app.load_settings()
+    app.resume_installs()
+    pump(lambda: False, 0.6)
+    assert not ran                              # (the old one still closing: waited for)
+    alive["old"] = False
+    assert pump(lambda: ran == ["vlc"], 5)
+    assert "install_on_start" not in dd_app.load_settings()

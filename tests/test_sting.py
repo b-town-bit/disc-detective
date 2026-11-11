@@ -252,15 +252,26 @@ def test_no_decryption_file_falls_through_and_leaves_nothing(tmp_path, monkeypat
     assert not (tmp_path / "sting").exists()
 
 
-def test_makemkvs_messages_are_logged_as_its_words(monkeypatch, caplog):
+def test_makemkvs_messages_are_logged_as_its_words(monkeypatch):
     """The log has what MakeMKV said ("1 titles saved"), not its robot-mode line with its codes and %1s."""
     import logging
     lines = ['MSG:1005,0,1,"MakeMKV v1.18.4 win(x64-release) started","%1 started","MakeMKV v1.18.4 win(x64-release)"\n',
              'MSG:5005,128,1,"1 titles saved","%1 titles saved","1"\n']
     proc = types.SimpleNamespace(stdout=iter(lines), wait=lambda: 0, returncode=0)
     monkeypatch.setattr(mk.subprocess, "Popen", lambda *a, **k: proc)
-    monkeypatch.setattr(mk, "logger", logging.getLogger("disc_detective.test_makemkv"))
-    with caplog.at_level(logging.INFO, logger="disc_detective.test_makemkv"):
+    # (a logger of its own, its records kept here: not through the root logger, which the app's own
+    # logging set up by an earlier test may keep them from)
+    said = []
+    log = logging.getLogger("test_makemkv_words")
+    log.setLevel(logging.INFO)
+    log.propagate = False
+    keep = logging.Handler()
+    keep.emit = lambda record: said.append(record.getMessage())
+    log.addHandler(keep)
+    monkeypatch.setattr(mk, "logger", log)
+    try:
         assert mk.Rip("makemkvcon").title("dev:E:", 2, "work")
-    said = [r.getMessage() for r in caplog.records if "makemkv:" in r.getMessage()]
+    finally:
+        log.removeHandler(keep)
+    said = [m for m in said if "makemkv:" in m]
     assert said == ["  makemkv: MakeMKV v1.18.4 win(x64-release) started", "  makemkv: 1 titles saved"]
