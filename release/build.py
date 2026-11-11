@@ -197,14 +197,32 @@ def main(argv):
         print("self-check ...")
         self_check(exe)
     zip_path = os.path.join(DIST, "Disc-Detective-%s-%s.zip" % (VERSION, system()))
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-        base = os.path.dirname(top)
-        for folder, _, files in os.walk(top):
-            for f in files:
-                p = os.path.join(folder, f)
-                z.write(p, os.path.relpath(p, base))
-    size = sum(os.path.getsize(os.path.join(f, n)) for f, _, ns in os.walk(top) for n in ns)
+    size = zip_folder(top, zip_path)
     print("%s: %.0f MB unzipped, %.0f MB zipped" % (zip_path, size / 1e6, os.path.getsize(zip_path) / 1e6))
+
+
+def zip_folder(top, zip_path):
+    """Zip the built folder (or .app) with its name at the top. Symbolic links go in as links, as unzip and macOS's
+    Archive Utility restore them: on Linux and macOS PyInstaller links each library to one copy, and followed, every
+    one would be stored twice (and a linked folder, which os.walk lists but doesn't enter, left out). The size of
+    what it holds, links counted as links, is returned."""
+    base, size = os.path.dirname(top), 0
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for folder, dirs, files in os.walk(top):
+            for f in sorted(files) + sorted(d for d in dirs if os.path.islink(os.path.join(folder, d))):
+                p = os.path.join(folder, f)
+                name = os.path.relpath(p, base).replace(os.sep, "/")
+                if os.path.islink(p):
+                    info = zipfile.ZipInfo(name)
+                    info.create_system = 3                  # Unix, so the mode bits below are read
+                    info.external_attr = 0o120777 << 16     # a symbolic link; its target is the entry's data
+                    target = os.readlink(p)
+                    z.writestr(info, target)
+                    size += len(target)
+                else:
+                    z.write(p, name)
+                    size += os.path.getsize(p)
+    return size
 
 
 if __name__ == "__main__":
