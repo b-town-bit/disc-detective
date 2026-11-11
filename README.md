@@ -34,6 +34,11 @@ The app then shows the poster or box art so you can confirm at a glance.
 
 ## Install
 
+**Windows** is fully supported. **Linux** and **macOS** are previews: the tests run on both,
+but nobody has tried them with a real disc drive, MakeMKV or VLC yet. If you use one of them,
+[bug reports](../../issues/new/choose) help a lot, and so would someone to look after it (see
+[Contributing](CONTRIBUTING.md#looking-after-linux-or-macos)).
+
 Needs Python 3.9 to 3.14 with Tkinter (included in the python.org installer for Windows
 and macOS). Python 3.15 isn't supported yet: some of what it uses doesn't run on it.
 
@@ -41,16 +46,21 @@ and macOS). Python 3.15 isn't supported yet: some of what it uses doesn't run on
 pip install "git+https://github.com/b-town-bit/disc-detective"
 ```
 
-That brings along what it depends on: **Pillow** (for posters and box art) and **RapidOCR**
-(for reading disc menus), about 250 MB in all. RapidOCR fetches one of its models the first
+That brings along what it depends on: **Pillow** (for posters and box art), **RapidOCR**
+(for reading disc menus) and **hdmv-menus** (for reading a Blu-ray's menus from its own files),
+about 250 MB in all. RapidOCR fetches one of its models the first
 time it reads a menu, so have a connection for that. To run from a downloaded copy of the
-repo instead, `pip install pillow rapidocr onnxruntime` once, then double-click
+repo instead, `pip install pillow rapidocr onnxruntime hdmv-menus` once, then double-click
 **Disc Detective.pyw** (Windows) or run `python -m disc_detective`.
 
-Optional: **MakeMKV** for ripping,
-**tesseract** for reading text off cover art, a free **TMDB** key (in Settings) for
-extra posters. Where RapidOCR can't make out a DVD's menu buttons, Windows' own OCR, then
-tesseract, have a go, if installed:
+Optional programs: **MakeMKV** for ripping (and reading a Blu-ray's menus), **VLC** for
+Detect titles on DVDs, and **FFmpeg** for previewing a Blu-ray's titles. Settings >
+Integrations > Programs shows which you have. On Windows, Install there runs each one's own
+installer from its publisher, through winget, once you agree; elsewhere it gives the download
+page. Find… points it at a copy of your own (a portable one, say); Automatic goes back to the
+one it found. A free **TMDB** key (also in Settings) adds extra posters. Where RapidOCR can't
+make out a DVD's menu buttons or cover art, Windows' own OCR has a go, then Tesseract if you
+already have it installed:
 `pip install "disc-detective[windows-ocr] @ git+https://github.com/b-town-bit/disc-detective"`
 (or, from a copy of the repo, `pip install -e ".[windows-ocr]"`).
 
@@ -105,6 +115,9 @@ workflow once from the Actions tab after the first push.
 Disc data from [TheDiscDB](https://thediscdb.com), title data from IMDb's
 non-commercial datasets, episode lists from [TVmaze](https://www.tvmaze.com)
 (CC BY-SA), optional posters from TMDB. See [THIRD_PARTY.md](THIRD_PARTY.md).
+
+Information courtesy of IMDb (https://www.imdb.com). Used with permission.
+This product uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB.
 
 Copyright (c) 2026 Brady Field. Source-available under the
 [PolyForm Noncommercial License 1.0.0](LICENSE): free to use, change and share for

@@ -50,6 +50,63 @@ def test_no_numbers_takes_the_lines_around_a_marker_and_no_marker_says_no_page()
     assert bdcrawl.page_rows([line("EMERGENCY EXIT ONLY", 300, 200)] + BAR_LINES) == []
 
 
+def test_a_bars_items_touching_side_by_side_are_two_and_a_pages_lines_above_it_none():
+    """Order of the Phoenix's ribbons: Languages and Scene Selections overlap by a few pixels; the
+    Languages page's last lines sit just above the bar."""
+    bar = [("SPECIAL FEATURES", (415, 407, 558, 466), 0.9), ("LANGUAGES", (202, 416, 286, 452), 0.9),
+           ("SCENE SELECTIONS", (281, 424, 412, 458), 0.9)]
+    assert bdcrawl.bar_places(bar) == (None, 2)
+    assert bdcrawl.bar_places(bar + [("Portugues", (455, 391, 535, 411), 0.9), ("Nederlands", (326, 393, 412, 410), 0.9)]) == (None, 2)
+    assert bdcrawl.bar_places(BAR_LINES) == (1, 2)                       # (Chuck's, as it was)
+
+
+def lit_page(lit, rows):
+    """A page of rows of words over grey, row `lit` (or rows) drawn yellow, the rest cream."""
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (720, 480), (128, 128, 128))
+    d = ImageDraw.Draw(img)
+    for i, (_, box) in enumerate(rows):
+        d.rectangle([box[0] + 2, box[1] + 3, box[2] - 2, box[3] - 3], fill=(230, 200, 40) if i in lit else (200, 190, 150))
+    return img
+
+
+# Order of the Phoenix's list: rows 13 pixels apart, and a button of two lines
+PHOENIX = [("Play All", (85, 177, 136, 194)), ("Dementors at Little Whinging", (85, 190, 248, 207)),
+           ("Grimmauld Place", (87, 206, 180, 220)), ("Harry Potter:", (492, 108, 582, 128)), ("The Magic of Editing", (494, 123, 625, 140))]
+PHOENIX_LINES = [(t, b, 0.9) for t, b in PHOENIX]
+
+
+def test_a_highlight_with_no_marker_is_told_by_which_way_each_line_changed():
+    before, after = lit_page({0}, PHOENIX), lit_page({1}, PHOENIX)
+    groups = bdcrawl.lit_groups(bdcrawl.changed_lines(PHOENIX_LINES, before, after))
+    assert sorted(g[0] for g in groups) == ["Dementors at Little Whinging", "Play All"]      # (13 pixels apart: two buttons)
+    groups = bdcrawl.lit_groups(bdcrawl.changed_lines(PHOENIX_LINES, lit_page({2}, PHOENIX), lit_page({3, 4}, PHOENIX)))
+    assert sorted(g[0] for g in groups) == ["Grimmauld Place", "Harry Potter: The Magic of Editing"]
+
+
+class LitVlc:
+    """A pop-up page with no marker in its words: its highlight a colour, moving down and up its list."""
+    def __init__(self):
+        self.at, self.pressed = 0, []
+
+    def press(self, key):
+        self.pressed.append(key)
+        self.at = max(0, min(2, self.at + {"down": 1, "up": -1}.get(key, 0)))
+
+    def frame(self):
+        return lit_page({self.at}, PHOENIX[:3])
+
+
+def test_where_a_highlight_is_is_found_by_an_arrow_there_and_back():
+    v = LitVlc()
+    v.at = 1
+    c = bdcrawl.Crawler(v, [], [], ".", log=lambda s: None, sleep=lambda s: None, clock=iter(range(0, 10 ** 6)).__next__)
+    c.lit = PHOENIX_LINES[:3]
+    assert c.lit_mark()[0] == "Dementors at Little Whinging" and v.at == 1 and v.pressed == ["down", "up"]
+    assert c.step("down", PHOENIX[1][1])[0] == "Grimmauld Place"
+    assert c.step("down", PHOENIX[2][1]) is None                         # (at the end: it stays)
+
+
 def test_arrows_go_along_a_row_or_between_rows():
     assert bdcrawl.key_towards((72, 282, 0, 0), (376, 285, 0, 0)) == "right"
     assert bdcrawl.key_towards((376, 282, 0, 0), (72, 282, 0, 0)) == "left"
@@ -1117,8 +1174,9 @@ def test_a_title_left_out_of_the_menus_reads_as_other_with_nothing_to_confirm():
 class Wanting:
     """The app's say on when to ask a disc's menus, without its window."""
     from disc_detective.app import App as _App
-    stakeout_in_scan, menus_wanted, scan_menus_mode, more_films = (
-        _App.stakeout_in_scan, _App.menus_wanted, _App.scan_menus_mode, staticmethod(_App.more_films))
+    stakeout_in_scan, menus_wanted, scan_menus_mode, more_films, reads_without_vlc = (
+        _App.stakeout_in_scan, _App.menus_wanted, _App.scan_menus_mode, staticmethod(_App.more_films),
+        staticmethod(_App.reads_without_vlc))
 
     def __init__(self, mode, on=True):
         self.settings = {"menu_detect": on, "detect_in_scan": mode}
@@ -1132,8 +1190,10 @@ def test_the_scan_only_crawls_a_dvd_as_the_setting_says():
     assert Wanting("unknown").stakeout_in_scan(dict(fresh, format="DVD"), "vlc") and not Wanting("unknown").stakeout_in_scan(fresh, "vlc")
 
 
-def test_during_a_scan_goes_by_each_formats_own_switch():
+def test_during_a_scan_goes_by_each_formats_own_switch(monkeypatch):
     """During a scan only runs ahead what Detect titles would, on any Blu-ray, film or show, of any style."""
+    from disc_detective import bdhdmv
+    monkeypatch.setattr(bdhdmv, "available", lambda: False)
     disc = {"path": "E:\\", "status": "unidentified", "candidates": []}
 
     def wanting(mode, dvd=False, blu=False):
@@ -1151,6 +1211,14 @@ def test_during_a_scan_goes_by_each_formats_own_switch():
     assert not wanting("unknown", blu=True).stakeout_in_scan(dvd, "vlc")            # (nor the Blu-ray switch of a DVD)
     known = dict(disc, format="Blu-ray", kind="tv", personal_hit=True, labels={"a": {}}, match={"season": 1}, status="identified (your case files)")
     assert not wanting("unknown", blu=True).stakeout_in_scan(known, "vlc")          # (its titles known: no call to)
+    # no VLC, but a Blu-ray's menus read from its files (the hdmv-menus library, MakeMKV's own to open it)
+    monkeypatch.setattr(bdhdmv, "available", lambda: True)
+    monkeypatch.setattr(bdhdmv, "aacs_library", lambda: "libmmbd64.dll")
+    film = dict(disc, format="Blu-ray", kind="movie")
+    assert wanting("unknown", blu=True).stakeout_in_scan(film, None)
+    assert not wanting("unknown", dvd=True).stakeout_in_scan(dict(disc, format="DVD", kind="movie"), None)   # (a DVD: VLC's)
+    monkeypatch.setattr(bdhdmv, "aacs_library", lambda: None)
+    assert not wanting("unknown", blu=True).stakeout_in_scan(film, None)            # (nothing to open it with)
 
 
 def test_a_blu_rays_crawl_in_a_scan_feeds_the_search(monkeypatch):
@@ -1402,3 +1470,35 @@ def test_edit_titles_goes_by_type_then_menu_page_then_episode():
     plain = {"Title 10": word("Extra"), "Title 2": word("Extra")}
     assert sorted(plain, key=lambda t: app.found_order(t, plain[t], {})) == ["Title 2", "Title 10"]
     assert app.found_order("b", word("Episode"), {}, 1) < app.found_order("a", word("Episode"), {}, 2)
+
+
+def test_a_reading_called_off_stops_at_its_next_step_and_doesnt_fall_back(monkeypatch):
+    """Detect titles called off (App.stop_detect): the crawl's next step (its progress, its log) raises
+    menus.Cancelled, on its own thread, whichever crawl it is; a Blu-ray's read from its files doesn't then
+    fall back to VLC's crawl."""
+    import threading
+    from disc_detective import bdhdmv
+    from disc_detective.app import App
+    a = App.__new__(App)
+    a.detect_stop, a.detecting = threading.Event(), True
+    a.post = lambda *args: None
+    a.tell = lambda *args: None
+    a._menu_files = lambda rep: None
+    a.settings = {}
+    a.scan_args = lambda: type("A", (), {"imdb_dir": None})()
+    monkeypatch.setattr(bdmenus, "menu_style", lambda root: {"menu": "HDMV"})
+    monkeypatch.setattr(bdmenus, "crawlable", lambda style: True)
+    monkeypatch.setattr(menus, "rapid_missing", lambda: False)
+    monkeypatch.setattr(bdhdmv, "available", lambda: True)
+    monkeypatch.setattr(bdcrawl, "crawl", lambda *args: pytest.fail("no fallback to VLC once called off"))
+
+    def reading(root, titles, out, log, progress=None, **k):
+        progress("setup")
+        a.detect_stop.set()                     # (called off while it opens the disc)
+        progress("start")
+        pytest.fail("went on after being called off")
+    monkeypatch.setattr(bdhdmv, "read", reading)
+    rep = {"format": "Blu-ray", "path": "E:\\", "content_hash": "AB", "titles": []}
+    with pytest.raises(menus.Cancelled):
+        a._stakeout(rep, "vlc")
+    assert not issubclass(menus.Cancelled, menus.Lost)

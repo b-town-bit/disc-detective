@@ -622,6 +622,15 @@ def test_the_copy_the_menus_play_is_the_original():
     for played in ({"Title 1", "Title 4"}, set(), {"Title 1"}):
         r = twins()
         assert core.prefer_played(r, played) == {} and r["titles"][0]["role"] == "feature"
+    # copies the menus all play: the one they call the feature is the film's (Order of the Phoenix's
+    # Play Movie, 00060; its Play Movie with Focus Points 00059, read first; the scan's pick, 00000)
+    r = {"titles": [{"id": "00000.mpls", "role": "feature", "note": ""},
+                    {"id": "00059.mpls", "role": "duplicate", "note": "same video as 00000.mpls"},
+                    {"id": "00060.mpls", "role": "duplicate", "note": "same video as 00000.mpls"}]}
+    core.prefer_played(r, {"00059.mpls", "00060.mpls"}, feature="00060.mpls")
+    assert [(t["id"], t["role"], t["note"]) for t in r["titles"]] == [
+        ("00000.mpls", "duplicate", "same video as 00060.mpls"), ("00059.mpls", "duplicate", "same video as 00060.mpls"),
+        ("00060.mpls", "feature", "")]
 
 
 def test_the_discs_program_on_the_scan():
@@ -762,3 +771,21 @@ def test_pieces_of_a_seamless_film_are_not_extras():
     two = [{"id": "1", "role": "feature", "duration": 6000, "clip_list": "00001,00002"},
            {"id": "2", "role": "extra", "duration": 600, "clip_list": "00002"}]
     assert core.mark_film_pieces(two) == 0 and two[1]["role"] == "extra"
+
+
+def test_a_blu_rays_episode_order_by_its_play_all():
+    """play_titles_order: the episodes' order by a Play All, by playlist: one the disc's programs play in a
+    row (Chuck's PLAY ALL plays the first episode's own playlist and goes on: hdmv-menus' "then"), or a
+    Play All playlist of the episodes' clips (its "parts", in its order); a Play All in a run is its parts.
+    Too short to be episodes, or fewer than two: nothing to go by."""
+    ep = lambda n, d=2580: {"id": "%05d.mpls" % n, "duration": d, "role": "episode"}
+    titles = [ep(71), ep(72), ep(73), ep(201, 94), {"id": "00120.mpls", "duration": 4708, "role": "loop"}]
+    got = core.play_titles_order(titles, [["00072.mpls"], ["00071.mpls", "00072.mpls", "00073.mpls", "00120.mpls"]])
+    # (the menu's loop it goes back to no episode: the scan says it's a loop)
+    assert got == {"order": ["00071.mpls", "00072.mpls", "00073.mpls"], "seconds": [2580, 2580, 2580], "twins": {}}
+    # (a Play All playlist of its own, its parts in its order)
+    titles = [ep(1), ep(2), ep(3), {"id": "00009.mpls", "duration": 7740, "role": "play-all",
+                                    "parts": ["00002.mpls", "00001.mpls", "00003.mpls"]}]
+    assert core.play_titles_order(titles)["order"] == ["00002.mpls", "00001.mpls", "00003.mpls"]
+    assert core.play_titles_order(titles, [["00009.mpls"]])["order"] == ["00002.mpls", "00001.mpls", "00003.mpls"]
+    assert core.play_titles_order([ep(1), ep(201, 94)], [["00001.mpls", "00201.mpls"]]) is None

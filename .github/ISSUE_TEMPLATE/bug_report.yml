@@ -16,11 +16,19 @@ body:
       description: Shown in "About / credits", at the bottom of the main window.
     validations:
       required: true
-  - type: input
+  - type: dropdown
     id: system
     attributes:
       label: System
-      description: Windows, macOS or Linux, and its version. From source or a packaged release?
+      description: Linux and macOS are previews for now (see the README), so reports from them help most.
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+  - type: input
+    id: system-version
+    attributes:
+      label: System version, and how you installed it
+      description: For example "Windows 11 24H2, packaged release" or "Ubuntu 24.04, from source".
     validations:
       required: true
   - type: textarea

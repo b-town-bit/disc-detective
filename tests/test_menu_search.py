@@ -109,7 +109,7 @@ class FakeCrawler:
     """A player with no disc: goes where it's told, and says which pages it read and what it pressed."""
     made = []
 
-    def __init__(self, vlc_dir, mrl, pages, out_dir, log):
+    def __init__(self, vlc_dir, mrl, pages, out_dir, log, progress=None):
         self.pages, self.reading, self.learned, self.selects, self.intros = pages, {}, {}, {}, {}
         self.spent, self.placed, self.dark_ok, self.states, self.expect = {}, [0, 0, 0], None, [], 0
         self.menu_key = self.menu_skip = self.film_first = False
@@ -166,14 +166,8 @@ class FakeCrawler:
     def words(self, s):
         return self.first_words(s) if s in self.reading else {}
 
-    def heading(self, s):
-        return None
-
-    def mixed(self, s):
-        return False
-
-    def heading_line(self, s):
-        return None
+    def headings(self, s, buttons):
+        return "", None, False
 
 
 # Play and four ways on from the main menu. Bonus holds an extra, the film again, and two buttons the

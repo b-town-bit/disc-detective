@@ -47,7 +47,7 @@ class Rip:
 
     def __init__(self, exe, cancelled=lambda: False):
         self.exe, self.cancelled, self.proc = exe, cancelled, None
-        self.numbers_changed, self.problem = False, None
+        self.numbers_changed, self.problem, self.exit_code = False, None, None
 
     def stop(self):
         if self.proc:
@@ -69,7 +69,7 @@ class Rip:
         anything going wrong stays in problem."""
         cmd = [self.exe, *MAKEMKV_SWITCHES, *switches, "--progress=-same", "mkv", source, str(idx), work]
         logger.info("  run: %s", subprocess.list2cmdline(cmd))
-        self.numbers_changed, self.problem = False, None
+        self.numbers_changed, self.problem, self.exit_code = False, None, None
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                      encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
         saved, scanned = None, []
@@ -88,16 +88,18 @@ class Rip:
                 except ValueError:
                     pass
             elif line.startswith("MSG:"):
-                logger.info("  makemkv: %s", line.strip()[4:])     # MakeMKV's own messages, for the record
+                # MakeMKV's own messages, for the record: its words, not its robot-mode line ("5005,128,1,...,"%1 titles saved"")
+                logger.info("  makemkv: %s", makemkv_message(line) or line.strip()[4:])
                 count = makemkv_saved(line)
                 saved = saved if count is None else count
                 self.problem = makemkv_problem(line) or self.problem
         self.proc.wait()
         rc, self.proc = self.proc.returncode, None
+        self.exit_code = rc
         if self.numbers_changed:
             return False
-        if rc and not saved:
-            logger.warning("makemkvcon exited with code %s", rc)
+        if rc and not saved:             # (the rip says whether it's a problem: not for a disc taken out)
+            logger.info("makemkvcon exited with code %s", rc)
         return saved > 0 if saved is not None else rc == 0   # (no count, as in another language: its exit code)
 
     def sting(self, drive, ids, starting=lambda: None):

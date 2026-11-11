@@ -34,12 +34,18 @@ def isolated(tmp_path, monkeypatch):
     # left running, a real drive waits on them); a test wanting them sets its own
     from disc_detective import menus
     monkeypatch.setattr(core, "find_makemkvcon", lambda: None)
+    # (nor this machine's tools found beyond PATH: winget's links, Windows' saved PATH, Tesseract's Program
+    # Files folder)
+    from disc_detective import tools
+    monkeypatch.setattr(tools, "_winget_links", lambda: None)
+    monkeypatch.setattr(tools, "_saved_path", lambda: [])
+    monkeypatch.setattr(tools, "_CHOSEN", {})
+    monkeypatch.setattr(tools, "_USUAL", {})
     monkeypatch.setattr(menus, "VLC_DIRS", [])
     try:                                  # (nor its drives asked what they are)
         from disc_detective import app
         monkeypatch.setattr(app, "drive_models", lambda drives=None: {})
         monkeypatch.setattr(app, "optical_drives", lambda: [])      # (its drives aren't watched)
-        monkeypatch.setattr(app, "volume_serial", lambda d: None)
     except ImportError:                   # (no Tk here: no app tests either)
         pass
     monkeypatch.setattr(core, "log", lambda msg: None)

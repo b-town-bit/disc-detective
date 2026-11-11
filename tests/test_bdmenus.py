@@ -231,3 +231,29 @@ def test_a_blu_ray_playlist_watched_in_ffplay(monkeypatch, tmp_path):
     assert not bdmenus.watch_playlist("E:\\", "00745.mpls", None)  # (no ffplay: no link)
     (tmp_path / "ffplay.exe").write_bytes(b"")
     assert bdmenus.find_ffplay(str(tmp_path)) == ffplay
+
+
+def test_a_blu_ray_title_is_watched_in_ffplay_even_when_the_stakeout_saw_it(monkeypatch):
+    """Edit titles' play link on a Blu-ray: ffplay, by the playlist's own number, whenever it's installed, the
+    stakeout having seen it play or not; VLC (by its number for the title) only without ffplay. A DVD's: VLC."""
+    from disc_detective import app as dd_app, menus
+    played = []
+    monkeypatch.setattr(bdmenus, "watch_playlist", lambda src, tid, ff, **k: played.append(("ffplay", tid)) or True)
+    monkeypatch.setattr(bdmenus, "watch_vlc", lambda folder, src, n: played.append(("vlc", n)) or True)
+    monkeypatch.setattr(menus, "watch_title", lambda folder, src, n: played.append(("vlc dvd", n)) or True)
+
+    class Desk:
+        app = type("A", (), {"busy": False, "mkv_scan": None})()
+        rep = {"path": "E:\\", "titles": [], "menu_raw": {"watch": {"00010.mpls": {"title": 3}}}}
+        state, vlc, ffplay = {}, "C:/VLC", "C:/ffmpeg/ffplay.exe"
+        seen_playing = dd_app.TitlesDialog.seen_playing
+
+        def show_outcome(self, *a):
+            played.append(("said", a[0]))
+    desk = Desk()
+    dd_app.TitlesDialog.watch(desk, "00010.mpls")              # (seen by the stakeout: ffplay all the same)
+    dd_app.TitlesDialog.watch(desk, "00011.mpls")
+    desk.ffplay = None
+    dd_app.TitlesDialog.watch(desk, "00010.mpls")              # (no ffplay: VLC, by its number for it)
+    dd_app.TitlesDialog.watch(desk, "Title 4")
+    assert played == [("ffplay", "00010.mpls"), ("ffplay", "00011.mpls"), ("vlc", 3), ("vlc dvd", 4)]

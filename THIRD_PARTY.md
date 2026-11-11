@@ -23,6 +23,8 @@ used under IMDb's terms for personal and non-commercial use. Each user's copy is
 downloaded directly from IMDb to their own computer. This project never
 redistributes IMDb data, and IMDb images are not used.
 
+> Information courtesy of IMDb (https://www.imdb.com). Used with permission.
+
 ## TVmaze
 Episode lists and DVD episode orders from [TVmaze](https://www.tvmaze.com), used under
 [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Answers are fetched
@@ -38,10 +40,19 @@ Disc menus are read with [RapidOCR](https://github.com/RapidAI/RapidOCR) (Apache
 PaddleOCR's models on [ONNX Runtime](https://onnxruntime.ai) (MIT) and
 [OpenCV](https://opencv.org) (Apache-2.0), installed as dependencies.
 
+## hdmv-menus
+A Blu-ray's HDMV menus are read from its own files with [hdmv-menus](https://github.com/b-town-bit/hdmv-menus)
+(MIT), this project's own library, installed as a dependency. It ships no decryption: an encrypted disc is read
+through a libaacs-compatible library already on the computer (MakeMKV's).
+
 ## TMDB (optional)
 With a TMDB key, posters and a fallback search come from [TMDB](https://www.themoviedb.org).
 
-> This product uses the TMDB API but is not endorsed or certified by TMDB.
+> This product uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB.
+
+TMDB's terms also ask for its logo; the app's About box shows it. `disc_detective/art/tmdb.png` is
+TMDB's logo ("blue square 1" from [themoviedb.org/about/logos-attribution](https://www.themoviedb.org/about/logos-attribution)),
+rendered from their SVG, unchanged otherwise, and used only to credit TMDB.
 
 ## Gemini (optional)
 With a Gemini API key of your own, a disc nothing else identifies can have its own pictures
@@ -59,8 +70,8 @@ Google Fonts releases, loaded for the app only and never installed. Playfair Dis
 name is reserved by its license, so the modified cut is named "Detective Serif".
 
 ## Heroicons
-The small icons in `disc_detective/icons` are rendered from [Heroicons](https://heroicons.com)
-(MIT License, Copyright (c) Tailwind Labs, Inc.) by `tools/make_icons.py`.
+The small icons in `disc_detective/icons` are PNGs rendered from [Heroicons](https://heroicons.com)
+(MIT License, Copyright (c) Tailwind Labs, Inc.).
 
 ## MakeMKV (optional)
 Ripping uses [MakeMKV](https://www.makemkv.com)'s command-line tool, which you

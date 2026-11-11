@@ -552,7 +552,17 @@ def set_shield(c, verified):
 
 
 ICON_DIR = os.path.join(HERE, "icons")
-_ICONS = {}
+_ICONS = {}           # {Tk's id: (that Tk, {name: its PhotoImage})}: a picture belongs to the Tk that made it
+
+
+def _icons():
+    """The icon cache of the Tk in use: a new Tk (each test's, a second window's) gets its own pictures, as
+    one made by another Tk, gone, is no picture to it ("image pyimage2570 doesn't exist")."""
+    root = getattr(tk, "_default_root", None)
+    interp = root.tk if root is not None else None
+    if id(interp) not in _ICONS:
+        _ICONS[id(interp)] = (interp, {})       # (the Tk kept with it: its id never reused meanwhile)
+    return _ICONS[id(interp)][1]
 
 
 def _png_photo(path, size):
@@ -904,10 +914,27 @@ def watermark(name, height, bg=PARCHMENT):
         return None
 
 
+def logo(name, height):
+    """Another service's logo (art/<name>.png, drawn large) at `height` design pixels, brought to the screen's
+    size, its transparency kept; None without Pillow or the file. TMDB's, which its terms ask for."""
+    import base64
+    import io
+    try:
+        from PIL import Image
+        with Image.open(os.path.join(ART_DIR, name + ".png")) as im:
+            h = px(height)
+            im = im.convert("RGBA").resize((max(1, round(im.width * h / im.height)), h), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+        return tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
+    except Exception:
+        return None
+
+
 def icon(name):
     """A small icon (PNG; Tk 8.6 reads PNG and GIF itself): the @2x one on a high-DPI screen."""
-    if name in _ICONS:
-        return _ICONS[name]
+    if name in _icons():
+        return _icons()[name]
     img = None
     try:
         big = os.path.join(ICON_DIR, name + "@2x.png")
@@ -921,15 +948,15 @@ def icon(name):
                     break
     except (tk.TclError, ValueError):
         img = None
-    _ICONS[name] = img
+    _icons()[name] = img
     return img
 
 
 def _mark(kind):
     """A 12px tick, dot or blank for the themed menus (radio and check entries)."""
     key = "_mark_" + kind
-    if key in _ICONS:
-        return _ICONS[key]
+    if key in _icons():
+        return _icons()[key]
     import base64
     import io
     n = px(12)
@@ -951,7 +978,7 @@ def _mark(kind):
         ph = tk.PhotoImage(width=n, height=n)
         if kind != "blank":
             ph.put(BRASS_700, to=(4, 4, 8, 8))
-    _ICONS[key] = ph
+    _icons()[key] = ph
     return ph
 
 
@@ -1059,8 +1086,8 @@ def caret(colour=BRASS_700, width=0, dot=None, height=0, gap=0):
     fonts don't have). With `width`: an image that wide, chevron at the right and an optional
     `dot` light at the left, for a button whose text sits centred over it (compound="center")."""
     key = ("_caret", colour, width, dot, height, gap)
-    if key in _ICONS:
-        return _ICONS[key]
+    if key in _icons():
+        return _icons()[key]
     import base64
     import io
     scale = max(1.0, float(tk._default_root.tk.call("tk", "scaling")) / 1.3333) if tk._default_root else 1.0
@@ -1085,7 +1112,7 @@ def caret(colour=BRASS_700, width=0, dot=None, height=0, gap=0):
         ph = tk.PhotoImage(width=W, height=H)
         for i in range(ch):
             ph.put(colour, to=(W - cw - 1 + i, (H - ch) // 2 + i, W - 1 - i, (H - ch) // 2 + i + 1))
-    _ICONS[key] = ph
+    _icons()[key] = ph
     return ph
 
 
@@ -1099,8 +1126,8 @@ def check(colour=GREEN, size=12, gap=3):
     """A crisp drawn tick (Heroicons' check) to sit before a label's text (compound="left"); the
     ✓ character isn't in the bundled fonts, so Windows borrows a rough one from another font."""
     key = ("_check", colour, size, gap)
-    if key in _ICONS:
-        return _ICONS[key]
+    if key in _icons():
+        return _icons()[key]
     import base64
     import io
     scale = max(1.0, float(tk._default_root.tk.call("tk", "scaling")) / 1.3333) if tk._default_root else 1.0
@@ -1126,5 +1153,5 @@ def check(colour=GREEN, size=12, gap=3):
             ph.put(colour, to=(2 + i, s // 2 + i, 4 + i, s // 2 + i + 2))
         for i in range(6):
             ph.put(colour, to=(5 + i, s // 2 + 2 - i, 7 + i, s // 2 + 4 - i))
-    _ICONS[key] = ph
+    _icons()[key] = ph
     return ph

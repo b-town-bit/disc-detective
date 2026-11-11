@@ -67,6 +67,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 from . import i18n
+from . import tools
 from .i18n import N_
 
 VERSION = "0.3"
@@ -105,7 +106,10 @@ TMDB_API = "https://api.themoviedb.org/3"
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 GEMINI_MODELS = ("gemini-3.5-flash-lite", "gemini-3.8-flash")   # free-tier models; the first that answers
 TMDB_IMG = "https://image.tmdb.org/t/p/w342"
-TMDB_CREDIT = "This product uses the TMDB API but is not endorsed or certified by TMDB."
+# (TMDB's API terms, section 3, as of 2023-10-20: shown with its logo)
+TMDB_CREDIT = "This product uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB."
+# (IMDb's condition for using its non-commercial datasets: this statement, word for word)
+IMDB_CREDIT = "Information courtesy of IMDb (https://www.imdb.com). Used with permission."
 DISCDB_RAW = "https://raw.githubusercontent.com/TheDiscDb/data/main/data/"
 # A slim index of TheDiscDB (fingerprints, big-file sizes, title lists, IMDb ids; no images),
 # rebuilt weekly by a GitHub Action and published as a release asset. Override with env
@@ -210,6 +214,19 @@ def fingerprint(fmt, base):
         "files": [(f, st.st_size) for f, st in stats],
         "newest_mtime": max((st.st_mtime for _, st in stats), default=None),
     }
+
+
+def same_disc(root, content_hash):
+    """Whether the disc in root is still the one fingerprinted (its content_hash): the fingerprint
+    taken again (one folder's listing of sizes: quick), before anything else is done to it. A
+    case's folder rebuilt from its evidence (a sample): yes. No disc, or unreadable: no."""
+    if load_sample(root):
+        return True
+    try:
+        fmt, base = detect_format(root)
+        return bool(fmt) and fingerprint(fmt, base)["hash"] == content_hash
+    except OSError:
+        return False
 
 
 # --------------------------------------------------------------------------
@@ -1259,6 +1276,7 @@ def classify(titles, fmt):
         if pos == len(segs) and len(parts) >= 2:
             t["role"] = "play-all"
             t["note"] = "plays " + ", ".join(p["id"] for p in parts)
+            t["parts"] = [p["id"] for p in parts]        # (in its order: its episodes', play_titles_order)
             for k, part in enumerate(parts):
                 part["in_play_all"] = True
                 part.setdefault("play_order", (t["id"], k))
@@ -1866,8 +1884,40 @@ def mastering_date(fp):
     return d.strftime("%Y-%m") if 1996 <= d.year <= _dt.datetime.now().year else None
 
 
+def first_frame(src, dest):
+    """A video file's first picture saved as a PNG (a DVD's JACKET_P still: an MPEG program stream), or
+    None: by OpenCV (it comes with RapidOCR, its own copy of FFmpeg's decoder inside), else an ffmpeg
+    you installed."""
+    try:
+        import cv2
+    except ImportError:
+        cv2 = None
+    if cv2 is not None:
+        try:
+            cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+            try:
+                ok, frame = cap.read()
+            finally:
+                cap.release()
+            if ok and frame is not None:
+                done, png = cv2.imencode(".png", frame)     # (encoded, then written: any folder's name)
+                if done:
+                    with open(dest, "wb") as fh:
+                        fh.write(png.tobytes())
+                    return dest
+        except Exception as exc:
+            logger.debug("OpenCV couldn't read %s: %s", src, exc)
+    ff = tools.which("ffmpeg")
+    if ff:
+        subprocess.run([ff, "-loglevel", "error", "-y", "-f", "mpeg", "-i", src, "-frames:v", "1", dest],
+                       capture_output=True, timeout=30, **NO_CONSOLE)
+        if os.path.exists(dest) and os.path.getsize(dest):
+            return dest
+    return None
+
+
 def extract_cover(root, fmt, outdir, bd_meta=None):
-    """Save embedded cover art. DVD JACKET_P stills need ffmpeg (MPEG program stream)."""
+    """Save embedded cover art. A DVD's JACKET_P stills are MPEG program streams (first_frame)."""
     os.makedirs(outdir, exist_ok=True)
     if fmt == "DVD":
         jp = find_child(root, "JACKET_P")
@@ -1875,13 +1925,10 @@ def extract_cover(root, fmt, outdir, bd_meta=None):
             return None
         cands = sorted(glob.glob(os.path.join(jp, "*.MP2")) + glob.glob(os.path.join(jp, "*.mp2")),
                        key=os.path.getsize, reverse=True)
-        if not cands or not shutil.which("ffmpeg"):
-            return {"found": cands[0] if cands else None, "image": None,
-                    "note": "install ffmpeg to decode" if cands else ""}
-        out = os.path.join(outdir, "cover.png")
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "mpeg", "-i", cands[0],
-                        "-frames:v", "1", out], capture_output=True, timeout=30, **NO_CONSOLE)
-        return {"found": cands[0], "image": out if os.path.exists(out) else None, "note": ""}
+        if not cands:
+            return {"found": None, "image": None, "note": ""}
+        out = first_frame(cands[0], os.path.join(outdir, "cover.png"))
+        return {"found": cands[0], "image": out, "note": "" if out else "couldn't decode it"}
     thumbs = (bd_meta or {}).get("thumbnails") or []
     thumbs = [t for t in thumbs if os.path.isfile(t)]
     if not thumbs:
@@ -1998,7 +2045,7 @@ def _tesseract_phrases(image):
     """Tesseract's phrases off cover art. A DVD's menu still is small (720x480), so it is
     enlarged in grey first; only confident words count, and a phrase ends at any word tesseract
     wasn't sure of, so logo lettering and fine print drop out."""
-    if not image or not shutil.which("tesseract"):
+    if not image or not tools.which("tesseract"):
         return None
     src = image
     try:
@@ -2014,7 +2061,7 @@ def _tesseract_phrases(image):
     phrases = []
     for psm in ("11", "3"):
         try:
-            tsv = subprocess.run(["tesseract", src, "stdout", "--psm", psm, "tsv"],
+            tsv = subprocess.run([tools.which("tesseract"), src, "stdout", "--psm", psm, "tsv"],
                                  capture_output=True, text=True, encoding="utf-8", errors="replace",
                                  timeout=60, **NO_CONSOLE).stdout
         except Exception:
@@ -3637,7 +3684,7 @@ def image_converter():
         import PIL  # noqa: F401
         return "Pillow"
     except ImportError:
-        return "ffmpeg" if shutil.which("ffmpeg") else None
+        return "ffmpeg" if tools.which("ffmpeg") else None
 
 
 def to_png(src, dest, box):
@@ -3656,7 +3703,7 @@ def to_png(src, dest, box):
             return dest
         except Exception:
             return None
-    ff = shutil.which("ffmpeg")
+    ff = tools.which("ffmpeg")
     if ff:
         subprocess.run([ff, "-loglevel", "error", "-y", "-i", src, "-vf", "scale=%d:%d:force_original_aspect_ratio=decrease" % (bw, bh),
                         "-frames:v", "1", dest], capture_output=True, timeout=30, **NO_CONSOLE)
@@ -3699,7 +3746,75 @@ def _art_entry(art_dir, key, src, source, what, box, credit=None, ref=None):
     return entry
 
 
+# TMDB's terms: nothing of theirs is kept longer than six months. Their posters, the copies
+# made from them and their collection lookups (art folder), and their credits (library), go
+# once older, and are fetched again when next needed.
+TMDB_KEEP_DAYS = 182
+_tmdb_swept = set()
+
+
+def tmdb_art_expire(art_dir, now=None):
+    """Remove TMDB's files in art_dir older than TMDB_KEEP_DAYS, with what was made from them:
+    downloads (<imdb>_tmdb.jpg/.id/.coll, tmdb_*.jpg, tmdbcoll_*.jpg, a chooser's opt_*.jpg
+    from TMDB) and converted pictures whose sidecar names TMDB. Returns how many files went."""
+    cutoff = (now if now is not None else time.time()) - TMDB_KEEP_DAYS * 86400
+    try:
+        names = os.listdir(art_dir)
+    except OSError:
+        return 0
+    path = lambda n: os.path.join(art_dir, n)
+
+    def old(n):
+        try:
+            return os.path.getmtime(path(n)) < cutoff
+        except OSError:
+            return False
+    tmdb_made = []                                    # converted pictures from TMDB (sidecar stems)
+    for n in names:
+        if n.endswith(".json"):
+            try:
+                with open(path(n), encoding="utf-8") as fh:
+                    side = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if isinstance(side, dict) and side.get("source") == "TMDB":
+                tmdb_made.append(n[:-5])
+    gone, dropped = 0, []
+    for n in names:
+        stem, ext = os.path.splitext(n)
+        tmdb = (stem.endswith("_tmdb") and ext in (".jpg", ".id", ".coll")) or \
+            (ext == ".jpg" and (stem.startswith(("tmdb_", "tmdbcoll_")) or
+                                (stem.startswith("opt_") and any(m.startswith(stem + "_") for m in tmdb_made))))
+        if tmdb and old(n):
+            try:
+                os.remove(path(n))
+                gone += 1
+            except OSError:
+                continue
+            dropped.append(stem[:-5] if stem.endswith("_tmdb") else stem)
+    for m in tmdb_made:
+        if old(m + ".json") or any(m.startswith(p + "_") for p in dropped):
+            for n in (m + ".json", m + ".png"):
+                try:
+                    os.remove(path(n))
+                    gone += 1
+                except OSError:
+                    pass
+    if gone:
+        logger.info("TMDB: %d cached file(s) over %d days old removed", gone, TMDB_KEEP_DAYS)
+    return gone
+
+
+def _tmdb_sweep(art_dir):
+    """tmdb_art_expire, once a run for each art folder."""
+    key = os.path.abspath(art_dir)
+    if key not in _tmdb_swept:
+        _tmdb_swept.add(key)
+        tmdb_art_expire(art_dir)
+
+
 def _art_cached(art_dir, key):
+    _tmdb_sweep(art_dir)
     png, side = os.path.join(art_dir, key + ".png"), os.path.join(art_dir, key + ".json")
     if os.path.exists(png) and os.path.exists(side):
         try:
@@ -4166,6 +4281,7 @@ def tmdb_film_collection(imdb_id, art_dir, key):
     """The TMDB collection a film belongs to ("Rush Hour Collection"): {id, name, poster_path},
     or {} for a film in none. Kept in art_dir: asked once a film."""
     path = os.path.join(art_dir, imdb_id + "_tmdb.coll")
+    _tmdb_sweep(art_dir)
     try:
         with open(path, encoding="utf-8") as fh:
             return json.load(fh)
@@ -5179,6 +5295,33 @@ def play_all_order(titles, runs):
             "twins": {str(n): v for n, v in twins.items() if v}}
 
 
+def play_titles_order(titles, runs=()):
+    """The order of a disc's episodes by its Play All, by its titles' ids (a Blu-ray's playlists): the
+    same as play_all_order's ({"order", "seconds", "twins"}), or None. titles: the scan's (a Play All
+    among them carries its "parts", in its order). runs: what the disc's programs play on after what,
+    each [first, then, ...] (a Blu-ray's menu buttons, hdmv-menus' "then": Chuck's PLAY ALL plays its
+    first episode's own playlist and goes on to the next, no Play All playlist of its own); a Play All
+    in one is its parts. The longest run of titles long enough to be episodes."""
+    seconds = {t["id"]: t.get("duration") or 0 for t in titles}
+    parts = {t["id"]: list(t.get("parts") or []) for t in titles if t.get("role") == "play-all"}
+    # (not what the scan knows isn't an episode: the menu's loop, Chuck's 00120, 78 minutes of its backdrop)
+    not_one = {t["id"] for t in titles if t.get("role") in ("loop", "junk", "duplicate", "play-all", "decoy", "segment")}
+    long_enough = lambda n: seconds.get(n, 0) >= PLAY_ALL_PART_MIN and n not in not_one
+
+    def expanded(run):
+        out = []
+        for n in run:
+            for m in parts.get(n) or [n]:
+                if long_enough(m) and m not in out:
+                    out.append(m)
+        return out
+    orders = [expanded(r) for r in runs] + [expanded([p]) for p in sorted(parts)]
+    best = max(orders, key=len, default=[])
+    if len(best) < 2:
+        return None
+    return {"order": best, "seconds": [seconds[n] for n in best], "twins": {}}
+
+
 def menu_play_order(readings, play):
     """Readings in a Play All's order, for menu_episodes: those it plays first ("in_play"), by the
     button of the same video if it's a twin that plays (Psych S1 D3's 14, the button playing 12), a
@@ -5186,7 +5329,7 @@ def menu_play_order(readings, play):
     if not play:
         return list(readings)
     by_title = {r["title"]: r for r in readings}
-    twins = {int(k): v for k, v in (play.get("twins") or {}).items()}
+    twins = {int(k) if str(k).isdigit() else k: v for k, v in (play.get("twins") or {}).items()}
     ordered, used = [], set()
     for n, seconds in zip(play["order"], play["seconds"]):
         t = next((x for x in [n] + twins.get(n, []) if x in by_title and x not in used), None)
@@ -6502,7 +6645,7 @@ def film_check(rep, pmap):
     return said
 
 
-def prefer_played(rep, played, unread=(), keep=()):
+def prefer_played(rep, played, unread=(), keep=(), feature=None):
     """Of two titles of the same video, the one a disc's menus play is the original (played: the
     title ids its buttons play, Detect titles), when they never play the other: Wallace &
     Gromit's Wrong Trousers button plays title 7; title 6, the scan's pick, is its Play All's way
@@ -6511,8 +6654,11 @@ def prefer_played(rep, played, unread=(), keep=()):
     its page of commentaries, title 5's, not needing a look. So the picture of its button is its
     own. Both played and read (a commentary's Play, a scene's), or neither: as the scan has it. Its
     roles and notes swap, and the scan's guesses (their films' titles, the names they'd be saved
-    as) follow. An original in keep (yours, TheDiscDB's) stays. Returns {old original: new}."""
-    heard = lambda tid: 0 if tid not in played else 1 if tid in unread else 2
+    as) follow. An original in keep (yours, TheDiscDB's) stays. Of copies the menus all play, the
+    one they call the feature (feature: its id) is the film's: Order of the Phoenix's Play Movie plays
+    00060, its Play Movie with Focus Points 00059, the scan's pick 00000 played by neither. Returns
+    {old original: new}."""
+    heard = lambda tid: (0 if tid not in played else 1 if tid in unread else 2) + (3 if tid == feature else 0)
     titles = rep.get("titles") or []
     byid = {t["id"]: t for t in titles}
     moved = {}
@@ -6630,9 +6776,6 @@ def best_guess(rep):
         return names[0] + ("" if already else tail), "disc metadata (unconfirmed)"
     if lp.get("query"):
         return lp["query"] + tail, "volume label (unconfirmed)"
-    sib = next((x for x in rep.get("siblings") or [] if x.get("known_as")), None)
-    if sib:
-        return "same set as %s" % sib["known_as"], "sibling disc (unconfirmed)"
     if rep.get("cover") and rep["cover"].get("image"):
         return None, "cover art only (needs a look)"
     return None, "nothing yet"
@@ -6721,7 +6864,8 @@ STEPS = {
     "menus": (N_("reading the disc's menus (nothing else named it)"), N_("Looking through the mug book")),
     "routes": (N_("running the disc's program: what its menus' buttons play, and what plays after what"),
                N_("Reviewing case notes")),
-    "stakeout": (N_("Detect titles: VLC plays the disc's menus, their buttons are pressed and read"),
+    # (a DVD's played in VLC, its buttons pressed; a Blu-ray's read from its files, nothing played)
+    "stakeout": (N_("Detect titles: the disc's menus read, each button's words and what it plays"),
                  N_("Staking out the suspects")),
     "ai": (N_("asking Gemini what the disc's picture shows"), N_("Calling in an expert witness")),
     "photos": (N_("looking up posters and box art"), N_("Pinning photos to the evidence board")),
@@ -6876,15 +7020,11 @@ def status(rep, key):
         return "unidentified; have search terms (%s)" % rep["imdb_note"]
     if rep.get("search_queries") and not c:
         return "unidentified; search terms found no confident match"
-    sib = next((x for x in rep.get("siblings") or [] if x.get("known_as")), None)
-    if sib:
-        return "unidentified; looks like the same set as %s (next disc in the set?)" % sib["known_as"]
     if rep.get("cover") and rep["cover"].get("image"):
         return "unidentified; the cover art likely shows the title (save it with --out DIR)" if not rep["cover"].get("saved") \
             else "unidentified; cover art saved - the title is likely on it (%s)" % rep["cover"]["image"]
     if rep.get("cover") and rep["cover"].get("found") and not rep["cover"].get("image"):
-        return ("unidentified; the disc carries its cover art, but reading it needs ffmpeg "
-                "(and tesseract for the title on it)")
+        return "unidentified; the disc carries its cover art, but it couldn't be decoded"
     if (rep.get("label_parsed") or {}).get("placeholder"):
         return ("unidentified; the label %s is the authoring tool's default, not a title: enter it yourself"
                 % rep["label_parsed"]["raw"])
@@ -6895,7 +7035,8 @@ def status(rep, key):
 # library: one SQLite file records every disc you scan
 # --------------------------------------------------------------------------
 # discs/titles are the shipped feature: your confirmed truths identify a disc
-# instantly next time, and other discs in the same set are spotted as siblings.
+# instantly next time, and a TV set's other discs are recognised by the files they share with
+# one you confirmed (find_siblings: a hint for the show and season, never an answer of its own).
 # evidence (IFO/playlist/metadata/cover bytes) is a dev/test aid, stored only with
 # --keep-evidence, so --corpus can re-parse every disc after a code change.
 
@@ -7011,7 +7152,22 @@ def library_open(path):
         con.execute("ALTER TABLE titles ADD COLUMN clips TEXT")
     if "tracks" not in cols:                      # ... and before tracks were
         con.execute("ALTER TABLE titles ADD COLUMN tracks TEXT")
+    tmdb_credits_expire(con)
     return con
+
+
+def tmdb_credits_expire(con, now=None):
+    """Forget credits fetched from TMDB over TMDB_KEEP_DAYS ago (their terms); film_credits
+    fetches them again when next needed. Returns how many films' credits went."""
+    cutoff = ((now or _dt.datetime.now()) - _dt.timedelta(days=TMDB_KEEP_DAYS)).isoformat(timespec="seconds")
+    old = [r[0] for r in con.execute("SELECT imdb_id FROM credits_fetched WHERE source='tmdb' AND fetched < ?",
+                                     (cutoff,))]
+    if old:
+        con.executemany("DELETE FROM credits WHERE imdb_id=? AND source='tmdb'", [(i,) for i in old])
+        con.executemany("DELETE FROM credits_fetched WHERE imdb_id=?", [(i,) for i in old])
+        con.commit()
+        logger.info("TMDB: credits of %d film(s) over %d days old removed", len(old), TMDB_KEEP_DAYS)
+    return len(old)
 
 
 def title_tracks(t):
@@ -7991,10 +8147,6 @@ def print_report(rep):
         p("  menu OCR    %s" % " / ".join(rep["menu_ocr"]))
     elif rep.get("cover") and rep["cover"].get("image"):
         p("  cover OCR   no confident text (stylized artwork); view the image")
-    for sib in rep.get("siblings") or []:
-        p("  sibling     %s (%s): %d identical asset file%s%s" % (
-            sib["known_as"] or "unknown disc", sib["hash"][:8], sib["shared_files"],
-            "" if sib["shared_files"] == 1 else "s", ", same mastering day" if sib["same_mastering_day"] else ""))
     if rep.get("structure_error"):
         p("  structure   could not parse: %s" % rep["structure_error"])
 

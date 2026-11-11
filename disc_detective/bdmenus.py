@@ -11,6 +11,8 @@ import os
 import re
 import struct
 
+from . import tools
+
 PROJECT_NAMES = ("bluray-project.bin",)
 FRAMEWORK_FILES = (("Sony", "bluray-project.bin"), ("Warner", "menu_base.prop"))
 ENTRY_RE = re.compile(rb"(?:F?PL_|SF_|TMPL )[ -~]{2,60}")
@@ -562,7 +564,7 @@ def find_ffplay(setting=None):
         p = os.path.join(setting, "ffplay.exe") if os.path.isdir(setting) else setting
         if os.path.isfile(p):
             return p
-    p = shutil.which("ffplay")
+    p = tools.which("ffplay")
     if p:
         return p
     for g in FFPLAY_GLOBS:

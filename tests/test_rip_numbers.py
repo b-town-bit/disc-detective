@@ -101,7 +101,7 @@ def rip(tmp_path, monkeypatch, saved, now, ids=(PLAY_ALL,), no_minimum=None, on_
 
     fake = types.SimpleNamespace(cancelled=False, post=lambda f, *a: f(*a),
                                  set_status=lambda *a: None, current_plan=plan, lab_short=lambda rep: [],
-                                 progress=types.SimpleNamespace(configure=lambda *a: None), disc_gone=lambda d: False,
+                                 progress=types.SimpleNamespace(configure=lambda *a: None), disc_gone=lambda d: False, still_the_disc=lambda rep: True,
                                  rip_done=lambda done, planned, err, gone=False: results.append((done, planned, err)))
     rep = {"content_hash": "ABCDEF12", "titles": [{"id": i, "duration": s} for i, s in on_disc]}
     dd_app.App._rip_worker(fake, "makemkvcon", "E:\\", str(out), rep, {"extras": False, "selected": None})
