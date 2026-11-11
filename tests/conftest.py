@@ -39,7 +39,6 @@ def isolated(tmp_path, monkeypatch):
         from disc_detective import app
         monkeypatch.setattr(app, "drive_models", lambda drives=None: {})
         monkeypatch.setattr(app, "optical_drives", lambda: [])      # (its drives aren't watched)
-        monkeypatch.setattr(app, "volume_serial", lambda d: None)
     except ImportError:                   # (no Tk here: no app tests either)
         pass
     monkeypatch.setattr(core, "log", lambda msg: None)

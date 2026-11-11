@@ -2063,3 +2063,24 @@ def test_the_film_under_a_pop_up_menu_is_the_feature():
     assert names["00083.mpls"][0] == "Building a Scene" and names["00125.mpls"] == ("Scene 17", "DeletedScene")
     # (shorter than what a button plays: not the feature; nor an extra's length)
     assert menus.menu_titles(dict(out, under_menu=[{"title": "00001.mpls", "seconds": 600.0}]))["feature"] == "00083.mpls"
+
+
+def test_a_crawls_waits_are_told_on_its_own_thread():
+    """Every wait on the player (menus.pause, VLC's and the crawls' alike) tells the crawl running on that thread
+    (progress "wait"): a chance to call it off, or find its disc taken out. Outside a crawl, or on another
+    thread, nothing is told."""
+    import threading
+    told = []
+    menus.pause(0)
+    with menus.waits_told(lambda stage, *a: told.append(stage)):
+        menus.pause(0)
+        menus.pause(0)
+        other = threading.Thread(target=lambda: menus.pause(0))
+        other.start()
+        other.join()
+    menus.pause(0)
+    assert told == ["wait", "wait"]
+    with pytest.raises(menus.Cancelled):            # (what calls it off: raised from the wait itself)
+        with menus.waits_told(lambda stage, *a: (_ for _ in ()).throw(menus.Cancelled())):
+            menus.pause(0)
+    menus.pause(0)                                  # (and nothing told after: the crawl's gone)

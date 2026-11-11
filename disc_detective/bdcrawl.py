@@ -934,10 +934,13 @@ def crawl(root, vlc_dir, titles, out_dir, log=print, progress=menus.no_progress)
     path = os.environ.get("PATH", "")
     os.environ["PATH"] = os.pathsep.join(list(bdmenus.decryption_dirs()) + [path])
     v = menus.Vlc(vlc_dir, highlight=True)
+    told = menus.waits_told(progress)          # (VLC's own waits told too: menus.pause)
+    told.__enter__()
     try:
         v.open("bluray:///%s/" % root.replace("\\", "/").rstrip("/"))
         longest = max((t.get("duration") or 0) for t in titles)
-        c = Crawler(v, titles, play_alls(root, longest), out_dir, log)
+        # (each of its waits on the player told: up to WAIT_PLAYING for the intros, a chance to be called off)
+        c = Crawler(v, titles, play_alls(root, longest), out_dir, log, sleep=menus.pause)
         c.progress = progress
         playing = c.playing = c.wait_playing(longest)
         if playing is None:
@@ -951,5 +954,6 @@ def crawl(root, vlc_dir, titles, out_dir, log=print, progress=menus.no_progress)
             raise menus.Lost("no page of episodes or special features answered")
         return crawl_result(root, c, pressed, extras, out_dir)
     finally:
+        told.__exit__()
         v.close()
         os.environ["PATH"] = path

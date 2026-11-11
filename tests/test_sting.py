@@ -197,7 +197,7 @@ def rip(tmp_path, monkeypatch, drive, root, mkv, read_only=False):
 
     fake = types.SimpleNamespace(cancelled=False, post=lambda f, *a: f(*a),
                                  set_status=statuses.append, current_plan=plan, lab_short=lambda rep: [],
-                                 progress=types.SimpleNamespace(configure=lambda *a: None), disc_gone=lambda d: False,
+                                 progress=types.SimpleNamespace(configure=lambda *a: None), disc_gone=lambda d: False, still_the_disc=lambda rep: True,
                                  rip_done=lambda done, planned, err, gone=False: results.append((done, planned, err)))
     rep = {"content_hash": "ABCDEF12", "titles": [{"id": "00016.m2ts", "duration": 2500}]}
     dd_app.App._rip_worker(fake, "makemkvcon", drive, str(out), rep, {"extras": False, "selected": None})
@@ -250,3 +250,17 @@ def test_no_decryption_file_falls_through_and_leaves_nothing(tmp_path, monkeypat
     got, planned, fake, _ = rip(tmp_path, monkeypatch, "E:\\", root, FakeMakeMKV(root, backup_fails=True))
     assert got == {} and planned == 1 and "decryption file" in fake.rip_problem
     assert not (tmp_path / "sting").exists()
+
+
+def test_makemkvs_messages_are_logged_as_its_words(monkeypatch, caplog):
+    """The log has what MakeMKV said ("1 titles saved"), not its robot-mode line with its codes and %1s."""
+    import logging
+    lines = ['MSG:1005,0,1,"MakeMKV v1.18.4 win(x64-release) started","%1 started","MakeMKV v1.18.4 win(x64-release)"\n',
+             'MSG:5005,128,1,"1 titles saved","%1 titles saved","1"\n']
+    proc = types.SimpleNamespace(stdout=iter(lines), wait=lambda: 0, returncode=0)
+    monkeypatch.setattr(mk.subprocess, "Popen", lambda *a, **k: proc)
+    monkeypatch.setattr(mk, "logger", logging.getLogger("disc_detective.test_makemkv"))
+    with caplog.at_level(logging.INFO, logger="disc_detective.test_makemkv"):
+        assert mk.Rip("makemkvcon").title("dev:E:", 2, "work")
+    said = [r.getMessage() for r in caplog.records if "makemkv:" in r.getMessage()]
+    assert said == ["  makemkv: MakeMKV v1.18.4 win(x64-release) started", "  makemkv: 1 titles saved"]

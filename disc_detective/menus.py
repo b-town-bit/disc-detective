@@ -1683,20 +1683,20 @@ def _first_menu_frames(drive, vlc_dir, out_dir, log=None):
         v.open(dvd_mrl(drive))
         t0 = time.time()
         while not v.frames and time.time() - t0 < 30:
-            time.sleep(0.25)
+            pause(0.25)
         t0 = time.time()
         while v.state()["title"] != 0 and time.time() - t0 < 60:
-            time.sleep(0.5)
+            pause(0.5)
         if v.state()["title"] != 0:              # (still a title: the film, playing by itself)
             v.menu()
-            time.sleep(4)
-        time.sleep(3)                            # (the page's intro)
+            pause(4)
+        pause(3)                            # (the page's intro)
         paths = []
         for i in range(MENU_LOOK_FRAMES):
             path = os.path.join(out_dir, "menu_%d.png" % i)
             v.frame().save(path)
             paths.append(path)
-            time.sleep(MENU_LOOK_GAP)
+            pause(MENU_LOOK_GAP)
         return paths
     except Exception as e:
         if log:
@@ -1837,7 +1837,7 @@ class Vlc:
         """Wait for n more frames to be drawn (a change made just now in them); whether they were."""
         start, t0 = self.frames, time.time()
         while self.frames < start + n and time.time() - t0 < limit:
-            time.sleep(0.02)
+            pause(0.02)
         return self.frames >= start + n
 
     def dark(self, on, level=0):
@@ -1913,7 +1913,7 @@ class Vlc:
         """A few frames in quick succession."""
         out = [self.frame()]
         for _ in range(n - 1):
-            time.sleep(gap)
+            pause(gap)
             out.append(self.frame())
         return out
 
@@ -2079,7 +2079,7 @@ def unlock(root, vlc_dir):
         v.open(dvd_mrl(root))
         t0 = time.time()
         while not v.frames and time.time() - t0 < 30:
-            time.sleep(0.25)
+            pause(0.25)
     finally:
         v.close()
 
@@ -2116,7 +2116,7 @@ def probe(drive, vlc_dir, out_dir, log=print, runs=PROBE_RUNS, menu_wait=15):
         steps = []
 
         def snap(label, wait):
-            time.sleep(wait)
+            pause(wait)
             st = v.state()
             name = "%s_%02d_%s.png" % (run, len(steps), re.sub(r"\W+", "_", label))
             if v.frames:
@@ -2129,7 +2129,7 @@ def probe(drive, vlc_dir, out_dir, log=print, runs=PROBE_RUNS, menu_wait=15):
             v.open(mrl)
             t0 = time.time()
             while not v.frames and time.time() - t0 < 30:
-                time.sleep(0.25)
+                pause(0.25)
             titles = titles or v.titles()
             snap("menu", menu_wait)
             for i, key in enumerate(keys):
@@ -3454,7 +3454,7 @@ class _Crawler:
         self.v.open(self.mrl)
         t0 = time.time()
         while not self.v.frames and time.time() - t0 < 60:     # (a drive spinning up again: slow)
-            time.sleep(0.25)
+            pause(0.25)
         if not self.v.frames:
             raise Lost("no picture from VLC")
         if self.menu_key:
@@ -3473,13 +3473,13 @@ class _Crawler:
         """Wait (up to limit seconds) for VLC to play one of the disc's titles (past its warnings)."""
         t0 = time.time()
         while self.v.state()["title"] == 0 and time.time() - t0 < limit:
-            time.sleep(0.25)
+            pause(0.25)
 
     def to_menus(self):
         """VLC's DVD Menu, from a title playing: the disc's menu for it (where the remote's Menu,
         or a title's own ban on it, may do nothing: WALL-E's film)."""
         self.v.menu()
-        time.sleep(4)
+        pause(4)
 
     def restart(self, start, where=None):
         """Back on the page the disc opens on, to start a route over: by VLC's DVD Menu, in
@@ -3489,7 +3489,7 @@ class _Crawler:
         if self.v is not None and self.menu_back is not False:
             try:
                 self.v.menu()
-                time.sleep(2)
+                pause(2)
                 found = self.find([start], timeout=MENU_BACK_WAIT + _lead_in(self.pages, start))
                 if self.menu_back is None:
                     self.log("  DVD Menu leads back to %s: starting over that way" % (start,))
@@ -3510,14 +3510,14 @@ class _Crawler:
         the warnings and logos a disc plays first take no keys."""
         t0 = time.time()
         while self.v.state()["title"] != 0 and time.time() - t0 < limit:
-            time.sleep(0.25)
+            pause(0.25)
 
     def at_start(self, start):
         """Back at the page the disc opens on, a fresh session: (state, selected button)."""
         self.await_menus()
         if self.menu_skip:                      # past the page's intro animation (crawl)
             self.v.press("popup")
-            time.sleep(2)
+            pause(2)
         if self.start_select:                   # (Menu lands past the page's intro)
             return self.arrive(start, self.start_select, wait=0 if self.menu_skip else _lead_in(self.pages, start))
         return self.find([start], timeout=HINT_WAIT)
@@ -3533,7 +3533,7 @@ class _Crawler:
         if sel in by and _unseen(by):
             # no move there would show: the program's word, untested (WALL-E's Home Theater pages:
             # Back and Next 4 pixels square). A wrong word shows at the next page's arrival
-            time.sleep(wait + 1)
+            pause(wait + 1)
             if st not in self.reading:
                 self.log("  page %s of title set %s: its highlight is too small to see: taking the disc's "
                          "program's word for it" % (st[1], st[0]))
@@ -3543,7 +3543,7 @@ class _Crawler:
                  by[sel][k] != sel and by[by[sel][k]][back] == sel and not by[by[sel][k]]["auto"]]
         if not trips:
             return self.find([st], timeout=timeout)
-        time.sleep(wait + 1)
+        pause(wait + 1)
         t0, i, playing = time.time(), 0, None
         while time.time() - t0 < timeout:
             now = self.v.state()["title"]
@@ -3553,7 +3553,7 @@ class _Crawler:
                 playing = playing or time.time()
                 if time.time() - playing > TITLE_WAIT or self.feature_length(now):
                     break
-                time.sleep(1)
+                pause(1)
                 t0 = time.time()
                 continue
             key, back = trips[i % len(trips)]
@@ -3579,7 +3579,7 @@ class _Crawler:
                     self.placed[0] += 1
                     self._read(st, a, b, sel)
                     return st, sel
-            time.sleep(0.3)
+            pause(0.3)
         if playing and self.v.state()["title"] != 0:
             raise Lost("VLC is playing a title, not in the menus")     # (no page to look round)
         self.placed[1] += 1
@@ -3625,9 +3625,9 @@ class _Crawler:
     def menu_call(self):
         """Press Menu (the remote's), for a disc that plays its film by itself: its menus
         (a few seconds in, after its first warnings)."""
-        time.sleep(2)
+        pause(2)
         self.v.press("popup")
-        time.sleep(4)
+        pause(4)
         if self.v.state()["title"] != 0:        # (the press did nothing: VLC's DVD Menu instead)
             self.to_menus()
 
@@ -3789,17 +3789,17 @@ class _Crawler:
         from PIL import ImageChops, ImageFilter
         v, d = self.v, _diff_mask
         a1 = v.frame()
-        time.sleep(0.1)
+        pause(0.1)
         a2 = v.frame()
         v.press(key)
-        time.sleep(0.3)
+        pause(0.3)
         b1 = v.frame()
-        time.sleep(0.15)
+        pause(0.15)
         b2 = v.frame()
         v.press(back)
-        time.sleep(0.3)
+        pause(0.3)
         c1 = v.frame()
-        time.sleep(0.1)
+        pause(0.1)
         c2 = v.frame()
         went = d(a2, b1)
         for m in (d(a2, b2), d(c1, b1), d(c1, b2)):
@@ -3862,7 +3862,7 @@ class _Crawler:
         from PIL import ImageChops
         before = self.v.burst(8, 0.25)          # 2s: slow menu video shows itself too
         self.v.press(key)
-        time.sleep(0.25)
+        pause(0.25)
         after = self.v.burst()
         # whatever has moved on this page lately (slideshows), over the last few presses only: an
         # intro moves everything, the buttons' words included, and those must count again later
@@ -3954,7 +3954,7 @@ class _Crawler:
                         return self._find_one_way(candidates, timeout=10)
                     except Lost:
                         pass
-                time.sleep(0.3)
+                pause(0.3)
                 continue
             for j in range(1, 4):               # more round trips, ruling pages out
                 if len({layout(s) for s in fits}) == 1:
@@ -3979,7 +3979,7 @@ class _Crawler:
         Outtakes' second page fit a first press alike)."""
         st = candidates[0]
         if len(candidates) == 1 and len(_state_buttons(self.pages, st)) == 1:
-            time.sleep(6)
+            pause(6)
             self._read(st, self.v.frame(), None, None)
             return st, _state_buttons(self.pages, st)[0]["n"]
         self.moving = None                      # a new page: learn what moves on it afresh
@@ -3995,7 +3995,7 @@ class _Crawler:
                 if score >= SEEN and s not in fits:
                     fits[s] = (was, now)
             if not fits:
-                time.sleep(0.3)
+                pause(0.3)
                 continue
             first = dict(fits)                  # (for reading the page: the move the answer made)
             for _ in range(6):                  # more presses, each ruling out pages it doesn't fit
@@ -4165,7 +4165,7 @@ class _Crawler:
             raise Lost("no way from button %d to %d on %s" % (sel, n, st))
         for key in moves:
             self.v.press(key)
-            time.sleep(0.35)
+            pause(0.35)
         return n
 
     def follow(self, st, sel, route):
@@ -4177,7 +4177,7 @@ class _Crawler:
             self.select(st, sel, n)
             nxt = _goes(self.pages, st, {b["n"]: b for b in _state_buttons(self.pages, st)}[n], self.learned)
             self.v.press("activate")
-            time.sleep(1)
+            pause(1)
             expect = self.selects.get((state, n)) if self.learned.get((state, n)) == nxt else None
             if expect:                          # the disc's program says where the highlight is
                 st, sel = self.arrive(nxt, expect, wait=self.intros.get((state, n), 0))
@@ -4197,7 +4197,7 @@ class _Crawler:
         t0 = since = time.time()
         chain = []
         while time.time() - t0 < limit:
-            time.sleep(0.5)
+            pause(0.5)
             s = self.v.state()
             if not chain or chain[-1]["title"] != s["title"]:
                 chain.append({"title": s["title"], "chapter": s["chapter"] + 1 if s["title"] > 0 else None,
@@ -4221,8 +4221,34 @@ def no_progress(stage, k=0, n=0):
 # What a crawl tells as it goes (progress(stage, k, n)), a DVD's (menus.crawl, VLC) and a Blu-ray's (bdhdmv.read,
 # the library; bdcrawl.crawl, VLC) alike, for the app to put in its own words: "setup", the disc's menus got
 # ready (a DVD's menu data read, a Blu-ray opened and unlocked); "start", the crawl begun; "page", the k-th
-# page of n read; "press", the k-th button of a round of n pressed (a player's: what it plays watched).
-CRAWL_STAGES = ("setup", "start", "page", "press")
+# page of n read; "press", the k-th button of a round of n pressed (a player's: what it plays watched); "wait",
+# a moment spent waiting on the player (nothing to tell: a chance to call the crawl off, its disc taken out).
+CRAWL_STAGES = ("setup", "start", "page", "press", "wait")
+
+
+_waiting = threading.local()   # (the crawl on this thread: told each time it waits on its player)
+
+
+def pause(seconds):
+    """time.sleep, the crawl running on this thread told first that it's waiting (its progress "wait"):
+    each wait on VLC a chance to call it off, or to find its disc taken out (a wait for a menu that
+    never comes, on a disc that's gone, took minutes)."""
+    told = getattr(_waiting, "tell", None)
+    if told is not None:
+        told()
+    time.sleep(seconds)
+
+
+def waits_told(progress):
+    """For a crawl's run, on this thread: each pause() tells progress("wait"). Use with `with`."""
+    class _Told:
+        def __enter__(self):
+            self.before = getattr(_waiting, "tell", None)
+            _waiting.tell = lambda: progress("wait")
+
+        def __exit__(self, *exc):
+            _waiting.tell = self.before
+    return _Told()
 
 
 def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, is_word=None, tv=False, every_title=False,
@@ -4235,7 +4261,8 @@ def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, is_wo
     readings_begin()                            # (this stakeout's readings: how sure of each)
     progress("start")
     try:
-        return _crawl(drive, vlc_dir, structure, out_dir, log, everything, tv, every_title, progress)
+        with waits_told(progress):
+            return _crawl(drive, vlc_dir, structure, out_dir, log, everything, tv, every_title, progress)
     finally:
         WORDS = None
         # VLC let go of, however it ended (an error, the disc taken out mid-stakeout): no player

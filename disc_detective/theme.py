@@ -904,6 +904,23 @@ def watermark(name, height, bg=PARCHMENT):
         return None
 
 
+def logo(name, height):
+    """Another service's logo (art/<name>.png, drawn large) at `height` design pixels, brought to the screen's
+    size, its transparency kept; None without Pillow or the file. TMDB's, which its terms ask for."""
+    import base64
+    import io
+    try:
+        from PIL import Image
+        with Image.open(os.path.join(ART_DIR, name + ".png")) as im:
+            h = px(height)
+            im = im.convert("RGBA").resize((max(1, round(im.width * h / im.height)), h), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+        return tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"), format="png")
+    except Exception:
+        return None
+
+
 def icon(name):
     """A small icon (PNG; Tk 8.6 reads PNG and GIF itself): the @2x one on a high-DPI screen."""
     if name in _ICONS:

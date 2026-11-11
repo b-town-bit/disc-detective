@@ -1649,6 +1649,7 @@ def test_makemkv_reads_a_confirmed_disc_ahead(gui, tmp_path, monkeypatch):
     new scan has it step aside, and starts once MakeMKV has quit and the drive has settled."""
     import threading
     root, made, pump = gui
+    monkeypatch.setattr(core, "same_disc", lambda root, h: True)      # (a made-up disc: its fingerprint not asked)
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
     app = dd_app.App(root)
     app.source.set("E:")
@@ -2071,7 +2072,7 @@ def test_the_scan_runs_the_discs_program(monkeypatch):
     monkeypatch.setattr(menus, "find_vlc", lambda folder=None: None)
     pmap = {"plays": {7: [{"page": [7, 26, 1], "button": 4, "chapter": 1}]}, "chains": {}, "chained": [6], "opening": []}
     monkeypatch.setattr(menus, "program_map", lambda root, s: pmap)
-    app = types.SimpleNamespace(settings={})
+    app = types.SimpleNamespace(settings={}, gone_check=lambda drive: (lambda *a: None))
     rep = {"format": "DVD", "content_hash": "A" * 32,
            "titles": [{"id": "Title 6", "role": "feature", "note": ""},
                       {"id": "Title 7", "role": "duplicate", "note": "same video as Title 6"}]}
@@ -2510,10 +2511,9 @@ def test_the_menus_add_extras_films_without_a_new_scan(gui, monkeypatch):
 
 
 def test_a_disc_taken_out_clears_the_desk(gui, monkeypatch):
-    """The case on the desk goes with its disc: taken out (the drive empty: its light grey), or
-    another in its place (another volume serial number: discs of one label, ABBOTT_AND_COSTELLO,
-    told apart), and the desk is blank again, saying why, so nothing is done to the next disc with
-    this one's answers. Not while the app reads the drive itself."""
+    """The case on the desk goes with its disc: taken out (the drive empty: its light grey), and the
+    desk is blank again, saying nothing. Not while the app reads the drive itself. (Another disc put
+    in its place: still_the_disc, before anything is done to it.)"""
     root, made, pump = gui
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
     monkeypatch.setattr(dd_app, "optical_drives", lambda: ["E:\\"])
@@ -2522,13 +2522,8 @@ def test_a_disc_taken_out_clears_the_desk(gui, monkeypatch):
     assert app.source.get() == "E:\\" and str(app.scan_btn.cget("state")) == "disabled"   # (no word from it yet)
     case = lambda: dict(navy_and_ghost(), path="E:\\", status="best guess: x", label="ABBOTT_AND_COSTELLO")
     app.rep = case()
-    app._drives_checked({"E:\\": ("ready", "ABBOTT_AND_COSTELLO", "00C3B411")})
-    assert app.rep is not None and app._case_serial == "00C3B411"           # (its disc, as the drive says)
-    app._drives_checked({"E:\\": ("ready", "ABBOTT_AND_COSTELLO", "00C3B411")})
-    assert app.rep is not None
-    app._drives_checked({"E:\\": ("ready", "ABBOTT_AND_COSTELLO", "1B2C3D4E")})   # another disc, one label
-    assert app.rep is None and "A different disc" in app.status.cget("text")
-    app.rep, app._case_serial = case(), None
+    app._drives_checked({"E:\\": ("ready", "ABBOTT_AND_COSTELLO", None)})
+    assert app.rep is not None                                               # (a disc in: nothing asked of it)
     app.busy = True                                                          # (a scan reading it: not now)
     app._drives_checked({"E:\\": ("empty", None, None)})
     assert app.rep is not None
@@ -2694,4 +2689,112 @@ def test_screenshots(gui, tmp_path, imdb_dir, monkeypatch):
     fr = dd_app.FirstRunDialog(root, app, ["discdb", "imdb"])
     shot(fr.top, "5-first-run")
     fr.top.destroy()
-    assert len(os.listdir(SHOTS)) >= 5
+    about = dd_app.AboutDialog(root)
+    shot(about.top, "6-about")
+    about.top.destroy()
+    assert len(os.listdir(SHOTS)) >= 6
+
+
+def test_about_gives_the_notices_the_data_sources_ask_for(gui):
+    """IMDb's statement word for word, and TMDB's notice with its logo (each one's terms ask for them)."""
+    root, made, pump = gui
+    d = dd_app.AboutDialog(root)
+    texts = " ".join(str(w.cget("text")) for w in made_widgets(d.top) if w.winfo_class() == "TLabel")
+    assert core.IMDB_CREDIT in texts and core.TMDB_CREDIT in texts
+    assert core.IMDB_CREDIT == "Information courtesy of IMDb (https://www.imdb.com). Used with permission."
+    pictures = [w for w in made_widgets(d.top) if w.winfo_class() == "TLabel" and str(w.cget("image"))]
+    shown = lambda w: str(d._logos[0]) in [str(x) for x in (w.cget("image") if isinstance(w.cget("image"), tuple) else [w.cget("image")])]
+    assert any(shown(w) for w in pictures)      # (TMDB's logo, shown)
+    assert d._logos[0].height() < d._icon.height() * 2 if d._icon else True    # (smaller than ours)
+    d.top.destroy()
+
+
+def test_a_disc_taken_out_mid_stakeout_ends_it_within_seconds(gui, tmp_path, monkeypatch):
+    """A crawl waiting on its player (a Blu-ray's VLC, up to WAIT_PLAYING for the intros) is asked at each wait
+    whether its disc is still in: taken out, the stakeout ends there and says so, not minutes later as "no menu"."""
+    root, made, pump = gui
+    from disc_detective import menus
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    monkeypatch.setattr(dd_app.App, "DISC_CHECK", 0.0)
+    monkeypatch.setattr(core, "same_disc", lambda root, h: True)      # (the disc scanned, at first)
+    monkeypatch.setattr(dd_app, "menu_data", lambda *a, **k: {})
+    out = {"in": True}
+    monkeypatch.setattr(dd_app.App, "disc_gone", lambda self, d: not out["in"])
+    waits = []
+
+    def crawl(drive, vlc, structure, out_dir, progress=menus.no_progress, **kw):
+        for i in range(1000):                    # (a player waiting: told at each wait)
+            if i == 3:
+                out["in"] = False                # (taken out)
+            waits.append(i)
+            progress("wait")
+        raise menus.Lost("nothing started playing")
+    monkeypatch.setattr(menus, "crawl", crawl)
+    rep = {"content_hash": "8" * 32, "format": "DVD", "kind": "movie", "path": "E:\\", "titles": [], "labels": {}}
+    app.rep = rep
+    told = []
+    monkeypatch.setattr(app, "detect_done", lambda rep, found, err: told.append(err))
+    app._detect_worker(rep, "vlc")
+    assert pump(lambda: told, 5)
+    assert told == [app.GONE_STAKEOUT] and len(waits) <= 5
+
+
+def test_a_disc_taken_out_during_the_scans_stakeout_ends_the_scan(gui, monkeypatch):
+    """Detect titles run as part of a scan, its disc taken out: the scan ends there ("removed"), not carrying on
+    without the menus as if they'd failed; called off with the disc still in, the scan goes on."""
+    root, made, pump = gui
+    from disc_detective import menus
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    monkeypatch.setattr(dd_app.App, "stakeout_in_scan", lambda self, rep, vlc: True)
+    monkeypatch.setattr(dd_app.App, "_menu_files", lambda self, rep: None)
+    monkeypatch.setattr(dd_app.App, "_stakeout", lambda self, rep, vlc: (_ for _ in ()).throw(menus.Cancelled()))
+    monkeypatch.setattr(dd_app.App, "_menus_witness", lambda self, drive, args, rep, staked=False: dict(rep, witnessed=True))
+    rep = {"content_hash": "9" * 32, "format": "Blu-ray", "kind": "movie", "path": "E:\\", "titles": []}
+    monkeypatch.setattr(dd_app.App, "disc_gone", lambda self, d: True)
+    with pytest.raises(SystemExit):
+        app._menus_seen("E:\\", SimpleNamespace(), rep)
+    monkeypatch.setattr(dd_app.App, "disc_gone", lambda self, d: False)
+    assert app._menus_seen("E:\\", SimpleNamespace(), rep).get("witnessed")
+
+
+def test_another_disc_in_the_drive_isnt_ripped(gui, tmp_path, monkeypatch):
+    """A rip asked for the case on the desk, another disc in the drive since its scan (its fingerprint taken
+    again): nothing ripped, MakeMKV never started, and the desk blank, saying so."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    disc = fixtures.make_movie_bluray(str(tmp_path / "FILM"))
+    app.rep = {"content_hash": "A" * 32, "format": "Blu-ray", "kind": "movie", "path": disc, "best_guess": "Film (2001)",
+               "titles": [{"id": "00001.mpls", "role": "feature", "duration": 6000}], "labels": {}}
+    started = []
+    monkeypatch.setattr(dd_app.makemkv, "Rip", lambda *a, **k: started.append(a) or SimpleNamespace())
+    monkeypatch.setattr(dd_app, "makemkv_source", lambda d: started.append(d) or d)
+    app.busy = True
+    app._rip_worker("makemkvcon", disc, str(tmp_path / "Rips"), app.rep, {"extras": False, "selected": None, "prescan": None})
+    assert pump(lambda: app.rep is None, 5)
+    assert app.status.cget("text") == app.OTHER_DISC and not app.busy
+    assert all(not isinstance(x, str) or x != disc for x in started)          # (MakeMKV not asked)
+
+
+def test_a_disc_taken_out_during_the_scans_program_step_ends_the_scan(gui, monkeypatch):
+    """The scan's step reading a DVD's program (VLC unlocking the drive, half a minute) has its waits told: the
+    disc taken out, the scan ends there, as any scan whose disc goes ("removed")."""
+    root, made, pump = gui
+    from disc_detective import menus
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    monkeypatch.setattr(dd_app.App, "DISC_CHECK", 0.0)
+    out = {"in": True}
+    monkeypatch.setattr(dd_app.App, "disc_gone", lambda self, d: not out["in"])
+
+    def menu_data(*a, **k):
+        for i in range(1000):                    # (VLC waiting on the drive)
+            out["in"] = i < 2
+            menus.pause(0)
+    monkeypatch.setattr(dd_app, "menu_data", menu_data)
+    with pytest.raises(SystemExit):
+        app._program_map("E:\\", {"format": "DVD", "content_hash": "B" * 32})
+    out["in"] = True                            # (not after the step: nothing asked)
+    menus.pause(0)

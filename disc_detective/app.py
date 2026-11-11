@@ -73,18 +73,6 @@ def optical_drives():
     return sorted(set(roots))
 
 
-def volume_serial(drive):
-    """The disc in a drive's volume serial number ("00C3B411"), or None: what tells two discs of
-    one label apart (Abbott and Costello's, every one ABBOTT_AND_COSTELLO). Windows only."""
-    if os.name != "nt":
-        return None
-    import ctypes
-    serial = ctypes.c_ulong(0)
-    ok = ctypes.windll.kernel32.GetVolumeInformationW(ctypes.c_wchar_p(drive), None, 0, ctypes.byref(serial),
-                                                      None, None, None, 0)
-    return "%08X" % serial.value if ok else None
-
-
 def drive_identity(drive):
     """An optical drive's make and model, asked of the drive itself ("PIONEER BD-RW BDR-XD07U"):
     the storage device query, which needs no disc and doesn't read one, so Windows' device
@@ -1213,7 +1201,6 @@ class App:
         # {drive: ("ready", label) | ("empty", None) | ("busy", None)}; the asking, one at a time per drive
         self._drive_state, self._probes, self._drive_recheck, self._drives = {}, {}, None, []
         self._watch_asking = False    # (the watcher's question to the drive, not answered yet)
-        self._case_serial = None      # the case's disc's volume serial number, as the drive first said it
         self.detecting = False        # Detect titles under way
         self.detect_stop = threading.Event()  # (set: Detect titles called off, at the crawl's next step)
         self.mkv = None                # the rip under way, in MakeMKV's hands
@@ -1834,7 +1821,7 @@ class App:
             def ask():
                 box["has"] = os.path.isdir(d)
                 box["label"] = di.volume_label(d) if box["has"] else None
-                box["serial"] = volume_serial(d) if box["has"] else None
+                box["serial"] = None
             t = threading.Thread(target=ask, daemon=True)
             t.box = box
             self._probes[d] = t
@@ -1896,11 +1883,40 @@ class App:
             return
         if state == "empty":
             self.desk_cleared("")                 # (taken out when done with: nothing to say)
-        elif state == "ready" and serial:
-            if self._case_serial is None:        # (the first word from the drive since the scan)
-                self._case_serial = serial
-            elif serial != self._case_serial:
-                self.desk_cleared("A different disc is in the drive: Scan it")
+
+    OTHER_DISC = "A different disc is in the drive: Scan it"
+
+    def gone_check(self, drive):
+        """A scan step's progress (menus.waits_told's, off the Tk thread): the drive asked every
+        DISC_CHECK whether its disc is still in; taken out, the scan ends there (SystemExit: "removed")."""
+        asked = [time.time()]
+
+        def check(stage=None, *a):
+            if time.time() - asked[0] >= self.DISC_CHECK:
+                asked[0] = time.time()
+                if self.disc_gone(drive):
+                    raise SystemExit("the disc was removed")
+        return check
+
+    def still_the_disc(self, rep):
+        """Before a command that uses the case's disc (a rip, Detect titles; off the Tk thread): its
+        fingerprint taken again (core.same_disc, quick). Another disc in the drive, or none: the desk
+        is cleared and the command doesn't run (False). Nothing kept about a disc but its fingerprint."""
+        path, h = rep.get("path"), rep.get("content_hash")
+        if not path or not h or di.same_disc(path, h):
+            return True
+        gone = self.disc_gone(path)
+        di.logger.info("%s: not the disc scanned (%s)", path, "none in the drive" if gone else "another disc")
+        self.post(self.wrong_disc, gone)
+        return False
+
+    def wrong_disc(self, gone):
+        """A command stopped before it began, its disc not the case's: back to the blank desk."""
+        self.show_progress(False)
+        self.set_busy(False)
+        self.detecting = False
+        th.set_dot(self.rip_dot, th.INK_SUBTLE)
+        self.desk_cleared("" if gone else self.OTHER_DISC)
 
     def desk_cleared(self, why):
         """The case taken off the desk (its disc gone): back to the blank desk, saying why if
@@ -1912,7 +1928,7 @@ class App:
         if v is not None and v.alive():
             v.close()
         menus.stop_watching()
-        self.rep, self.selected, self._before, self._case_serial = None, None, None, None
+        self.rep, self.selected, self._before = None, None, None
         self._build_rip_menu()
         self.clear_case(self.EMPTY_TITLE, self.EMPTY_NOTE)
         self.set_case("none")
@@ -2494,7 +2510,6 @@ class App:
         if self.rep is not None:     # (the same disc again: what its menus said carries over, scan_done)
             self._before = self.rep
         self.rep = None
-        self._case_serial = None     # (the drive's word on this disc, once it's scanned)
         self.selected = None
         self._build_rip_menu()
         self.clear_case("Investigating…")
@@ -2526,9 +2541,10 @@ class App:
             args.library.close()
             self.post(self.tell, lambda: self.scan_done(rep, None))   # once the story has been told
         except SystemExit as exc:
-            di.logger.warning("scan of %s: %s", drive, exc)
             msg = str(exc)               # (exc is gone once the except ends: the message is kept)
             gone = self.disc_gone(drive)
+            # (a disc taken out isn't a problem to report: the log has it, errors.log doesn't)
+            (di.logger.info if gone else di.logger.warning)("scan of %s: %s", drive, exc)
             self.post(self.tell, lambda: self.scan_done(None, msg, gone))
         except Exception as exc:   # show it rather than dying silently in a thread
             di.logger.exception("scan of %s failed", drive)
@@ -2548,8 +2564,10 @@ class App:
         t0 = time.time()
         try:
             vlc = menus.find_vlc(self.settings.get("vlc") or None)
-            structure = menu_data(drive, rep["content_hash"], vlc, lambda m: di.logger.info("menus: %s", m.strip()),
-                                  oldest=2)
+            # (VLC's waits told: the disc taken out meanwhile ends the scan there, SystemExit, not minutes on)
+            with menus.waits_told(self.gone_check(drive)):
+                structure = menu_data(drive, rep["content_hash"], vlc, lambda m: di.logger.info("menus: %s", m.strip()),
+                                      oldest=2)
             pmap = menus.program_map(drive, structure) if structure else None
         except Exception as exc:          # (a nicety: never fail a scan over it)
             di.logger.info("the disc's program couldn't be read (%s: %s)", type(exc).__name__, exc)
@@ -2655,6 +2673,10 @@ class App:
         di.step("stakeout")
         try:
             raw = self._stakeouts[h] = self._stakeout(rep, vlc)
+        except menus.Cancelled:          # (its disc taken out: the scan ends there, as a disc gone mid-scan)
+            if self.disc_gone(drive):
+                raise SystemExit("the disc was removed")
+            return self._menus_witness(drive, args, rep)
         except menus.Unsupported:        # (why, in the log: the scan goes on)
             self.post(self.tell, self.UNSUPPORTED_STAKEOUT)
             return self._menus_witness(drive, args, rep)
@@ -3054,14 +3076,18 @@ class App:
         from . import menus
         try:
             self.wait_for_lab(lab)       # MakeMKV gone from the drive, and the drive settled
+            if not self.still_the_disc(rep):     # (another disc in the drive since the scan: not read)
+                return
             raw = self._stakeouts[rep["content_hash"]] = self._stakeout(rep, vlc)
             rep["menu_raw"] = raw
             found = self._name_titles(raw, rep)
             # the answer in its turn, once the last suspect has had their moment
             self.post(self.tell, lambda: self.detect_done(rep, found, None))
         except menus.Cancelled:
-            di.logger.info("Detect titles called off")
-            self.post(self.tell, lambda: self.detect_done(rep, None, self.CANCELLED_STAKEOUT))
+            gone = self.disc_gone(rep["path"])
+            di.logger.info("the disc was removed: stakeout aborted" if gone else "Detect titles called off")
+            msg = self.GONE_STAKEOUT if gone else self.CANCELLED_STAKEOUT
+            self.post(self.tell, lambda: self.detect_done(rep, None, msg))
         except menus.NoReader as exc:
             di.logger.warning("%s", exc)
             self.post(self.tell, lambda: self.detect_done(rep, None, self.NO_READER_STAKEOUT))
@@ -3109,13 +3135,22 @@ class App:
         from . import menus
         t0 = time.time()
         di.logger.info("menus: setting up the stakeout on %s", rep["path"])
-        # (called off: Cancelled at the crawl's next step, on its own thread, whichever crawl it is)
+        # (called off: Cancelled at the crawl's next step, on its own thread, whichever crawl it is; and so is
+        # one whose disc was taken out, the drive asked every DISC_CHECK at those steps: a player waiting on a
+        # disc that's gone took minutes to give up, WAIT_PLAYING)
         worker = threading.get_ident()
+        asked = [time.time()]
 
         def check():
+            if threading.get_ident() != worker:
+                return
             stop = getattr(self, "detect_stop", None)
-            if stop is not None and stop.is_set() and threading.get_ident() == worker:
+            if stop is not None and stop.is_set():
                 raise menus.Cancelled()
+            if time.time() - asked[0] >= self.DISC_CHECK:
+                asked[0] = time.time()
+                if self.disc_gone(rep["path"]):
+                    raise menus.Cancelled()
 
         def log(line):
             di.logger.info("menus: %s", line.strip())
@@ -3151,6 +3186,8 @@ class App:
                 except (menus.Cancelled, menus.Unsupported):
                     raise                # (called off; a Java menu after all: no VLC crawl to fall back to)
                 except Exception:
+                    if self.disc_gone(root):     # (it failed for its disc taken out: no crawl of a disc that's gone)
+                        raise menus.Cancelled()
                     di.logger.exception("reading the HDMV menus failed: the crawl instead")
                     got = None
                 if got is not None:
@@ -3292,6 +3329,7 @@ class App:
         return again
 
     GONE_STAKEOUT = "The disc was removed: stakeout aborted"
+    DISC_CHECK = 3.0          # seconds between asking a stakeout's drive whether its disc is still in
     CANCELLED_STAKEOUT = "Stakeout called off"
     NO_MENU_STAKEOUT = "No menu answered: nothing to stake out on this disc"
     UNSUPPORTED_STAKEOUT = "Could not go on Stakeout"
@@ -3459,6 +3497,9 @@ class App:
             source = makemkv_source(drive)
             if job["stopped"]:
                 return
+            if not di.same_disc(drive, job["hash"]):     # (its reading kept under the case's fingerprint)
+                di.logger.info("MakeMKV's background reading stopped: not the disc scanned")
+                return
             job["proc"] = subprocess.Popen([exe, *MAKEMKV_SWITCHES, "info", source], stdout=subprocess.PIPE,
                                            stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
                                            creationflags=NO_WINDOW)
@@ -3569,6 +3610,8 @@ class App:
                     if self.cancelled:
                         self.post(self.rip_done, [], 0, None)
                         return
+            if not self.still_the_disc(rep):     # (another disc in the drive since the scan: not ripped)
+                return
             source = makemkv_source(drive)
             store = di.makemkv_log_store(rep["content_hash"])        # reused by --packet later
             mk, reading = {"titles": []}, ""
@@ -3671,12 +3714,15 @@ class App:
                     done.append(dest)
                     di.logger.info("  ripped %s", dest)
                 elif not self.cancelled:
-                    di.logger.warning("MakeMKV title %s did not rip (%s)", number,
-                                      "numbered differently from the reading" if self.mkv.numbers_changed else
-                                      "no file written" if ok else "MakeMKV reported a failure")
-                    if self.mkv.problem:
+                    gone = self.disc_gone(drive)
+                    why = ("numbered differently from the reading" if self.mkv.numbers_changed else "no file written" if ok
+                           else "MakeMKV reported a failure, exit code %s" % getattr(self.mkv, "exit_code", "?"))
+                    # (a disc taken out isn't a problem to report: the log has it, errors.log doesn't)
+                    (di.logger.info if gone else di.logger.warning)("MakeMKV title %s did not rip (%s)", number,
+                                                                     "the disc was removed" if gone else why)
+                    if self.mkv.problem and not gone:
                         self.rip_problem = "MakeMKV says: %s" % self.mkv.problem
-                    if self.disc_gone(drive):     # (taken out mid-rip: the rest would only fail too)
+                    if gone:                      # (taken out mid-rip: the rest would only fail too)
                         shutil.rmtree(work, ignore_errors=True)
                         di.logger.info("the disc was removed: rip aborted")
                         self.post(self.rip_done, done, len(plan), None, True)
@@ -5734,7 +5780,7 @@ class AboutDialog:
     CREDITS = (
         ("Disc identification", "Disc fingerprints, title lists and box art from TheDiscDB (MIT License). "
                                 "Titles from IMDb's non-commercial datasets, downloaded to your own computer "
-                                "for personal use under IMDb's terms.",
+                                "for personal use under IMDb's terms. " + di.IMDB_CREDIT,
          (("thediscdb.com", "https://thediscdb.com"),
           ("IMDb datasets", "https://developer.imdb.com/non-commercial-datasets/"))),
         ("TV episodes", "Episode lists and DVD orders from TVmaze, under CC BY-SA 4.0.",
@@ -5749,6 +5795,8 @@ class AboutDialog:
         ("Type and icons", "Detective Serif (a cut of Playfair Display), Courier Prime and Inter, under the "
                            "SIL Open Font License 1.1. Icons from Heroicons (MIT License).", ()),
     )
+
+    LOGOS = {"Pictures": "tmdb"}       # (beside its credit: TMDB's terms ask for its logo, less prominent than ours)
 
     def __init__(self, root):
         self.top = top = new_dialog(root)
@@ -5792,6 +5840,10 @@ class AboutDialog:
                 for j, (label, url) in enumerate(links):
                     th.link(row, label, lambda url=url: webbrowser.open(url), style="CardLink.TLabel",
                             icon="external", right=True).pack(side="left", padx=(0 if j == 0 else 14, 0))
+            logo = th.logo(self.LOGOS[cap], 16) if cap in self.LOGOS else None
+            if logo is not None:
+                self._logos = getattr(self, "_logos", []) + [logo]      # (kept, or Tk drops the picture)
+                ttk.Label(cell, image=logo, style="Card.TLabel").pack(anchor="w", pady=(6, 0))
         tk.Frame(inner, background=th.BRASS_200, width=1).grid(row=0, column=1, rowspan=rows * 2 - 1, sticky="ns", padx=18)
         foot = ttk.Frame(body, style="Desk.TFrame")
         foot.pack(fill="x", pady=(14, 0))

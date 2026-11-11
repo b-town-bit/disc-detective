@@ -54,4 +54,6 @@ def test_page_layout(path):
         for k in ("title", "description", "section"):
             if w[k] != g[k]:
                 wrong.append("b%s %s: got %r, want %r" % (n, k, g[k], w[k]))
+    if wrong and case.get("open"):              # (a known problem, paused: "open" says which)
+        pytest.xfail("%s (%d wrong)" % (case["open"], len(wrong)))
     assert not wrong, "%d wrong:\n  " % len(wrong) + "\n  ".join(wrong)

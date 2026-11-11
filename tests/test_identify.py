@@ -471,3 +471,26 @@ def test_a_disc_named_by_its_menus(tmp_path, imdb_dir):
     rep, _ = run(disc, tmp_path, imdb_dir=imdb_dir, offline=True, menu_phrases=["the wan princess"])
     assert rep["menu_ocr"] == ["the wan princess"] and "the wan princess" in rep["facts"]["cover_phrases"]
     assert rep["candidates"][0]["name"] == "The Swan Princess" and core.is_probable(rep["candidates"])
+
+
+def test_same_disc_takes_the_fingerprint_again(tmp_path):
+    """Before a rip or Detect titles: the disc in the drive still the one scanned, by its fingerprint taken again
+    (file sizes alone): another disc, or none, isn't."""
+    disc = fixtures.make_movie_bluray(str(tmp_path / "FILM"))
+    fmt, base = core.detect_format(disc)
+    h = core.fingerprint(fmt, base)["hash"]
+    assert core.same_disc(disc, h)
+    other = fixtures.make_movie_bluray(str(tmp_path / "OTHER"), minutes=120, seed=3)
+    assert not core.same_disc(other, h)
+    assert not core.same_disc(str(tmp_path / "EMPTY"), h)
+
+
+def test_shared_files_alone_name_no_disc():
+    """A disc nothing else identifies stays unidentified, though it shares files with another disc in your case
+    files: those are often a studio's own (its logo and warnings, on unrelated films), not a set's."""
+    rep = {"siblings": [{"hash": "1" * 32, "known_as": "21 (2008)", "label": "21", "confirmed": True,
+                         "shared_files": 2, "same_mastering_day": False}], "candidates": [], "discdb": {"hit": None}}
+    rep["status"] = core.status(rep, None)        # (as a scan works it out, before its best guess)
+    assert "21" not in rep["status"] and rep["status"].startswith("unidentified")
+    guess, why = core.best_guess(rep)
+    assert guess is None or "21" not in guess

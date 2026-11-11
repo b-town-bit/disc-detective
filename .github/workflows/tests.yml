@@ -31,6 +31,13 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         # the oldest and newest supported
         python: ["3.9", "3.14"]
+        # (Ubuntu 26.04, ubuntu-latest from 2026-10-19, has no Python 3.9 builds: 3.9 runs on 24.04)
+        exclude:
+          - os: ubuntu-latest
+            python: "3.9"
+        include:
+          - os: ubuntu-24.04
+            python: "3.9"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:

@@ -112,6 +112,9 @@ Disc data from [TheDiscDB](https://thediscdb.com), title data from IMDb's
 non-commercial datasets, episode lists from [TVmaze](https://www.tvmaze.com)
 (CC BY-SA), optional posters from TMDB. See [THIRD_PARTY.md](THIRD_PARTY.md).
 
+Information courtesy of IMDb (https://www.imdb.com). Used with permission.
+This product uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB.
+
 Copyright (c) 2026 Brady Field. Source-available under the
 [PolyForm Noncommercial License 1.0.0](LICENSE): free to use, change and share for
 non-commercial purposes. Versions released before 2026-11-07 were released under the MIT License.

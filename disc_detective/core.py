@@ -105,7 +105,10 @@ TMDB_API = "https://api.themoviedb.org/3"
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 GEMINI_MODELS = ("gemini-3.5-flash-lite", "gemini-3.8-flash")   # free-tier models; the first that answers
 TMDB_IMG = "https://image.tmdb.org/t/p/w342"
-TMDB_CREDIT = "This product uses the TMDB API but is not endorsed or certified by TMDB."
+# (TMDB's API terms, section 3, as of 2023-10-20: shown with its logo)
+TMDB_CREDIT = "This product uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB."
+# (IMDb's condition for using its non-commercial datasets: this statement, word for word)
+IMDB_CREDIT = "Information courtesy of IMDb (https://www.imdb.com). Used with permission."
 DISCDB_RAW = "https://raw.githubusercontent.com/TheDiscDb/data/main/data/"
 # A slim index of TheDiscDB (fingerprints, big-file sizes, title lists, IMDb ids; no images),
 # rebuilt weekly by a GitHub Action and published as a release asset. Override with env
@@ -210,6 +213,19 @@ def fingerprint(fmt, base):
         "files": [(f, st.st_size) for f, st in stats],
         "newest_mtime": max((st.st_mtime for _, st in stats), default=None),
     }
+
+
+def same_disc(root, content_hash):
+    """Whether the disc in root is still the one fingerprinted (its content_hash): the fingerprint
+    taken again (one folder's listing of sizes: quick), before anything else is done to it. A
+    case's folder rebuilt from its evidence (a sample): yes. No disc, or unreadable: no."""
+    if load_sample(root):
+        return True
+    try:
+        fmt, base = detect_format(root)
+        return bool(fmt) and fingerprint(fmt, base)["hash"] == content_hash
+    except OSError:
+        return False
 
 
 # --------------------------------------------------------------------------
@@ -6730,9 +6746,6 @@ def best_guess(rep):
         return names[0] + ("" if already else tail), "disc metadata (unconfirmed)"
     if lp.get("query"):
         return lp["query"] + tail, "volume label (unconfirmed)"
-    sib = next((x for x in rep.get("siblings") or [] if x.get("known_as")), None)
-    if sib:
-        return "same set as %s" % sib["known_as"], "sibling disc (unconfirmed)"
     if rep.get("cover") and rep["cover"].get("image"):
         return None, "cover art only (needs a look)"
     return None, "nothing yet"
@@ -6977,9 +6990,6 @@ def status(rep, key):
         return "unidentified; have search terms (%s)" % rep["imdb_note"]
     if rep.get("search_queries") and not c:
         return "unidentified; search terms found no confident match"
-    sib = next((x for x in rep.get("siblings") or [] if x.get("known_as")), None)
-    if sib:
-        return "unidentified; looks like the same set as %s (next disc in the set?)" % sib["known_as"]
     if rep.get("cover") and rep["cover"].get("image"):
         return "unidentified; the cover art likely shows the title (save it with --out DIR)" if not rep["cover"].get("saved") \
             else "unidentified; cover art saved - the title is likely on it (%s)" % rep["cover"]["image"]
@@ -6996,7 +7006,8 @@ def status(rep, key):
 # library: one SQLite file records every disc you scan
 # --------------------------------------------------------------------------
 # discs/titles are the shipped feature: your confirmed truths identify a disc
-# instantly next time, and other discs in the same set are spotted as siblings.
+# instantly next time, and a TV set's other discs are recognised by the files they share with
+# one you confirmed (find_siblings: a hint for the show and season, never an answer of its own).
 # evidence (IFO/playlist/metadata/cover bytes) is a dev/test aid, stored only with
 # --keep-evidence, so --corpus can re-parse every disc after a code change.
 
@@ -8107,10 +8118,6 @@ def print_report(rep):
         p("  menu OCR    %s" % " / ".join(rep["menu_ocr"]))
     elif rep.get("cover") and rep["cover"].get("image"):
         p("  cover OCR   no confident text (stylized artwork); view the image")
-    for sib in rep.get("siblings") or []:
-        p("  sibling     %s (%s): %d identical asset file%s%s" % (
-            sib["known_as"] or "unknown disc", sib["hash"][:8], sib["shared_files"],
-            "" if sib["shared_files"] == 1 else "s", ", same mastering day" if sib["same_mastering_day"] else ""))
     if rep.get("structure_error"):
         p("  structure   could not parse: %s" % rep["structure_error"])
 
