@@ -2695,9 +2695,11 @@ def test_screenshots(gui, tmp_path, imdb_dir, monkeypatch):
     assert len(os.listdir(SHOTS)) >= 6
 
 
-def test_about_gives_the_notices_the_data_sources_ask_for(gui):
+def test_about_gives_the_notices_the_data_sources_ask_for(gui, monkeypatch):
     """IMDb's statement word for word, and TMDB's notice with its logo (each one's terms ask for them)."""
     root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    dd_app.App(root)                            # (as it's opened: the app's window, its styles set up)
     d = dd_app.AboutDialog(root)
     texts = " ".join(str(w.cget("text")) for w in made_widgets(d.top) if w.winfo_class() == "TLabel")
     assert core.IMDB_CREDIT in texts and core.TMDB_CREDIT in texts
@@ -2798,3 +2800,23 @@ def test_a_disc_taken_out_during_the_scans_program_step_ends_the_scan(gui, monke
         app._program_map("E:\\", {"format": "DVD", "content_hash": "B" * 32})
     out["in"] = True                            # (not after the step: nothing asked)
     menus.pause(0)
+
+
+def test_icons_belong_to_the_tk_that_made_them():
+    """A second Tk (each test's own, a window made again) gets its own icon pictures: one cached from a Tk
+    that's gone is no picture to the next ("image pyimage2570 doesn't exist", on CI)."""
+    from disc_detective import theme
+    try:
+        first = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display")
+    a = theme.icon("external")
+    first.destroy()
+    second = tk.Tk()
+    try:
+        b = theme.icon("external")
+        if b is not None:
+            assert b is not a
+            tk.Label(second, image=b)            # (a picture of this Tk's)
+    finally:
+        second.destroy()
