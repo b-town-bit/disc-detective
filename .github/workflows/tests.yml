@@ -17,8 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       - run: pip install ruff
@@ -31,7 +31,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         # the oldest and newest supported
         python: ["3.9", "3.14"]
-        # (Ubuntu 26.04, ubuntu-latest from 2026-10-19, has no Python 3.9 builds: 3.9 runs on 24.04)
+        # Python 3.9 isn't built for Ubuntu 26.04 (ubuntu-latest since Oct 2026): test it on 24.04
         exclude:
           - os: ubuntu-latest
             python: "3.9"
@@ -44,8 +44,8 @@ jobs:
       # pictures of the app's windows on each system (the newest Python's run), saved below
       DISC_DETECTIVE_SCREENSHOTS: ${{ matrix.python == '3.14' && format('{0}/screenshots', github.workspace) || '' }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
