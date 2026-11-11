@@ -13,6 +13,23 @@ contributions too.
 The agreement lets the project keep the freedom to license Disc Detective in other ways in
 the future. Please read it before you sign.
 
+## Building the download-and-run package
+
+`release/build.py` builds it for the system it runs on (PyInstaller; one folder, zipped), gathers
+the licence of every package it bundles into `licenses/`, and runs the built program's
+self-check (`--self-check`: its modules, files, RapidOCR, OpenCV and a window). In a Python 3.14
+environment, from the repository's root:
+
+```
+pip install ".[windows-ocr]" pyinstaller     # on macOS or Linux: pip install . pyinstaller
+python release/build.py
+```
+
+The zip lands in `dist/`. CI's **Build** workflow does the same on all three systems, and a
+version tag makes a draft release with the three zips. A package added to the app that ships
+no licence file stops the build: put its licence's text in `release/licenses` and name it in
+`NO_FILE` in `release/build.py`.
+
 ## Looking after Linux or macOS
 
 Disc Detective is built and tested by hand on Windows. On Linux and macOS the automated tests

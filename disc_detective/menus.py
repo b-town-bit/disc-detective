@@ -1936,6 +1936,8 @@ def keeping_test_data():
     flag = core.env("TEST_DATA")
     if flag is not None:
         return flag.strip().lower() not in ("0", "no", "false", "")
+    if getattr(sys, "frozen", False):           # (a packaged build: never a developer's copy, wherever it's unzipped)
+        return False
     return os.path.isdir(os.path.join(_checkout(), ".git"))
 
 
