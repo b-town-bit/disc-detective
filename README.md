@@ -39,6 +39,19 @@ but nobody has tried them with a real disc drive, MakeMKV or VLC yet. If you use
 [bug reports](../../issues/new/choose) help a lot, and so would someone to look after it (see
 [Contributing](CONTRIBUTING.md#looking-after-linux-or-macos)).
 
+### Download and run
+
+Each [release](../../releases) has a zip for Windows, macOS and Linux with everything the app
+needs inside, Python included: unzip it anywhere and open **Disc Detective** (on Windows,
+`Disc Detective.exe` in the folder). Nothing else to install first; the programs it works with
+(MakeMKV, VLC, FFmpeg) are offered in Settings.
+
+The program isn't code-signed yet, so the first time, Windows may say "Windows protected your
+PC": choose **More info**, then **Run anyway**. On macOS, right-click the app and choose
+**Open**. The licences of everything bundled are in its `licenses` folder.
+
+### From source
+
 Needs Python 3.9 to 3.14 with Tkinter (included in the python.org installer for Windows
 and macOS). Python 3.15 isn't supported yet: some of what it uses doesn't run on it.
 
