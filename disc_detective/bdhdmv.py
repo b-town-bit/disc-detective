@@ -34,6 +34,103 @@ def aacs_library():
     return None
 
 
+CLEAR = (0, 0, 0, 0)            # a page drawn over nothing: laid over its video's still, the picture Edit titles shows
+PHOTO_AT = 3                    # seconds into the menu's video for its still: past a fade from black
+PHOTO_BYTES = 16 << 20          # of its clip read for it: about 4 seconds of HD video (Harry Potter 1's: 0.8 s a still)
+DARK = 12                       # a still this dark on average (0-255): black, or nearly: a later frame taken
+MENU_PAGE_SECONDS = 120         # a menu page's playlist, as long as this at most (Harry Potter 1's: 34 s and less)
+MENU_PAGE_BLANK = 2             # seconds: a playlist this short only sets a menu going (Harry Potter 1's 00027: 0 s)
+
+
+def menu_video(cm, model, titles=()):
+    """The clip whose video shows under a menu (plan["menus"]'s cm): the menu's own, when it's in the video's clip
+    ("multiplexed"); else the first clip of what plays while it shows, its way there ending "plays N" (a pop-up
+    over the film, a menu over a loop of its own: Harry Potter 1's 00030, over 00027's 00026), as the scan has it
+    (its titles' clip_list: every playlist's). None: nothing known to show under it."""
+    if model == "multiplexed":
+        return cm["stream"]["clip"]
+    steps = cm.get("path") or []
+    hit = re.fullmatch(r"plays (\d+)", steps[-1]) if steps else None
+    if not hit:
+        return None
+    pl = "%05d.mpls" % int(hit.group(1))
+    known = next((t for t in titles if t.get("id") == pl), None)
+    clips = [c for c in ((known or {}).get("clip_list") or "").split(",") if c]
+    return clips[0] if clips else None
+
+
+def video_still(disc, root, clip, log=print):
+    """A frame of a clip's video, as RGB (Pillow), for a menu page's photo; None if there's no way to one. The
+    clip's first PHOTO_BYTES read off the disc as it's open already (hdmv-menus' read_clip: decrypted with the
+    user's own library, as the menus were; nothing fetched or shipped), into a temporary file OpenCV decodes, and
+    deleted at once; with a library too old for read_clip, the file itself, for an unencrypted copy (a decrypted
+    backup) only. PHOTO_AT seconds in, past a fade from black; later, if that's dark, as far as the bytes go."""
+    import tempfile
+    from PIL import Image, ImageStat
+    try:
+        import cv2
+    except ImportError:
+        return None
+    try:
+        if hasattr(disc, "read_clip"):
+            data = disc.read_clip(clip, 0, PHOTO_BYTES)
+        else:
+            path = os.path.join(root, "BDMV", "STREAM", "%s.m2ts" % clip)
+            with open(path, "rb") as fh:
+                data = fh.read(6144)
+                # (a transport stream's first unit, its copy bits set: encrypted; AACS leaves the first 16
+                # bytes of a unit, its header and the packet's sync byte, as they are)
+                if len(data) > 4 and data[4] == 0x47 and data[0] & 0xC0:
+                    return None
+                data += fh.read(PHOTO_BYTES - len(data))
+    except (OSError, RuntimeError, ValueError) as exc:
+        log("hdmv-menus: no still of clip %s: %s" % (clip, exc))
+        return None
+    if not data:
+        return None
+    dark = lambda im: sum(ImageStat.Stat(im.convert("L")).mean) < DARK
+    fd, path = tempfile.mkstemp(prefix="dd_still_", suffix=".m2ts")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        del data
+        cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
+        try:
+            fps = cap.get(cv2.CAP_PROP_FPS) or 24
+            if not 1 <= fps <= 120:
+                fps = 24
+            got, n = None, 0
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                n += 1
+                if n >= PHOTO_AT * fps:
+                    got = frame
+                    if not dark(Image.fromarray(frame[:, :, ::-1])):
+                        break
+                elif got is None or n % 8 == 0:
+                    got = frame                 # (a short clip: the last frame there is)
+        finally:
+            cap.release()
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return Image.fromarray(got[:, :, ::-1]).convert("RGB") if got is not None else None
+
+
+def photo(picture, still):
+    """A page (or a button lit) as a player shows it: the menu's drawing (its see-through parts and all) over its
+    video's still, the still made the drawing's size; RGB, SIZE."""
+    from PIL import Image
+    drawing = picture.to_pil()
+    back = still.convert("RGBA").resize(drawing.size, Image.LANCZOS)
+    back.alpha_composite(drawing)
+    return back.convert("RGB").resize(SIZE, Image.LANCZOS)
+
+
 def _rgb(picture):
     """A picture (hdmv_menus.Picture) over the background, as an RGB Pillow image."""
     from PIL import Image
@@ -325,12 +422,52 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
         routes = _routes(set(ids), cm["links"], ids[0]) if ids else {}
         # (its depth: the presses on its way there, a menu inside menus; menus.menu_titles' nearest the root)
         loaded[(clip, pid)] = {"n": n_menu, "menu": menu, "routes": routes, "depth": sum(" button " in x for x in cm["path"]), "steps": {x for r in routes.values() for x in r},
+                               "under": menu_video(cm, (menu.composition or {}).get("stream_model"), titles),
+                               "first": ids[0] if ids else None, "cm": cm,
                                "outcome": {(x["page"], x["button"]): x["outcome"] for x in cm["links"]}}
+    # playlists that are menu pages, not titles: playing one brings up a menu of its own, over its video (Harry
+    # Potter 1's yearbook: 00090, then 00080, 00081..., one for each page turned; 00027, under the special
+    # features). Signs that add up: it names a menu that's always on screen (not a pop-up over a film: that's the
+    # film's); that menu is in its own video's clip (00080's clip is menu 00098's), or it plays next to nothing
+    # (00027: 0 s, the menu then shows); it's short; and it's one chapter. A clip with a menu laid over it while it
+    # plays, a Back button (the yearbook's 63 s character clips: 00083 plays 00107, its menu's 00108), or a
+    # title that ends in a menu, longer or in chapters: titles. {playlist: the menu it brings up}
+    info = {t["id"]: t for t in titles}
+    menu_pages = {}
+    for k, m in loaded.items():
+        if ((m["menu"].composition or {}).get("ui_model") or "").lower().replace("_", "-") == "pop-up":
+            continue
+        for pl in m["cm"]["stream"].get("playlists") or []:
+            t = title_for(int(pl)) if str(pl).isdigit() else None
+            if not t:
+                continue
+            own = [c for c in (info[t].get("clip_list") or "").split(",") if c][:1] == [k[0]]
+            seconds = lengths.get(t) or 0
+            if (own or seconds <= MENU_PAGE_BLANK) and seconds <= MENU_PAGE_SECONDS and (info[t].get("chapters") or 1) <= 1:
+                menu_pages.setdefault(int(pl), k)
+    if menu_pages:
+        log("hdmv-menus: menu pages, not titles: %s" % ", ".join(
+            "%05d (menu %s)" % (pl, k[0]) for pl, k in sorted(menu_pages.items())))
+    # and the button each such menu is brought up by, on the menu before (its way there's last press, then its
+    # playlist): its pages' routes go on from there, as a DVD page's from the page before
+    came_from = {}
+    for k, m in loaded.items():
+        steps = m["cm"].get("path") or []
+        hit = re.fullmatch(r"plays (\d+)", steps[-1]) if steps else None
+        press = next((x for x in reversed(steps[:-1]) if " button " in x), None) if hit else None
+        pm = re.fullmatch(r"(\w+) page (\d+) button (\d+)", press or "")
+        if hit and pm and menu_pages.get(int(hit.group(1))) == k:
+            parent = next((q for q in loaded if q[0] == pm.group(1)), None)
+            if parent is not None and parent != k:
+                came_from[k] = (parent, int(pm.group(2)), int(pm.group(3)))
 
     def worth(m, page_id, b_id):
-        """What a button does that's worth having: ("plays", title) or ("goes_to", page), else None; and
-        whether a full crawl (not "titles") reads its words."""
+        """What a button does that's worth having: ("plays", title) or ("goes_to", page, its menu's number),
+        else None; and whether a full crawl (not "titles") reads its words."""
         o = m["outcome"].get((page_id, b_id)) or {"kind": "ended"}
+        if o["kind"] == "play" and o.get("playlist") in menu_pages:       # (a menu page's playlist: its menu)
+            to = loaded[menu_pages[o["playlist"]]]
+            return ("goes_to", to["first"], to["n"]), True
         if o["kind"] == "play" and title_for(o["playlist"]):
             return ("plays", title_for(o["playlist"])), tv or not o.get("mark") or scope == "all"
         if o["kind"] == "page" and o.get("page") is not None and o["page"] != page_id and \
@@ -414,7 +551,7 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
         tries, videos = [], set()
         for t in plan["titles"]:
             tid = title_for(t["playlist"])
-            if not tid or tid in play_alls or video.get(tid, tid) in videos:
+            if not tid or tid in play_alls or video.get(tid, tid) in videos or t["playlist"] in menu_pages:
                 continue
             keys = [(b["clip"], b["pid"], b["page"], b["button"]) for b in t["buttons"] if (b["clip"], b["pid"]) in loaded]
             if keys:
@@ -451,6 +588,9 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
                         break
                 else:
                     tried[vid] = tried.get(vid, 0) + 1
+        for parent, page_id, b_id in came_from.values():
+            if parent + (page_id, b_id) not in got and page_id in pages_of[parent]:
+                look(parent + (page_id, b_id))
     else:
         wanted = [(k + (p["id"], b["id"])) for k, m in loaded.items() for p in m["menu"].pages for b in m["menu"].buttons(p)
                   if worth(m, p["id"], b["id"])[1]]
@@ -482,7 +622,7 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
                     entry["plays"] = {"title": it[1], "chapter": (o.get("mark") or 0) + 1, "seconds": lengths[it[1]], "engine": True}
                     scenes = scenes or bool(o.get("mark"))
                 else:
-                    entry["goes_to"] = {"page": it[1], "program": n_menu, "engine": True}
+                    entry["goes_to"] = {"page": it[1], "program": it[2] if len(it) > 2 else n_menu, "engine": True}
                 text, how_sure, others = got.get(key + (page["id"], b["id"]), ("", None, []))
                 read_here += (key + (page["id"], b["id"])) in got
                 entry["text"] = str(text)
@@ -498,6 +638,27 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
                           "mixed": False, "buttons": buttons, "menu": clip, "read": read_here,
                           "route": [{"page": p, "program": n_menu, "button": btn} for p, btn in m["routes"].get(page["id"], [])],
                           "image": "hdmv_%s_p%d.png" % (clip, page["id"]), "_page": page})
+    # a menu brought up by a menu page's playlist: its pages' routes go on from the button that brought it up (and
+    # that page's own route before it), as a DVD page's from the page before: what's above a page, its name from
+    # the button that leads there (menus.page_from), the kinds a heading-less page holds
+    at = {(p["menu"], p["program"], p["page"]): p for p in pages}
+    done = set()
+
+    def carried(k):
+        if k in done or k not in came_from:
+            return
+        done.add(k)
+        parent, page_id, b_id = came_from[k]
+        carried(parent)
+        before = at.get((parent[0], loaded[parent]["n"], page_id))
+        if before is None:
+            return
+        step = [{"page": page_id, "program": loaded[parent]["n"], "button": b_id}]
+        for p in pages:
+            if (p["menu"], p["program"]) == (k[0], loaded[k]["n"]):
+                p["route"] = list(before.get("route") or []) + step + list(p.get("route") or [])
+    for k in list(came_from):
+        carried(k)
     # a page with no words read, whose titles have none anywhere: a menu drawn over its video, the art in
     # the film, the disc's files only its highlights (Order of the Phoenix's editing game): nothing to name
     # (words: letters, not a "?" read off a box of colour)
@@ -509,16 +670,45 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
               and not any(b.get("plays", {}).get("title") in named for b in p["buttons"])]:
         log("hdmv-menus: menu %s page %d: no words on its buttons, left out" % (p["menu"], p["page"]))
         pages.remove(p)
+    # Taking photos for evidence: a still of the video under each kept page's menu (video_still), its drawing laid
+    # over it, for Edit titles to show as a player would (menus.photo_of); the drawings over black stay as they
+    # were, for the readings (read_again and the rest read them again)
+    menu_of = {(p["menu"], p["program"]): next(k for k in loaded if k[0] == p["menu"] and loaded[k]["n"] == p["program"])
+            for p in pages}
+    under = {loaded[k]["under"] for k in menu_of.values()} - {None}
+    stills = {}
+    if under:
+        tell("photos")
+        t_photos = time.time()
+        log("hdmv-menus: capturing %d still%s" % (len(under), "" if len(under) == 1 else "s"))
+        for k in menu_of.values():
+            clip = loaded[k]["under"]
+            if clip is not None and clip not in stills:
+                stills[clip] = video_still(disc, root, clip, log)
+        took = sum(v is not None for v in stills.values())
+        log("hdmv-menus: captured %s still%s in %.1f s%s" % (
+            took if took == len(stills) else "%d of %d" % (took, len(stills)), "" if len(stills) == 1 else "s",
+            time.time() - t_photos,
+            # (a library from before read_clip: only a decrypted copy's clips can be read)
+            "" if took == len(stills) or hasattr(disc, "read_clip") else
+            " (an encrypted disc's need hdmv-menus 0.1.2 or later)"))
     for p in pages:
-        k = next(k for k in loaded if k[0] == p["menu"] and loaded[k]["n"] == p["program"])
+        k = menu_of[(p["menu"], p["program"])]
         page = p.pop("_page")
+        still = stills.get(loaded[k]["under"])
         drawn = seen[k + (page["id"],)][0] if k + (page["id"],) in seen else \
             _rgb(loaded[k]["menu"].draw(page, background=BACKGROUND))
         drawn.resize(SIZE, Image.LANCZOS).save(os.path.join(out_dir, p["image"]))
+        if still is not None:
+            photo(loaded[k]["menu"].draw(page, background=CLEAR), still).save(
+                menus.photo_of(os.path.join(out_dir, p["image"])))
         for b in p["buttons"]:                  # (and with each button read that plays a title selected)
             if b.get("picture") and b.get("text"):
                 lit = _rgb(loaded[k]["menu"].draw(page, selected=b["n"], background=BACKGROUND))
                 lit.resize(SIZE, Image.LANCZOS).save(os.path.join(out_dir, b["picture"]))
+                if still is not None:
+                    photo(loaded[k]["menu"].draw(page, selected=b["n"], background=CLEAR), still).save(
+                        menus.photo_of(os.path.join(out_dir, b["picture"])))
             else:
                 b.pop("picture", None)
         own = [b.pop("_b") for b in p["buttons"]]

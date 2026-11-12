@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 tk = pytest.importorskip("tkinter")
-from disc_detective import app as dd_app, core  # noqa: E402
+from disc_detective import app as dd_app, core, menus  # noqa: E402
 import fixtures  # noqa: E402
 
 pytestmark = pytest.mark.gui
@@ -1073,6 +1073,64 @@ def test_help_thediscdb_lists_your_discs(gui, tmp_path, monkeypatch):
     d.top.destroy()
 
 
+def test_a_packet_reads_every_title_and_keeps_that_reading(gui, tmp_path, monkeypatch):
+    """TheDiscDB's logs list every title however short: with no reading kept and the disc in the drive, Build
+    packet has MakeMKV read it (this drive, no minimum length), keeps that, and uses it from then on without the
+    disc. With only a reading kept before every one had no minimum, the packet is built but says to build it again."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    db = str(tmp_path / "lib.sqlite")
+    h = "9B9067B7" + "0" * 24
+    con = core.library_open(db)
+    with con:
+        con.execute("INSERT INTO discs (hash, format, label, status, best_guess, truth, first_seen, last_seen) "
+                    "VALUES (?, 'DVD', 'ARSENIC', 'x', 'Arsenic and Old Lace (1944)', 'Arsenic and Old Lace (1944)', "
+                    "'2026', '2026')", (h,))
+        con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?, 'Title 1', 'feature', 7080)", (h,))
+    con.close()
+    orig = app.scan_args
+
+    def args():
+        a = orig()
+        a.db, a.discdb_dir, a.no_discdb_online = db, str(tmp_path / "none"), True
+        return a
+    monkeypatch.setattr(app, "scan_args", args)
+    logs = tmp_path / "makemkv_logs"
+    monkeypatch.setattr(dd_app.di, "makemkv_log_store", lambda h: str(logs / ("%s-all.txt" % h)))
+    monkeypatch.setattr(app, "makemkv_exe", lambda: "makemkvcon64.exe")
+    monkeypatch.setattr(dd_app.os, "startfile", lambda p: None, raising=False)
+    monkeypatch.setattr(dd_app.subprocess, "Popen", lambda *a, **k: None)
+    runs = []
+    reading = 'CINFO:2,0,"ARSENIC"\nTINFO:0,9,0,"1:58:00"\nTINFO:0,24,0,"1"\nTINFO:0,27,0,"t00.mkv"\n'
+    monkeypatch.setattr(dd_app.subprocess, "run", lambda cmd, **kw: (runs.append(cmd), SimpleNamespace(stdout=reading))[1])
+    d = dd_app.HelpDiscDBDialog(root, app)
+    assert pump(lambda: "Up to date" in d.status.cget("text"), 20)
+    tv = d.lists["submit"]["tv"]
+    tv.selection_set(tv.get_children()[0])
+    root.update()
+    # only an older reading, at MakeMKV's minimum, and the disc elsewhere: built, with a word to build it again
+    logs.mkdir()
+    (logs / ("%s.txt" % h)).write_text(reading)
+    d.build_packet()
+    assert pump(lambda: "Packet" in d.status.cget("text"), 10)
+    assert "leaves out the shortest titles" in d.status.cget("text") and not runs
+    # the disc in the drive: read with no minimum, this drive only, and kept
+    app.rep, app.source = {"content_hash": h}, SimpleNamespace(get=lambda: "E:")
+    d.status.config(text="")
+    d.build_packet()
+    assert pump(lambda: "Packet" in d.status.cget("text"), 10)
+    assert runs[-1][1:] == ["-r", "--noscan", "--cache=1", "--minlength=0", "info", "dev:E:"]
+    assert "Packet ready" in d.status.cget("text") and (logs / ("%s-all.txt" % h)).read_text() == reading
+    # from then on, without the disc: that reading, no MakeMKV
+    app.rep = None
+    d.status.config(text="")
+    d.build_packet()
+    assert pump(lambda: "Packet" in d.status.cget("text"), 10)
+    assert "Packet ready" in d.status.cget("text") and len(runs) == 1
+    d.top.destroy()
+
+
 def test_label_titles_saves_your_labels(gui, tmp_path, monkeypatch):
     root, made, pump = gui
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
@@ -1499,10 +1557,20 @@ def test_the_menu_button_that_plays_a_title(gui, tmp_path, monkeypatch):
     assert sorted(d.pictures) == ["Title 1", "Title 2"]         # (a picture no longer there: none)
     d.show_picture("Title 2")
     v = d.viewer
-    assert v.alive() and v.head.cget("text") == "Title 2 plays from this button"
+    # (its heading: the menu it's on, the first here; the button's own words on the picture link's hover)
+    assert v.alive() and v.head.cget("text") == "Main Menu"
+    assert d.button_title("Title 2") == "Making Of" and d.button_title("Title 1") == ""
     assert "Making Of" in v.said.cget("text") and v.photo is not None
     d.show_picture("Title 1")
     assert d.viewer is v and "couldn't read" in v.read.cget("text")      # one window, reused
+    assert dd_app.menu_name("Yearbook Character Clips") == "Yearbook Character Clips Menu"
+    assert dd_app.menu_name("SPECIAL FEATURES") == "Special Features Menu" and dd_app.menu_name("Bonus Menu") == "Bonus Menu"
+    # a photo of the page beside its picture (a Blu-ray's, over its video): that one shown, the picture kept
+    red = lambda: v.photo.get(5, 5)
+    assert red()[2] > red()[0]                                  # (the picture's navy)
+    Image.new("RGB", (720, 480), (200, 30, 30)).save(menus.photo_of(page))
+    d.show_picture("Title 1")
+    assert red()[0] > red()[2]                                  # (the photo's red, dimmed round the button)
     # the guide to the types (TYPE's help): every type in the list, one window
     assert {t for t, _, _ in dd_app.TypeGuide.TYPES} == set(core.LABEL_TYPES)
     d.heads["TYPE"].event_generate("<Button-1>")
@@ -1536,6 +1604,31 @@ def test_redrawing_the_details_keeps_the_layout(gui, monkeypatch):
     app.show_details(rep)                                       # changed: redrawn, in the same place
     assert row() == before and app.details.winfo_children() != shown
     assert any(str(w.cget("text")) == "ANOTHER_DISC" for w in app.details.winfo_children() if w.winfo_class() == "TLabel")
+
+
+def test_the_fingerprint_shows_whole_on_hover_and_copies_whole(gui, monkeypatch):
+    """The card shows a fingerprint's first 8 characters; it's the whole one that names the disc (on TheDiscDB, in
+    your case files), so that's the one on hover and the one copied."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    full = "C5993CC7FF62E0471F3C1A871B271A7E"
+    rep = {"content_hash": full, "format": "Blu-ray", "kind": "movie", "best_guess": "Film (2001)",
+           "candidates": [{"kind": "movie", "name": "Film", "year": 2001, "imdb_id": "tt0000001", "score": 90}],
+           "titles": [{"id": "00000.mpls", "role": "feature", "duration": 6000}], "facts": {}}
+    app.scan_done(rep, None)
+    root.update()
+    shown, copy = app.fingerprint_tips
+    assert shown.widget.cget("text") == "C5993CC7"
+    for tip, said in ((shown, full), (copy, "Copy the whole fingerprint")):
+        tip.show()
+        root.update()
+        assert [w.cget("text") for w in tip.tip.winfo_children()[0].winfo_children()] == [said]
+        tip.hide()
+    copy.widget.event_generate("<Button-1>")
+    copy.widget.event_generate("<ButtonRelease-1>")
+    root.update()
+    assert root.clipboard_get() == full
 
 
 def test_detect_titles_button(gui, tmp_path, monkeypatch):
@@ -1681,7 +1774,7 @@ def test_makemkv_reads_a_confirmed_disc_ahead(gui, tmp_path, monkeypatch):
     app.prescan(rep)
     job = app.mkv_scan
     assert job and pump(lambda: runs, 5)
-    assert runs[-1][1:] == ["-r", "--noscan", "--cache=1", "info", "dev:E:"]      # this drive only
+    assert runs[-1][1:] == ["-r", "--noscan", "--cache=1", "--minlength=0", "info", "dev:E:"]   # this drive, every title
     # the rip card's lab light: it breathes while the lab works, then says it's done
     assert app.bg_box.winfo_manager() and app.bg_lbl.cget("text") == "The lab is examining the disc…"
     assert app.bg_dot._pulse

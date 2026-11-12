@@ -1,5 +1,7 @@
 """A Blu-ray's HDMV menus through the hdmv-menus library (bdhdmv), on a stand-in for the library: a disc of
 a pop-up menu with a bar and a page of extras, as Order of the Phoenix's."""
+import os
+import re
 import sys
 import types
 
@@ -391,3 +393,169 @@ def test_a_button_read_is_pictured_selected(library, tmp_path):
     assert not any("picture" in b for p in got["pages"] for b in p["buttons"] if b["n"] == 77)    # (not read)
     pic = got["found"]["pictures"]["00060.mpls"]
     assert pic["image"].endswith("hdmv_00095_p2_b69.png") and pic["text"] == "RESUME MOVIE"
+
+
+REAL_STILL = bdhdmv.video_still          # (conftest stands it in for every test: no real drive read for a still)
+
+
+def test_a_menus_photo_is_of_the_video_that_shows_under_it():
+    """A menu in its video's clip: that clip; one of its own (preloaded): the first clip of what plays while it
+    shows, its way there's last play, as the scan lists it (Harry Potter 1's 00030 over 00027's 00026); else
+    nothing to photograph it over."""
+    own = {"stream": {"clip": "00098", "playlists": ["00080"]}, "path": ["first play"]}
+    assert bdhdmv.menu_video(own, "multiplexed") == "00098"
+    titles = [{"id": "00027.mpls", "clip_list": "00026"}]
+    loose = {"stream": {"clip": "00030", "playlists": []}, "path": ["first play", "plays 00027"]}
+    assert bdhdmv.menu_video(loose, "preloaded", titles) == "00026"
+    assert bdhdmv.menu_video(loose, "preloaded", []) is None              # (not in the scan: none)
+    assert bdhdmv.menu_video({"stream": {"clip": "x"}, "path": ["first play"]}, "preloaded", titles) is None
+
+
+def test_each_kept_page_is_photographed_over_its_menus_video(library, tmp_path, monkeypatch):
+    """Taking photos for evidence: once the names are read, one still of each menu's video (asked for once, of
+    the disc as it's open), the page drawn over it, and each button read drawn selected over it, saved beside the
+    pictures read (menus.photo_of); those stay the drawing over black, as they were read."""
+    asked = []
+
+    def still(disc, root, clip, log=print):
+        asked.append((root, clip))
+        return Image.new("RGB", (1920, 1080), (180, 20, 20))
+
+    class SeeThrough(Menu):                       # (a page with nothing drawn on it: all video)
+        composition = {"width": 1920, "height": 1080, "stream_model": "multiplexed"}
+
+        def draw(self, page, selected=None, background=(0, 0, 0, 0)):
+            return Picture(1920, 1080, colour=tuple(background))
+    monkeypatch.setattr(bdhdmv, "video_still", still)
+    library.shown = [("00072", SeeThrough(), LINKS, ["first play", "plays 00060"])]
+    told, said = [], []
+    got = bdhdmv.read("E:/", TITLES, str(tmp_path), log=said.append, aacs="libaacs.dll", read_words=read_name,
+                      progress=lambda *a: told.append(a), scope="language")
+    assert asked == [("E:/", "00072")] and ("photos",) in told
+    # (the log: how many to take, then how many were, and how long it took)
+    assert "hdmv-menus: capturing 1 still" in said
+    assert any(re.fullmatch(r"hdmv-menus: captured 1 still in \d+\.\d s", m) for m in said)
+    assert told.index(("photos",)) > max(i for i, t in enumerate(told) if t[0] == "page")      # (the names read first)
+    for p in got["pages"]:
+        shot = tmp_path / os.path.basename(menus.photo_of(p["image"]))
+        with Image.open(shot) as im, Image.open(tmp_path / p["image"]) as read:
+            assert im.size == bdhdmv.SIZE and im.getpixel((5, 5)) == (180, 20, 20)
+            assert read.getpixel((5, 5)) == (0, 0, 0)                   # (the one read: over black)
+    lit = [b["picture"] for p in got["pages"] for b in p["buttons"] if b.get("picture")]
+    assert lit and all((tmp_path / os.path.basename(menus.photo_of(x))).exists() for x in lit)
+
+
+def test_no_still_no_photo(library, tmp_path):
+    """Nothing to decode (a library too old for read_clip, an encrypted disc): the pages as they were, no photos."""
+    got = bdhdmv.read("E:/", TITLES, str(tmp_path), log=lambda m: None, aacs="libaacs.dll", read_words=read_name)
+    assert got["pages"] and not [f for f in os.listdir(tmp_path) if f.endswith("-photo.png")]
+
+
+def clip_video(path, fps=10, dark=30, light=20):
+    """A short video file, for the stand-in disc's clip: `dark` frames of black, then `light` of a colour."""
+    cv2 = pytest.importorskip("cv2")
+    import numpy as np
+    out = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), fps, (64, 36))
+    for i in range(dark + light):
+        out.write(np.zeros((36, 64, 3), np.uint8) if i < dark else np.full((36, 64, 3), (160, 120, 90), np.uint8))
+    out.release()
+    return path.read_bytes()
+
+
+def test_a_still_is_a_frame_past_a_fade_from_black_off_the_open_disc(tmp_path):
+    """The clip's first bytes from the disc as it's open (read_clip: no second unlocking), a frame PHOTO_AT
+    seconds in decoded by OpenCV, a later one if that's black; the temporary file gone after."""
+    data = clip_video(tmp_path / "v.avi")
+    asked = []
+
+    class Open:
+        def read_clip(self, clip, offset, length):
+            asked.append((clip, offset, length))
+            return data
+    import tempfile
+    before = set(os.listdir(tempfile.gettempdir()))
+    im = REAL_STILL(Open(), "E:/", "00098", log=lambda m: None)
+    assert asked == [("00098", 0, bdhdmv.PHOTO_BYTES)]
+    r, g, b = im.getpixel((10, 10))
+    assert abs(r - 90) < 25 and abs(b - 160) < 25                        # (OpenCV's BGR, made RGB)
+    assert not [f for f in set(os.listdir(tempfile.gettempdir())) - before if f.startswith("dd_still_")]
+
+
+def test_without_read_clip_an_encrypted_clip_gives_no_still(tmp_path):
+    """An older library: the clip's own file, for an unencrypted copy only; an encrypted one (its first unit's
+    copy bits set) isn't read further."""
+    stream = tmp_path / "BDMV" / "STREAM"
+    stream.mkdir(parents=True)
+    (stream / "00098.m2ts").write_bytes(bytes([0xC0, 0, 0, 0, 0x47]) + bytes(6139))
+    assert REAL_STILL(object(), str(tmp_path), "00098", log=lambda m: None) is None
+    (stream / "00099.m2ts").write_bytes(clip_video(tmp_path / "v.avi"))
+    assert REAL_STILL(object(), str(tmp_path), "00099", log=lambda m: None) is not None
+
+
+def test_a_playlist_that_brings_up_a_menu_is_a_menu_page_and_names_the_pages_after_it(library, tmp_path, monkeypatch):
+    """Harry Potter 1's yearbook: "Yearbook Character Clips" plays 00090, whose clip is the yearbook's first page,
+    a menu always on screen; its arrow plays 00080, the next page's. Short, one chapter, their clips menus of
+    their own: menu pages, not extras, their buttons leading there as a Next does; the clips on the pages (63 s,
+    no menu in their clips) the extras. Each page reached from the one before (its route carried on across
+    menus), so a page's name is the button that leads there, past the arrow."""
+    yb_names = {("00031", 2, 1): "Play Movie", ("00031", 2, 6): "Yearbook Character Clips", ("00118", 0, 1): "Harry Potter",
+                ("00098", 0, 1): "Ron Weasley"}
+    widths = {k: 300 + 10 * i for i, k in enumerate(yb_names)}
+
+    class Paged(Menu):
+        def __init__(self, clip, page, buttons):
+            self.clip, self.pages = clip, [{"id": page, "groups": [{"default": buttons[0][0],
+                                                                   "buttons": [button(b, x, y) for b, x, y in buttons]}]}]
+            self.composition = {"width": 1920, "height": 1080, "ui_model": "always-on", "stream_model": "multiplexed"}
+
+        def button_image(self, page, b, state="normal"):
+            key = (self.clip, page["id"], b["id"])
+            return Picture(widths[key], 40, b["x"], b["y"]) if key in yb_names else None
+    main = Paged("00031", 2, [(1, 100, 100), (6, 100, 300)])
+    first = Paged("00118", 0, [(1, 300, 300), (5, 200, 900)])
+    second = Paged("00098", 0, [(1, 300, 300)])
+    play = lambda page, b, pl: {"page": page, "button": b, "outcome": {"kind": "play", "playlist": pl, "mark": None, "title": 2}}
+    # (00108: a Back button laid over the 63 s clip 00083 while it plays, in a clip of its own: not a menu page)
+    overlay = Paged("00108", 0, [(1, 100, 900)])
+    own = {"00031": ["00000"], "00118": ["00090"], "00098": ["00080"], "00108": ["00083"]}
+    monkeypatch.setattr(sys.modules[__name__], "stream",
+                        lambda clip, lang="eng": {"clip": clip, "pid": 0x1400, "lang": lang, "playlists": own[clip]})
+    library.shown = [("00031", main, [play(2, 1, 0), play(2, 6, 90)], ["first play"]),
+                     ("00118", first, [play(0, 1, 83), play(0, 5, 80)], ["first play", "00031 page 2 button 6", "plays 00090"]),
+                     ("00098", second, [play(0, 1, 85)], ["first play", "00031 page 2 button 6", "plays 00090",
+                                                         "00118 page 0 button 5", "plays 00080"]),
+                     ("00108", overlay, [], ["first play", "00031 page 2 button 6", "plays 00090",
+                                             "00118 page 0 button 1", "plays 00083"])]
+    titles = [{"id": "00000.mpls", "duration": 9000.0, "chapters": 30, "clip_list": "00001"},
+              {"id": "00090.mpls", "duration": 32.0, "chapters": 1, "clip_list": "00118"},
+              {"id": "00080.mpls", "duration": 34.0, "chapters": 1, "clip_list": "00098"},
+              {"id": "00083.mpls", "duration": 63.3, "chapters": 1, "clip_list": "00107"},
+              {"id": "00085.mpls", "duration": 63.1, "chapters": 1, "clip_list": "00110"}]
+    reader = lambda img: next(yb_names[k] for k, w in widths.items() if w == img.width)
+    got = bdhdmv.read("E:/", titles, str(tmp_path), log=lambda m: None, aacs="libaacs.dll", read_words=reader)
+    buttons = {(p["menu"], b["n"]): b for p in got["pages"] for b in p["buttons"]}
+    assert "plays" not in buttons[("00031", 6)] and buttons[("00031", 6)]["goes_to"]["page"] == 0
+    assert buttons[("00031", 6)]["text"] == "Yearbook Character Clips"          # (read: it names what's after it)
+    assert "plays" not in buttons[("00118", 5)] and buttons[("00118", 5)]["goes_to"]["program"] != buttons[("00031", 6)]["goes_to"]["program"]
+    plays = {b["plays"]["title"] for b in buttons.values() if b.get("plays")}
+    assert plays == {"00000.mpls", "00083.mpls", "00085.mpls"}          # (the film, and the clips: not the menu pages)
+    extras = {e["title"] for e in got["found"]["extras"]}
+    assert {"00083.mpls", "00085.mpls"} <= extras and not extras & {"00090.mpls", "00080.mpls"}
+    second_page = next(p for p in got["pages"] if p["menu"] == "00098")
+    assert [r["button"] for r in second_page["route"]] == [6, 5]
+    pics = menus.title_pictures(got, str(tmp_path))
+    assert pics["00083.mpls"]["page_from"] == "Yearbook Character Clips"
+    assert pics["00085.mpls"]["page_from"] == "Yearbook Character Clips"          # (past the arrow)
+
+
+def test_a_longer_title_ending_in_a_menu_is_still_a_title(library, tmp_path, monkeypatch):
+    """A clip carrying a menu of its own, but long: a programme with a menu at its end, not a menu page; its
+    button plays it (Order of the Phoenix's Play All, 00089, an hour)."""
+    class Ending(Menu):
+        composition = {"width": 1920, "height": 1080, "ui_model": "always-on", "stream_model": "multiplexed"}
+    monkeypatch.setattr(sys.modules[__name__], "stream",
+                        lambda clip, lang="eng": {"clip": clip, "pid": 0x1400, "lang": lang, "playlists": ["00089"]})
+    library.shown = [("00072", Ending(), LINKS, ["first play", "plays 00060"])]
+    got = bdhdmv.read("E:/", TITLES, str(tmp_path), log=lambda m: None, aacs="libaacs.dll", read_words=read_name,
+                      scope="language")
+    assert any((b.get("plays") or {}).get("title") == "00089.mpls" for p in got["pages"] for b in p["buttons"])

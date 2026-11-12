@@ -35,7 +35,7 @@ from . import core as di
 from . import i18n
 from . import makemkv
 from . import tools
-from .makemkv import MAKEMKV_SWITCHES, NO_MINIMUM, makemkv_source
+from .makemkv import MAKEMKV_SWITCHES, makemkv_source
 from . import theme as th
 
 APP = "Disc Detective"
@@ -504,6 +504,17 @@ def fitted_label(parent, text, style="TLabel", width=30):
     lbl.bind("<Configure>", lambda e: fit_label(lbl, text, style))
     th.Tooltip(lbl, lambda: text if str(lbl.cget("text")) != text else "")
     return lbl
+
+
+def menu_name(came_from):
+    """A menu page's name, for its picture's heading: the button it's reached by and "Menu" ("Yearbook Character
+    Clips Menu"; one already a menu's, as it is), else the menu the disc opens on: "Main Menu"."""
+    words = " ".join((came_from or "").split())
+    if not words:
+        return "Main Menu"
+    if words.isupper():                           # (a button in capitals: "SPECIAL FEATURES")
+        words = words.title()
+    return words if re.search(r"\bmenu\s*$", words, re.I) else words + " Menu"
 
 
 def suspect_line(verb, k, n):
@@ -2246,9 +2257,14 @@ class App:
                 text = ttk.Label(tag, text=v, style="Badge.TLabel")
                 text.pack()
                 full = rep.get("content_hash", v)
-                th.link(cell, "", lambda full=full: (self.root.clipboard_clear(), self.root.clipboard_append(full),
-                                                     self.set_status("Fingerprint copied: %s" % full)),
-                        style="CardLink.TLabel", icon="copy").pack(side="left", padx=(8, 0))
+                # the card shows its first 8 characters: the whole one on hover, and copied whole (it's
+                # the whole one that names the disc on TheDiscDB and in your case files)
+                copy = th.link(cell, "", lambda full=full: (self.root.clipboard_clear(), self.root.clipboard_append(full),
+                                                            self.set_status("Fingerprint copied: %s" % full)),
+                               style="CardLink.TLabel", icon="copy")
+                copy.pack(side="left", padx=(8, 0))
+                self.fingerprint_tips = (th.Tooltip(text, lambda full=full: full),
+                                         th.Tooltip(copy, lambda: "Copy the whole fingerprint"))
                 tag.update_idletasks()
                 lift = (tag.winfo_reqheight() - text.winfo_reqheight()) // 2   # the tag's border and padding
             else:
@@ -3176,6 +3192,8 @@ class App:
                     count["before"] = count["total"]
                 count["total"] = count["before"] + n
                 line = suspect_line("Interrogating", count["before"] + k, count["total"])
+            elif stage == "photos":      # a Blu-ray's menu pages over their video, for Edit titles
+                line = "Taking photos for evidence…"
             else:
                 return
             self.post(self.tell, line)
@@ -3681,18 +3699,9 @@ class App:
                 with open(store, "w", encoding="utf-8", newline="") as fh:
                     fh.write(reading)
             plan = self.current_plan(mk["titles"], extras=opts["extras"], selected=opts["selected"])
-            # what you asked for, by the disc's own list: one MakeMKV's minimum length may have hid
-            # (its default's 2 minutes, but it can be set higher) is worth reading the disc again with
-            # no minimum for this rip (not saved: packets keep the reading they had, and a rip that
-            # needs none pays nothing)
+            # what you asked for, by the disc's own list, that MakeMKV doesn't list at all (with no
+            # minimum length, every title it can reach): a sting for those
             wanted = {p["title_id"] for p in self.current_plan(preview_titles(rep), extras=opts["extras"], selected=opts["selected"])}
-            switches = ()
-            if wanted - {p["title_id"] for p in plan}:
-                di.logger.info("titles asked for that MakeMKV's reading leaves out: reading it with no minimum length")
-                self.post(self.set_status, "Examining the disc again for the missing evidence…")
-                switches = NO_MINIMUM
-                reading = self.mkv.read_titles(source, switches)
-                plan = self.current_plan(di.parse_makemkv_log(reading)["titles"], extras=opts["extras"], selected=opts["selected"])
             missing = wanted - {p["title_id"] for p in plan}
             self.rip_problem = None
             own = {}                       # our playlists, once there are any: {its file: the title}
@@ -3701,7 +3710,7 @@ class App:
                     sting = self.mkv.sting(drive, missing, lambda: self.post(self.set_status, "Setting up a sting…"))
                     if sting:
                         source, own, undo = sting
-                        reading = self.mkv.read_titles(source, switches)     # (no minimum: already so, to get here)
+                        reading = self.mkv.read_titles(source)
                         plan = self.current_plan(makemkv.named_titles(reading, own), extras=opts["extras"], selected=opts["selected"])
                         missing = wanted - {p["title_id"] for p in plan}
                 except makemkv.STING_ERRORS as exc:
@@ -3739,7 +3748,7 @@ class App:
                 shutil.rmtree(work, ignore_errors=True)
                 os.makedirs(work)
                 progress = lambda fraction, i=i: self.post(self.progress.configure, {"value": int(1000 * (i + fraction) / len(plan))})
-                ok = self.mkv.title(source, number, work, expected, switches, progress)
+                ok = self.mkv.title(source, number, work, expected, progress=progress)
                 if self.mkv.numbers_changed and numbers is None and not self.cancelled:
                     # numbered differently from the reading the plan used (MakeMKV's minimum title
                     # length changed, or this is a backup of the disc read): read it again, once, and
@@ -3747,7 +3756,7 @@ class App:
                     # was: packets use it. A second difference stops the title rather than guess.
                     di.logger.warning("MakeMKV numbers this disc's titles differently from its saved reading: reading it again")
                     self.post(self.set_status, "The lab's numbering changed: examining the disc again…")
-                    fresh = self.mkv.read_titles(source, switches)
+                    fresh = self.mkv.read_titles(source)
                     expected = makemkv.makemkv_added(fresh)
                     again = self.current_plan(makemkv.named_titles(fresh, own), extras=opts["extras"], selected=opts["selected"])
                     numbers = {p["title_id"]: p["mk"] for p in again}
@@ -3758,7 +3767,7 @@ class App:
                         shutil.rmtree(work, ignore_errors=True)
                         os.makedirs(work)
                         self.post(self.set_status, "Bagging the evidence, %d of %d: %s" % (i + 1, len(plan), item["dest"].split("/")[-1]))
-                        ok = self.mkv.title(source, number, work, expected, switches, progress)
+                        ok = self.mkv.title(source, number, work, expected, progress=progress)
                 files = [f for f in os.listdir(work) if f.lower().endswith(".mkv")]
                 if ok and files and not self.cancelled:
                     dest = rip_path(os.path.join(out, *item["dest"].split("/")), item, rep)
@@ -4588,7 +4597,8 @@ class TitlesDialog:
         if pic:                                   # the menu button that plays it, to look at
             see = th.link(line, "", lambda: self.show_picture(tid), style="DeskLink.TLabel", icon="picture")
             see.pack(side="left", padx=(6, 0))
-            th.Tooltip(see, lambda: "The menu button that plays it")
+            th.Tooltip(see, lambda: "The menu button that plays it" + (
+                ": “%s”" % self.button_title(tid) if self.button_title(tid) else ""))
         if (self.vlc and re.fullmatch(r"Title \d+", tid)) or (self.ffplay and re.fullmatch(r"\d+\.mpls", tid)) or \
                 (self.vlc and tid in self.seen_playing()):
             watch = th.link(line, "", lambda: self.watch(tid), style="DeskLink.TLabel", icon="play")
@@ -4852,6 +4862,13 @@ class TitlesDialog:
             self.show_outcome("VLC's player wasn't found beside it: reinstall VLC, or set its folder in Settings",
                               th.WAX)
 
+    def button_title(self, tid):
+        """The words on the menu button that plays tid: its name as put right, else as read; "" if none was."""
+        said = ((self.rep or {}).get("detected") or {}).get(tid) or {}
+        if said.get("read") and said.get("title"):
+            return said["title"]
+        return " ".join(((self.pictures.get(tid) or {}).get("text") or "").split())
+
     def show_picture(self, tid):
         """The menu page with the button that plays tid outlined (one window, reused)."""
         v = self.viewer
@@ -5005,7 +5022,8 @@ class MenuPicture:
         top.configure(background=th.PARCHMENT)
         body = ttk.Frame(top, style="Desk.TFrame", padding=(14, 12, 14, 12))
         body.pack(fill="both", expand=True)
-        self.head = ttk.Label(body, text="", style="Title.TLabel", background=th.PARCHMENT)
+        self.head = ttk.Label(body, text="", style="Title.TLabel", background=th.PARCHMENT, wraplength=th.real(th.px(640)),
+                              justify="left")
         self.head.pack(anchor="w")
         # what it was read as: the name, a link when it was put right (read as, put right as: pointed at,
         # or clicked), then how to look at it
@@ -5071,7 +5089,7 @@ class MenuPicture:
         import base64
         import io
         from PIL import Image, ImageDraw, ImageEnhance
-        self.head.config(text="%s plays from this button" % tid)
+        self.head.config(text=menu_name(pic.get("page_from")))
         words = (pic.get("text") or "").strip()
         if pic.get("alone"):                      # (only the button: the disc's own image of it)
             self._said("Read as", pic, words)
@@ -5097,7 +5115,10 @@ class MenuPicture:
                          ("; point at it, or click it, to see the words it was read from (in red)." if words else ".") +
                          (" It's shown selected, as a player shows it." if pic.get("lit") else
                           " The menu's own highlight may be on another button."))
-        with Image.open(pic["image"]) as im:
+        # (a Blu-ray's page photographed over its video, where it was: as a player shows it; else as it was read)
+        from . import menus
+        shot = menus.photo_of(pic["image"])
+        with Image.open(shot if os.path.isfile(shot) else pic["image"]) as im:
             im = im.convert("RGB")
         sx, sy = im.width / self.FRAME[0], im.height / self.FRAME[1]
         # a spotlight: the rest of the menu a touch darker and paler, the button's area (and its
@@ -6078,7 +6099,8 @@ class HelpDiscDBDialog:
                 text = "%s. Fingerprint %s%s. A packet needs MakeMKV to read the disc: %s." % (
                     r["why"][0].upper() + r["why"][1:], r["hash"][:8],
                     (", mastered %s" % r["mastered"]) if r.get("mastered") else "",
-                    "a MakeMKV log is saved for it" if r["makemkv_log"] else "put the disc in the drive first")
+                    "its reading is saved" if os.path.exists(di.makemkv_log_store(r["hash"])) else
+                    "put the disc in the drive first")
         else:
             self.copy_i.config(state="normal" if r else "disabled")
             self.label_i.config(state="normal" if r else "disabled")
@@ -6115,16 +6137,19 @@ class HelpDiscDBDialog:
         if not r:
             return
         h = r["hash"]
-        stored = di.makemkv_log_store(h)
+        # MakeMKV's reading of every title (the lab's, a rip's, or one read now with the disc in the drive); with
+        # the disc elsewhere, one kept before every reading had no minimum (the checklist says to build it again)
+        stored, old = di.makemkv_log_store(h), di.makemkv_old_log_store(h)
         in_drive = bool(self.app.rep and self.app.rep.get("content_hash") == h)
         exe = self.app.makemkv_exe()
-        if not os.path.exists(stored) and not (in_drive and exe):
+        read = not os.path.exists(stored) and in_drive and exe
+        if not os.path.exists(stored) and not read and not os.path.exists(old):
             messagebox.showinfo("Help TheDiscDB", "A packet needs MakeMKV's reading of the disc.\n\n" + (
                 "Put this disc in the drive, scan it, then build the packet." if exe else
                 "Install MakeMKV (or set it in Settings), then scan this disc and build the packet."),
                 parent=self.top)
             return
-        if not os.path.exists(stored) and (self.app.mkv_scan or self.app.busy):
+        if read and (self.app.mkv_scan or self.app.busy):
             # one thing at a time on the drive
             messagebox.showinfo("Help TheDiscDB", "The drive is busy with this disc right now (the lab is examining "
                                 "it, or a scan, stakeout or rip is under way).\n\nBuild the packet when it's done.",
@@ -6134,25 +6159,27 @@ class HelpDiscDBDialog:
         out = os.path.join(os.path.dirname(args.db), "packets", "thediscdb_%s" % h[:8])
         drive = self.app.source.get()
         self.packet_btn.config(state="disabled")
-        self.status.config(text="Building the packet%s…" % ("" if os.path.exists(stored) else
-                                                            " (MakeMKV is reading the disc; this can take a minute)"))
+        self.status.config(text="Building the packet%s…" % (" (MakeMKV is reading every title on the disc; this can "
+                                                            "take a minute)" if read else ""))
 
         def work():
             try:
-                if os.path.exists(stored):
-                    with open(stored, encoding="utf-8", errors="replace") as fh:
-                        log_text = fh.read()
-                else:
+                every = True
+                if read:
                     log_text = subprocess.run([exe, *MAKEMKV_SWITCHES, "info", makemkv_source(drive)],
                                               capture_output=True, text=True, encoding="utf-8", errors="replace",
                                               timeout=900, creationflags=NO_WINDOW).stdout
                     if "TINFO:" not in log_text:
                         raise RuntimeError("MakeMKV returned no titles (is the disc in the drive?)")
                     os.makedirs(os.path.dirname(stored), exist_ok=True)
-                    with open(stored, "w", encoding="utf-8") as fh:          # next time: no need to read again
+                    with open(stored, "w", encoding="utf-8", newline="") as fh:   # next time: no need to read again
                         fh.write(log_text)
+                else:
+                    every = os.path.exists(stored)
+                    with open(stored if every else old, encoding="utf-8", errors="replace") as fh:
+                        log_text = fh.read()
                 con = di.library_open(args.db)
-                pk = di.build_packet(con, h, log_text, out)
+                pk = di.build_packet(con, h, log_text, out, every_title=every)
                 con.close()
                 self.app.post(lambda: self.packet_done(out, pk, None))
             except (Exception, SystemExit) as exc:
@@ -6168,7 +6195,10 @@ class HelpDiscDBDialog:
         if err:
             self.status.config(text="Couldn't build the packet: %s" % err)
             return
-        if pk.get("read_short"):
+        if not pk.get("every_title", True):
+            self.status.config(text="Packet built from an older reading of MakeMKV's, which leaves out the shortest titles. "
+                                    "Put the disc in the drive, scan it, then build it again.")
+        elif pk.get("read_short"):
             self.status.config(text="Packet built, but don't submit it yet: %s. Clean the disc, scan it again, then rebuild." % (
                 lab_short_text(pk["read_short"])[5:].replace(": check the disc", "")))
         else:

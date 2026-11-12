@@ -2084,3 +2084,31 @@ def test_a_crawls_waits_are_told_on_its_own_thread():
         with menus.waits_told(lambda stage, *a: (_ for _ in ()).throw(menus.Cancelled())):
             menus.pause(0)
     menus.pause(0)                                  # (and nothing told after: the crawl's gone)
+
+
+def test_a_page_is_named_by_the_button_its_reached_by_past_any_next_or_arrow():
+    """A page's name: the button it's reached by, on the page before; a Next, a Back, an arrow, an unread one
+    passed over for the one before it (Harry Potter 1's yearbook pages: an arrow, then "Yearbook Character
+    Clips"); a hub's ("Special Features") as good as any; the first menu: none."""
+    page = lambda n, route, buttons: (("bd", n, 1), {"domain": "bd", "page": n, "program": 1, "route": route,
+                                                     "buttons": buttons})
+    pages = dict([
+        page(0, [], [{"n": 1, "text": "SPECIAL FEATURES", "goes_to": {"page": 1, "program": 1}}]),
+        page(1, [{"page": 0, "program": 1, "button": 1}],
+             [{"n": 6, "text": "Yearbook Character Clips", "goes_to": {"page": 2, "program": 1}}]),
+        page(2, [{"page": 0, "program": 1, "button": 1}, {"page": 1, "program": 1, "button": 6}],
+             [{"n": 5, "text": "", "goes_to": {"page": 3, "program": 1}}]),
+        page(3, [{"page": 0, "program": 1, "button": 1}, {"page": 1, "program": 1, "button": 6},
+                 {"page": 2, "program": 1, "button": 5}], [{"n": 9, "text": "Next", "goes_to": {"page": 4, "program": 1}}]),
+        page(4, [{"page": 0, "program": 1, "button": 1}, {"page": 1, "program": 1, "button": 6},
+                 {"page": 2, "program": 1, "button": 5}, {"page": 3, "program": 1, "button": 9}], []),
+    ])
+    assert menus.page_from(pages, ("bd", 0, 1)) == ""
+    assert menus.page_from(pages, ("bd", 1, 1)) == "SPECIAL FEATURES"
+    assert menus.page_from(pages, ("bd", 2, 1)) == "Yearbook Character Clips"
+    assert menus.page_from(pages, ("bd", 3, 1)) == "Yearbook Character Clips"          # (past an arrow)
+    assert menus.page_from(pages, ("bd", 4, 1)) == "Yearbook Character Clips"          # (past an arrow and a Next)
+    for nav in ("Next", "BACK", ">>", "Main Menu", "Page 2", "Next Page", "Menu", "2"):
+        assert menus.NAV_RE.match(nav), nav
+    for name in ("Yearbook Character Clips", "More Features", "Back to the Future", "Special Features"):
+        assert not menus.NAV_RE.match(name), name

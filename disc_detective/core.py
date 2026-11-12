@@ -7806,6 +7806,7 @@ def find_makemkvcon():
 
 
 def run_makemkv(drive="disc:0"):
+    """MakeMKV's reading of the disc in drive, with no minimum length (as the app's every run: makemkv.py)."""
     exe = find_makemkvcon()
     if not exe:
         raise SystemExit("makemkvcon not found; pass --makemkv-log FILE with a saved log instead")
@@ -7817,8 +7818,8 @@ def run_makemkv(drive="disc:0"):
     if re.fullmatch(r"[A-Za-z]:[\\/]?", drive):
         drive = "dev:%s" % drive[:2].upper()            # a drive letter: MakeMKV's own name for it
     # --noscan: MakeMKV opens only this drive, not every drive in the machine
-    out = subprocess.run([exe, "-r", "--noscan", "--cache=1", "info", drive], capture_output=True, text=True,
-                         encoding="utf-8", errors="replace", timeout=900, **NO_CONSOLE)
+    out = subprocess.run([exe, "-r", "--noscan", "--cache=1", "--minlength=0", "info", drive], capture_output=True,
+                         text=True, encoding="utf-8", errors="replace", timeout=900, **NO_CONSOLE)
     if "TINFO:" not in out.stdout:
         raise SystemExit("MakeMKV returned no titles (is the disc in %s?)" % drive)
     return out.stdout
@@ -7924,7 +7925,10 @@ def _episode_parts(name):
     return (int(m.group(1)), int(m.group(2)), m.group(3)) if m else (None, None, None)
 
 
-def build_packet(con, prefix, log_text, out_dir, log_name=None):
+def build_packet(con, prefix, log_text, out_dir, log_name=None, every_title=True):
+    """A TheDiscDB submission packet: the log, labels.json and checklist.md in out_dir. every_title: the log was
+    read with no minimum length, as TheDiscDB's are; one that wasn't is written, but its checklist says to build
+    it again."""
     h = resolve_hash(con, prefix)
     d = con.execute("SELECT * FROM discs WHERE hash=?", (h,)).fetchone()
     our = [dict(r) for r in con.execute("SELECT * FROM titles WHERE hash=?", (h,))]
@@ -7955,7 +7959,7 @@ def build_packet(con, prefix, log_text, out_dir, log_name=None):
             if s is None:
                 entry["note"] = "episode %s on this disc - number not confirmed" % t.get("episode_index")
         elif role == "extra":
-            entry["note"] = "choose Extra / Featurette / DeletedScene / Trailer / Interview / Other"
+            entry["note"] = "choose Extra / Featurette / DeletedScene / Trailer / Interview / Short / Other"
         elif role in ("play-all", "duplicate", "junk", "loop", "segment"):
             entry["note"] = "leave unlabeled (%s)" % ("a piece of the film" if role == "segment" else role)
         elif not t and (m["duration"] or 0) < JUNK_MAX:
@@ -7987,7 +7991,8 @@ def build_packet(con, prefix, log_text, out_dir, log_name=None):
     packet = {"content_hash": h, "format": d["format"], "label": d["label"], "truth": truth,
               "imdb_id": d["imdb_id"], "mastered": d["mastered"], "makemkv_disc_name": mk["disc_name"],
               "makemkv_log": log_file, "matched": matched, "makemkv_titles": len(labels),
-              "real_titles": len(real), "real_matched": real_matched, "labels": labels, "read_short": short}
+              "real_titles": len(real), "real_matched": real_matched, "labels": labels, "read_short": short,
+              "every_title": every_title}
     with open(os.path.join(out_dir, "labels.json"), "w", encoding="utf-8") as fh:
         json.dump(packet, fh, indent=2)
     with open(os.path.join(out_dir, "checklist.md"), "w", encoding="utf-8") as fh:
@@ -8009,6 +8014,11 @@ def packet_checklist(pk, pt):
         w("")
         w("Clean the disc, put it back in the drive and scan it: the lab reads it again. Then build this packet again.")
         w("If it still reads short, another drive or another copy of the disc may do better.")
+        w("")
+    if not pk.get("every_title", True):
+        w("## Build this packet again with the disc in the drive")
+        w("This log is an older reading of MakeMKV's, at its minimum length, so titles shorter than that aren't in it.")
+        w("TheDiscDB's logs list every title, so put the disc in the drive and build the packet again.")
         w("")
     w("Contribute at https://thediscdb.com/contribute (sign in with GitHub). Disc fingerprint `%s`." % pk["content_hash"])
     w("")
@@ -8266,7 +8276,15 @@ def default_args(**overrides):
 
 
 def makemkv_log_store(h):
-    return os.path.join(os.path.dirname(default_library()), "makemkv_logs", "%s.txt" % h)
+    """MakeMKV's reading of a disc, kept for its rips and TheDiscDB packets: every title, with no minimum length
+    (TheDiscDB's logs list them all: Heat's Blu-ray, 32 titles, 19 under 2 minutes)."""
+    return os.path.join(os.path.dirname(default_library()), "makemkv_logs", "%s-all.txt" % h)
+
+
+def makemkv_old_log_store(h):
+    """A reading kept before 2026-11-11, at MakeMKV's minimum length: its shortest titles left out, and the others
+    numbered differently, so no rip takes it. A packet does, with the disc out of the drive, and says so."""
+    return os.path.join(os.path.dirname(makemkv_log_store(h)), "%s.txt" % h)
 
 
 def main():
@@ -8320,18 +8338,34 @@ def _main(args, ap):
                 list_improvement_candidates(args.library, index, online)
         if args.packet:
             h = resolve_hash(args.library, args.packet)
-            stored = makemkv_log_store(h)
-            if args.makemkv_log:
+            stored, old = makemkv_log_store(h), makemkv_old_log_store(h)
+            every = True
+            if args.makemkv_log:                 # (yours: taken as read with no minimum, as TheDiscDB asks)
                 with open(args.makemkv_log, encoding="utf-8", errors="replace") as fh:
                     log_text = fh.read()
             elif os.path.exists(stored):
-                log("using the MakeMKV log saved when this disc was ripped")
+                log("using MakeMKV's saved reading of this disc")
                 with open(stored, encoding="utf-8", errors="replace") as fh:
                     log_text = fh.read()
             else:
-                log_text = run_makemkv(args.makemkv_drive)
+                try:
+                    log_text = run_makemkv(args.makemkv_drive)
+                except SystemExit:
+                    if not os.path.exists(old):
+                        raise
+                    log("MakeMKV couldn't read the disc: using an older saved reading, which leaves out its shortest titles")
+                    with open(old, encoding="utf-8", errors="replace") as fh:
+                        log_text = fh.read()
+                    every = False
+                else:
+                    label = args.library.execute("SELECT label FROM discs WHERE hash=?", (h,)).fetchone()[0]
+                    mk = parse_makemkv_log(log_text)
+                    if label and label in (mk["volume"], mk["disc_name"]):   # (this disc's: kept for next time)
+                        os.makedirs(os.path.dirname(stored), exist_ok=True)
+                        with open(stored, "w", encoding="utf-8", newline="") as fh:
+                            fh.write(log_text)
             out_dir = args.packet_dir or "thediscdb_%s" % h[:8]
-            pk = build_packet(args.library, h, log_text, out_dir)
+            pk = build_packet(args.library, h, log_text, out_dir, every_title=every)
             print("Packet written to %s: %d of %d titles over 2 minutes matched to the scan" % (
                 os.path.abspath(out_dir), pk["real_matched"], pk["real_titles"]))
             print("Open checklist.md and follow it on https://thediscdb.com/contribute")

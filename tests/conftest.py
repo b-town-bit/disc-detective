@@ -42,6 +42,8 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "_CHOSEN", {})
     monkeypatch.setattr(tools, "_USUAL", {})
     monkeypatch.setattr(menus, "VLC_DIRS", [])
+    from disc_detective import bdhdmv                     # (no drive of this machine read for a menu's still)
+    monkeypatch.setattr(bdhdmv, "video_still", lambda *a, **k: None)
     try:                                  # (nor its drives asked what they are)
         from disc_detective import app
         monkeypatch.setattr(app, "drive_models", lambda drives=None: {})

@@ -155,6 +155,32 @@ def test_a_packet_from_a_reading_with_titles_short_says_so(tmp_path):
     pk = core.build_packet(con, h, log("0:21:14"), str(out))
     assert pk["read_short"] == []
     assert "Don't submit" not in (out / "checklist.md").read_text(encoding="utf-8")
+    assert pk["every_title"] and "Build this packet again" not in (out / "checklist.md").read_text(encoding="utf-8")
+
+
+def test_a_packet_from_the_reading_at_makemkvs_minimum_says_to_build_it_again(tmp_path):
+    """TheDiscDB's logs list every title however short (Harry Potter 1's Blu-ray: 5 titles at MakeMKV's 2-minute
+    minimum, while 9 are labelled); a packet from a reading kept at the minimum is written, but says so first."""
+    con = core.library_open(str(tmp_path / "lib.sqlite"))
+    h = "F" * 32
+    with con:
+        con.execute("INSERT INTO discs (hash, format, label, status, best_guess, truth, first_seen, last_seen) "
+                    "VALUES (?, 'DVD', 'FILM', 'x', 'Film (2001)', 'Film (2001)', '2026', '2026')", (h,))
+        con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?, 'Title 1', 'feature', 6000)", (h,))
+    log = "\n".join(['CINFO:2,0,"Film"', 'TINFO:0,9,0,"1:40:00"', 'TINFO:0,24,0,"1"', 'TINFO:0,27,0,"t00.mkv"'])
+    out = tmp_path / "packet"
+    pk = core.build_packet(con, h, log, str(out), every_title=False)
+    text = (out / "checklist.md").read_text(encoding="utf-8")
+    assert pk["every_title"] is False and "## Build this packet again with the disc in the drive" in text
+    assert text.index("Build this packet again") < text.index("## 1. Identify")
+
+
+def test_the_reading_kept_is_a_new_file_beside_the_old_ones(monkeypatch):
+    """Readings kept before every run had no minimum numbered titles differently: the new one has a name of its own,
+    so no rip takes an old one."""
+    monkeypatch.setattr(core, "default_library", lambda: os.path.join("home", "library.sqlite"))
+    assert core.makemkv_log_store("ABC") == os.path.join("home", "makemkv_logs", "ABC-all.txt")
+    assert core.makemkv_old_log_store("ABC") == os.path.join("home", "makemkv_logs", "ABC.txt")
 
 
 def test_scans_store_each_titles_tracks():

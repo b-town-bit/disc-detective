@@ -4227,7 +4227,15 @@ def no_progress(stage, k=0, n=0):
 # ready (a DVD's menu data read, a Blu-ray opened and unlocked); "start", the crawl begun; "page", the k-th
 # page of n read; "press", the k-th button of a round of n pressed (a player's: what it plays watched); "wait",
 # a moment spent waiting on the player (nothing to tell: a chance to call the crawl off, its disc taken out).
-CRAWL_STAGES = ("setup", "start", "page", "press", "wait")
+CRAWL_STAGES = ("setup", "start", "page", "press", "wait", "photos")
+# ("photos": a Blu-ray's menu pages, their names read, photographed over their video for Edit titles: photo_of)
+
+
+def photo_of(path):
+    """A menu page's photo, beside its picture (path): the page as a player shows it, over its video (a Blu-ray's,
+    bdhdmv.photo), for a person to look at. The picture itself stays as it was read (the menu's drawing alone), for
+    the readings; Edit titles shows the photo where there is one."""
+    return os.path.splitext(path)[0] + "-photo.png"
 
 
 _waiting = threading.local()   # (the crawl on this thread: told each time it waits on its player)
@@ -4783,6 +4791,30 @@ HEADING_KINDS = (("Music", r"\bmusic\s*videos?\b"), ("DeletedScene", DELETED_WOR
                  ("Trailer", r"\btrailers?\b|\bspots\b"), ("Short", r"\bshort\s*films?\b|\bshorts\b"))
 HUB_RE = re.compile(r"\b(bonus|special)\s*(features?|materials?)\b|\bextras\b", re.I)
 MAIN_MENU_RE = re.compile(r"\bmain\s*menu\b", re.I)
+# a button that only gets about: Next, Back, More, Main Menu, Page 2, an arrow (nothing read); it names no page
+NAV_RE = re.compile(r"^\W*(?:(?:next|back|previous|prev|more|return|go\s*back|exit|close|"
+                    r"(?:main\s*|top\s*|root\s*)?menu|page\s*\d+|\d+)(?:\s*page)?)?\W*$", re.I)
+
+
+def page_from(pages, s):
+    """The name of the button a menu page is reached by: its route's last press, on the page before it, else the
+    nearest one before that saying something (a Next, a Back, an arrow, an unread one passed over: NAV_RE), on
+    DVDs and Blu-rays alike (a Blu-ray menu brought up by a menu page's playlist, its route carried on from the
+    button that brought it: Harry Potter 1's yearbook pages, an arrow apart, "Yearbook Character Clips"). A hub's
+    ("Special Features") names a page as well as any. "" for the first menu, or nothing read on the way."""
+    seen, cur = set(), s
+    while cur not in seen:
+        seen.add(cur)
+        parent = _menu_parent(pages, cur)
+        route = (pages.get(cur) or {}).get("route") or []
+        if parent is None or not route:
+            return ""
+        b = next((x for x in pages[parent].get("buttons") or [] if x["n"] == route[-1]["button"]), None)
+        text = " ".join(((b or {}).get("text") or "").split())
+        if re.search(r"[A-Za-z]{2}", text) and not NAV_RE.match(text):
+            return text
+        cur = parent
+    return ""
 
 
 def heading_kind(heading):
@@ -5468,9 +5500,12 @@ def title_pictures(out, out_dir):
             # (a name, a word of four letters at least: not a scrap off a logo, "pie 4", over an unread Play)
             if t and re.search(r"[A-Za-z]{4}", text) and (t not in named_by or _wordy(text) > _wordy(named_by[t])):
                 named_by[t] = text
+    # (and each page's name, by the button it's reached by: the picture's heading says which page it is)
+    states = {(p["domain"], p["page"], p["program"]): p for p in out["pages"] if "domain" in p}
     for p in out["pages"]:
         if not p.get("image"):
             continue
+        came = page_from(states, (p["domain"], p["page"], p["program"])) if "domain" in p else ""
         for b in p["buttons"]:
             t = (b.get("plays") or {}).get("title")
             if not t:
@@ -5491,7 +5526,8 @@ def title_pictures(out, out_dir):
             if t not in best or rank > best[t][0]:
                 best[t] = (rank, {"image": os.path.join(out_dir, b.get("picture") or p["image"]), "rect": list(b["rect"]),
                                   "text": b.get("text") or "", "_rects": [x["rect"] for x in p["buttons"]],
-                                  "_words": b.get("words"), "lit": bool(b.get("picture"))})
+                                  "_words": b.get("words"), "lit": bool(b.get("picture")),
+                                  **({"page_from": came} if came else {})})
     # outlined: where the name was read, as the reading says ("words": the lines kept, the name beside
     # a marker, its plate), never looked for again (a guess can show words that weren't the ones read);
     # not known (a reading saved before), the button's area, as the disc draws it ("button": that, either way)
