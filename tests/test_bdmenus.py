@@ -30,14 +30,16 @@ DISC = [("TMPL Main Menu", 3, FILM, 59823.6), ("FPL_MainFeature", 4, FILM, 5292.
         ("FPL_MainFeature_RegA", 762, FILM, 5292.3), ("SF_Cardshark_Serenade", 745, VIDEO, 23.0),
         ("SF_Eyes_Wide_Shut", 751, VIDEO, 9.9), ("SF_Theatrical_Trailer", 756, VIDEO, 141.1),
         ("SF_Smurfs", 802, FILM, 51.1), ("SF_Previews", 763, FILM, 116.2), ("SF_Play_All", 664, VIDEO, 366.2),
-        ("PL_SPE_EASTER_EGG_7669", 2, FILM, 60.1), ("SF_Teaser_Trailer", 757, VIDEO, 1.0)]
+        ("PL_SPE_EASTER_EGG_7669", 2, FILM, 60.1), ("SF_Teaser_Trailer", 757, VIDEO, 1.0),
+        ("SF_Gonzo_Disaster", 741, VIDEO, 4.0), ("SF_Music_Video", 758, VIDEO, 124.0)]
 
 
 def titles():
     t = lambda pid, secs, role: {"id": "%05d.mpls" % pid, "duration": secs, "role": role}
     return [t(3, 59883.6, "loop"), t(4, 5292.3, "feature"), t(762, 5292.3, "duplicate"), t(745, 23.0, "junk"),
             t(751, 9.9, "junk"), t(756, 141.1, "extra"), t(802, 51.1, "junk"), t(763, 116.2, "junk"),
-            t(664, 366.2, "extra"), t(2, 60.1, "junk"), t(757, 59.1, "junk")]
+            t(664, 366.2, "extra"), t(2, 60.1, "junk"), t(757, 59.1, "junk"), t(741, 24.8, "junk"),
+            t(758, 124.0, "extra")]
 
 
 def test_the_program_that_runs_a_blu_rays_menus(tmp_path):
@@ -108,8 +110,9 @@ def test_a_menu_project_names_the_discs_playlists(tmp_path):
     """Muppets from Space: the film, its outtakes by name (the scan, by length, took them for
     junk), its own trailer, an Easter egg; an ad for another film at a film's frame rate among
     extras at video's (an outtake named like a film at video's stays an outtake); the previews;
-    a Play All a play-all; a menu template and the film's region copies left be; a name whose
-    time isn't its playlist's ("SF_Teaser_Trailer", 1 s for 59) not trusted."""
+    a Play All a play-all; a menu template and the film's region copies left be; a trailer whose
+    time in the project can't be one's ("SF_Teaser_Trailer", 1 s for 59) yours to confirm; the
+    music video Music, named by its song."""
     root = write_disc(tmp_path, DISC)
     entries = bdmenus.menu_project(root)
     assert [e["playlist"] for e in entries][:3] == ["00003.mpls", "00004.mpls", "00762.mpls"]
@@ -120,7 +123,9 @@ def test_a_menu_project_names_the_discs_playlists(tmp_path):
     assert got == {"00004.mpls": ("MainMovie", None), "00745.mpls": ("Extra", "Cardshark Serenade"),
                    "00751.mpls": ("Extra", "Eyes Wide Shut"), "00756.mpls": ("Trailer", "Theatrical Trailer"),
                    "00802.mpls": ("Promo", "Previews - The Smurfs"), "00763.mpls": ("Promo", "Previews"),
-                   "00002.mpls": ("Extra", "Easter Egg")}
+                   "00002.mpls": ("Extra", "Easter Egg"), "00757.mpls": ("Trailer", "Teaser Trailer"),
+                   "00758.mpls": ("Music", "Music Video")}      # (Gonzo's 4 s for 24.8: an outtake, not trusted)
+    assert not labels["00757.mpls"]["exact"] and "1 s in the project, 59.1 s on the disc" in labels["00757.mpls"]["note"]
     assert bdmenus.project_play_alls(titles(), entries) == ["00664.mpls"]
     # "This Elevator is Going Down" plays its parts 1, 2 and 3, clip for clip: they're pieces of
     # it (the Play All's), not extras of their own; nor is a whole that plays something unnamed
@@ -191,6 +196,10 @@ def test_the_menus_own_words_from_its_code(tmp_path):
     assert labels["00751.mpls"]["title"] == "Expectorating Extraterrestrials"
     assert labels["00745.mpls"]["note"] == 'its menu button reads "Cardshark Serenade"'
     assert labels["00002.mpls"]["title"] == "Easter Egg"                   # (no button text: the project's)
+    # the music video's button: Music, its name the song's
+    sung = bdmenus.project_labels(titles(), bdmenus.menu_project(root), "Muppets from Space", None,
+                                  {"00758.mpls": "Music Video: “Shining Star” by The Dust Brothers"})
+    assert (sung["00758.mpls"]["type"], sung["00758.mpls"]["title"]) == ("Music", "“Shining Star” by The Dust Brothers")
 
 
 def test_a_blu_ray_playlist_watched_in_ffplay(monkeypatch, tmp_path):
@@ -257,3 +266,35 @@ def test_a_blu_ray_title_is_watched_in_ffplay_even_when_the_stakeout_saw_it(monk
     dd_app.TitlesDialog.watch(desk, "00010.mpls")              # (no ffplay: VLC, by its number for it)
     dd_app.TitlesDialog.watch(desk, "Title 4")
     assert played == [("ffplay", "00010.mpls"), ("ffplay", "00011.mpls"), ("vlc", 3), ("vlc dvd", 4)]
+
+
+def test_a_warner_film_disc_names_its_titles_from_its_menu_files(tmp_path):
+    """Warner's BD-J framework on a film disc (Half-Blood Prince's): states.prop names the film's playlist, and
+    each special feature's button the clip it plays and how long it runs; its art's words (read) are its name,
+    else the name in the file, in words. Through project_labels: the film, and each feature an extra by its
+    button's words, known (exact)."""
+    jar = tmp_path / "BDMV" / "JAR"
+    (jar / "04518").mkdir(parents=True)
+    (jar / "15631").mkdir()
+    (jar / "04518" / "images.txt").write_text("sf_millennium_sel_png_eng,sheet.png,0,0,10,10\n")
+    (jar / "04518" / "menu_base.prop").write_text(
+        "millennium.name=TheMillenniumBridge\r\nmillennium.type=Button\r\n"
+        "millennium.image=sf_millennium_nor_png,sf_millennium_sel_png_eng\r\n"
+        "millennium.videoStream=200,206000000000\r\n"
+        "millennium.class=com.wb.bdj.menu.SpecialFeatureClipButtonHelper,millennium_preview,special_features\r\n"
+        "orphanage.name=WoolsOrphanage\r\norphanage.type=Button\r\norphanage.videoStream=205,169000000000\r\n"
+        "orphanage.class=com.wb.bdj.menu.SpecialFeatureClipButtonHelper,orphanage_preview,special_features\r\n"
+        "inmovie_on.videoStream=100,9210000000000\r\ninmovie_on.class=com.wb.bdj.menu.IMEEngineButtonHelper\r\n")
+    (jar / "15631" / "states.prop").write_text("main_movie.streamIds=100\nmain_movie.duration=9210000000000\n")
+    entries, texts = bdmenus.wb_film(str(tmp_path))
+    assert [(e["name"], e["playlist"], e["seconds"]) for e in entries] == [
+        ("FPL_MainFeature", "00100.mpls", 9210.0), ("SF_The_Millennium_Bridge", "00200.mpls", 206.0),
+        ("SF_Wools_Orphanage", "00205.mpls", 169.0)]
+    assert texts == {}                                   # (nothing to read the art with)
+    titles = [{"id": "00100.mpls", "role": "feature", "duration": 9210}, {"id": "00200.mpls", "role": "extra", "duration": 207},
+              {"id": "00205.mpls", "role": "extra", "duration": 168}]
+    labels = bdmenus.project_labels(titles, entries, texts={"00205.mpls": "Wool's Orphanage"})
+    assert labels["00100.mpls"]["type"] == "MainMovie" and labels["00100.mpls"]["exact"]
+    assert (labels["00205.mpls"]["title"], labels["00205.mpls"]["exact"]) == ("Wool's Orphanage", True)
+    assert (labels["00200.mpls"]["title"], labels["00200.mpls"]["exact"]) == ("The Millennium Bridge", False)
+    assert bdmenus.wb_film(str(tmp_path / "none")) == ([], {})

@@ -81,6 +81,20 @@ On first launch it offers to download its data: the TheDiscDB index (about 4 MB)
 and IMDb's public title and credits data (about 1.4 GB, indexed locally). It keeps
 both up to date on its own.
 
+### Updates
+
+Disc Detective doesn't update itself or pop up about new versions. It looks for one at two
+moments only: when it fetches the weekly TheDiscDB index, and when you open **About**. Each
+time it asks GitHub for this project's list of releases, and sends nothing about you or your
+discs. The command line's `--offline` skips it. When a newer version is out, the **About** link
+at the bottom of the window gets an upgrade arrow; About says what's new and links to the
+release.
+
+To update a downloaded copy, close Disc Detective, unzip the new release, and put its folder
+in place of the old one. Your case files, settings and downloaded data aren't in that folder
+(they're in `.disc_detective` in your home folder), so they carry over. A copy from source
+updates with `git pull`, or `pip install --upgrade "git+https://github.com/b-town-bit/disc-detective"`.
+
 ## Use
 
 **The app:** press **Scan Disc**, check the answer, press **Rip** (or don't, and

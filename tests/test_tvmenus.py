@@ -291,6 +291,9 @@ def test_an_episode_button_leads_to_its_scene_page():
     pics = menus.tv_pictures(tv, "out", {3: {"image": "old", "text": "x"}, 1: {"image": "kept", "text": "PLAY"}})
     assert pics[3]["text"] == "1 Opening Night" and pics[4]["text"] == "2 The Lighthouse Keeper"
     assert pics[3]["image"].endswith("p2_1.png") and pics[1]["image"] == "kept"
+    # and its page's name and the way there, as a film's pictures have them
+    pics = menus.tv_pictures(tv, "out", pages=out["pages"])
+    assert pics[3]["page_from"] == "EPISODES" and pics[3]["page_trail"] == ["EPISODES"]
 
 
 def test_a_deleted_scene_button_and_its_named_twin():
@@ -298,7 +301,7 @@ def test_a_deleted_scene_button_and_its_named_twin():
     tv = {"readings": [dict(title=1, text="Opening Night", seconds=EPISODE, bonus=False, kind=None),
                        dict(title=8, text="deleted scene", seconds=52, bonus=False, kind=None),
                        dict(title=6, text="opening night", seconds=52.4, bonus=True, kind=None)],
-          "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+          "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     found = menus.tv_found(tv, core.menu_episodes(tv["readings"], ORDERS)["picks"])
     assert found["extras"] == [{"title": 6, "name": "Opening Night Deleted Scene", "seconds": 52.4,
                                 "kind": "DeletedScene", "season": 1, "episode": 1}]
@@ -315,7 +318,7 @@ def test_a_video_commentary_is_an_extra_of_the_episode_above_it():
                        read(10, "Extended Version Video Commentary", [118, 269, 361, 318], 217),
                        read(12, "Video Commentary", [365, 320, 583, 351], 231),
                        read(18, "Audio Commentary On", [174, 319, 255, 369], 2600)],
-          "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+          "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     found = menus.tv_found(tv, picks)
     by = {e["title"]: e for e in found["extras"]}
     assert (by[10]["name"], by[10]["episode"]) == ("Heeeeere's Lassie Video Commentary", 11)
@@ -337,7 +340,7 @@ def test_a_button_saying_only_deleted_scene_is_the_episodes_above_it():
                                                   rect=rect, page=[1, 2, 1], only_kind=text == "Deleted Scene")
     tv = {"readings": [row(1, "Opening Night", EPISODE, [100, 50, 300, 90]), row(2, "The Lighthouse Keeper", EPISODE, [400, 50, 600, 90]),
                        row(8, "Deleted Scene", 90, [100, 120, 300, 150]), row(9, "Deleted Scene", 60, [400, 120, 600, 150])],
-          "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+          "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     by = {e["title"]: e for e in menus.tv_found(tv, picks)["extras"]}
     assert (by[8]["name"], by[8]["kind"], by[8]["episode"]) == ("Opening Night Deleted Scene", "DeletedScene", 1)
     assert (by[9]["name"], by[9]["season"], by[9]["episode"]) == ("The Lighthouse Keeper Deleted Scene", 1, 2)
@@ -388,7 +391,7 @@ def test_one_name_isnt_two():
 def test_two_episodes_as_labels_and_the_extras_of_them():
     picks = {0: {"season": 1, "number": "1-2", "name": "Pilot / Last Baby Proofing Standing", "score": 1, "by": "name"}}
     tv = {"readings": [dict(title=4, text="PILOT LAST BABY PROOFING STANDING", seconds=2577, bonus=False, kind=None, rect=[0, 0, 9, 9], page=[1, 8, 1])],
-          "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+          "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     found = menus.tv_found(tv, picks)
     assert menus.found_tv_text(found).startswith("Episode:  title 4  S1E1-2 Pilot / Last Baby Proofing Standing")
     label = menus.detected_tv_labels(found, [{"id": "Title 4", "role": "episode", "duration": 2577}])["Title 4"]
@@ -416,7 +419,7 @@ def test_the_names_of_several_episodes(monkeypatch):
 def test_a_name_that_says_its_kind_doesnt_say_it_twice():
     row = lambda title, text: dict(title=title, text=text, seconds=198, bonus=True, kind=None, page=[6, 20, 1])
     tv = {"readings": [row(8, "Was It Something I Said? Music Video"), row(7, "Music Video")],
-          "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+          "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     found = menus.tv_found(tv, {})
     assert [(e["title"], e["name"], e["kind"]) for e in found["extras"]] == [(8, "Was It Something I Said? Music Video", "Music")]
 
@@ -431,7 +434,7 @@ def test_a_directors_cut_is_the_episodes_above_it_and_not_the_next_one():
     readings = core.menu_play_order(readings, {"order": [15, 16, 17], "seconds": [EPISODE] * 3})
     got = core.menu_episodes(readings, show, 1)
     assert sorted(p["number"] for p in got["picks"].values()) == [1, 2]     # (not 3: The Break Up isn't here)
-    tv = {"readings": readings, "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+    tv = {"readings": readings, "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     found = menus.tv_found(tv, got["picks"])
     assert sorted(e["title"] for e in found["episodes"]) == [15, 16]
     assert [(e["title"], e["name"], e["episode"]) for e in found["extras"]] == [(17, "The Lighthouse Keeper - Director's Cut", 2)]
@@ -489,7 +492,7 @@ def test_a_page_of_video_commentaries():
                             rect=[365, 320, 583, 351], page=[6, 28, 1]),
                        dict(title=11, text="Shawn and the Real Girl Video Commentary with Writer Andy Berman", seconds=231,
                             bonus=False, kind=None, rect=[106, 280, 431, 351], page=[6, 23, 1], commentaries=True)],
-          "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+          "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     found = menus.tv_found(tv, picks)
     by = {e["title"]: e for e in found["extras"]}
     assert (by[11]["name"], by[11]["episode"]) == ("Shawn and the Real Girl Video Commentary with Writer Andy Berman", 12)
@@ -585,7 +588,7 @@ def test_deleted_scenes_matched_to_their_episodes():
                        dict(read(22, "Neil Simon's Lover's Retreat", 58.6), kind="DeletedScene"),
                        dict(read(24, "Shawn and the Real Girl", 572.2), kind="DeletedScene"),
                        dict(read(27, "Underground with the Cast", 245.7), bonus=True)],
-          "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+          "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     found = menus.tv_found(tv, picks)
     by = {e["title"]: e for e in found["extras"]}
     assert (by[23]["kind"], by[23]["season"], by[23]["episode"]) == ("DeletedScene", 6, 9)

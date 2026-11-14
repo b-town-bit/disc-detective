@@ -10,7 +10,8 @@ from disc_detective import app as dd_app, core, makemkv as mk  # noqa: E402
 PLAY_ALL = "00001.mpls"
 CLIP = "00004.mpls"
 EXTRA = "00015.mpls"
-# what MakeMKV lists at its default minimum length, and at 0 (Chuck S2 D2's numbers shift like this)
+# two numberings of one disc: a reading kept before every run had no minimum length (its 50-second
+# clip left out), and every title (Chuck S2 D2's numbers shift like this)
 DEFAULT = [PLAY_ALL, EXTRA]
 EVERYTHING = [CLIP, PLAY_ALL, EXTRA]
 
@@ -34,10 +35,11 @@ def dvd_reading(numbers):
 
 
 class FakeMakeMKV:
-    """makemkvcon: numbers its titles as `titles` says; a rip writes the file its number means."""
+    """makemkvcon: numbers its titles as `titles` says; a rip writes the file its number means. Every run is
+    asked for every title (no minimum length)."""
 
-    def __init__(self, titles, no_minimum=None, fail=None):
-        self.titles, self.no_minimum, self.reads, self.rips, self.short_reads, self.short_rips = titles, no_minimum or titles, 0, [], 0, 0
+    def __init__(self, titles, fail=None):
+        self.titles, self.reads, self.rips = titles, 0, []
         self.fail = fail                 # a rip's closing messages, leaving a partial file behind
         test = self
 
@@ -46,8 +48,8 @@ class FakeMakeMKV:
 
             def __init__(self, cmd, **kw):
                 self.number, self.work, self.stopped = int(cmd[-2]), cmd[-1], False
-                self.listed = test.no_minimum if "--minlength=0" in cmd else test.titles
-                test.short_rips += "--minlength=0" in cmd
+                assert "--minlength=0" in cmd
+                self.listed = test.titles
                 test.rips.append(self.number)
                 self.stdout = self.lines()
 
@@ -73,19 +75,18 @@ class FakeMakeMKV:
 
     def run(self, cmd, **kw):
         self.reads += 1
-        short = "--minlength=0" in cmd
-        self.short_reads += short
-        return types.SimpleNamespace(stdout=reading(self.no_minimum if short else self.titles))
+        assert "--minlength=0" in cmd
+        return types.SimpleNamespace(stdout=reading(self.titles))
 
 
-def rip(tmp_path, monkeypatch, saved, now, ids=(PLAY_ALL,), no_minimum=None, on_disc=(), fail=None):
+def rip(tmp_path, monkeypatch, saved, now, ids=(PLAY_ALL,), on_disc=(), fail=None):
     """Rip these titles with `saved` as the saved reading and MakeMKV numbering as `now`.
     on_disc: the scan's titles, (id, seconds). fail: each rip's closing messages, instead of success."""
     store = tmp_path / "store" / "reading.txt"
     if saved is not None:
-        store.parent.mkdir()
+        store.parent.mkdir(exist_ok=True)
         store.write_text(saved)
-    mkv = FakeMakeMKV(now, no_minimum, fail)
+    mkv = FakeMakeMKV(now, fail)
     monkeypatch.setattr(dd_app.subprocess, "Popen", mkv.Popen)
     monkeypatch.setattr(dd_app.subprocess, "run", mkv.run)
     monkeypatch.setattr(dd_app, "NO_WINDOW", 0, raising=False)
@@ -118,11 +119,11 @@ def test_same_numbers_rip_as_planned_with_no_second_reading(tmp_path, monkeypatc
 
 
 def test_numbers_moved_rips_the_planned_title_not_the_old_number(tmp_path, monkeypatch):
-    """The minimum length changed in MakeMKV's GUI after the reading: number 0 is another title now."""
+    """The saved reading's numbers aren't the disc's now (read by another MakeMKV, say): number 0 is another title."""
     got, planned, mkv, store = rip(tmp_path, monkeypatch, reading(DEFAULT), EVERYTHING)
     assert got == {PLAY_ALL + ".mkv": PLAY_ALL} and planned == 1      # never the 50-second clip
     assert mkv.rips == [0, 1] and mkv.reads == 1
-    assert mk.makemkv_added(store.read_text()) == mk.makemkv_added(reading(DEFAULT))    # packets' reading kept
+    assert mk.makemkv_added(store.read_text()) == mk.makemkv_added(reading(DEFAULT))    # (not rewritten)
 
 
 def test_later_titles_use_the_new_numbers_straight_away(tmp_path, monkeypatch):
@@ -152,37 +153,25 @@ def test_no_saved_reading_reads_once_and_saves_it(tmp_path, monkeypatch):
 SCAN = ((PLAY_ALL, 15415), (CLIP, 50), (EXTRA, 340))
 
 
-def test_a_wanted_short_title_reads_again_with_no_minimum(tmp_path, monkeypatch):
-    """Muppets from Space's outtakes: labelled, under 2 minutes, not in MakeMKV's default reading."""
-    got, planned, mkv, store = rip(tmp_path, monkeypatch, reading(DEFAULT), DEFAULT, ids=(PLAY_ALL, CLIP),
-                                   no_minimum=EVERYTHING, on_disc=SCAN)
+def test_a_short_title_rips_from_the_one_reading(tmp_path, monkeypatch):
+    """Muppets from Space's outtakes: labelled, under 2 minutes. Every reading has no minimum length, so the one
+    reading lists them, and it's kept (for the next rip and TheDiscDB packets)."""
+    got, planned, mkv, store = rip(tmp_path, monkeypatch, None, EVERYTHING, ids=(PLAY_ALL, CLIP), on_disc=SCAN)
     assert got == {PLAY_ALL + ".mkv": PLAY_ALL, CLIP + ".mkv": CLIP} and planned == 2
-    assert mkv.short_reads == 1 and mkv.short_rips == 2 and mkv.rips == [0, 1]     # by the new numbers
-    assert mk.makemkv_added(store.read_text()) == mk.makemkv_added(reading(DEFAULT))    # packets' reading kept
+    assert mkv.reads == 1 and mkv.rips == [0, 1]
+    assert mk.makemkv_added(store.read_text()) == mk.makemkv_added(reading(EVERYTHING))
 
 
-def test_no_short_title_wanted_keeps_the_saved_reading_alone(tmp_path, monkeypatch):
-    got, _, mkv, _ = rip(tmp_path, monkeypatch, reading(DEFAULT), DEFAULT, on_disc=SCAN)
-    assert got == {PLAY_ALL + ".mkv": PLAY_ALL} and mkv.reads == 0 and mkv.short_rips == 0
+def test_a_saved_reading_serves_a_short_title_without_reading_again(tmp_path, monkeypatch):
+    got, planned, mkv, _ = rip(tmp_path, monkeypatch, reading(EVERYTHING), EVERYTHING, ids=(PLAY_ALL, CLIP), on_disc=SCAN)
+    assert got == {PLAY_ALL + ".mkv": PLAY_ALL, CLIP + ".mkv": CLIP} and planned == 2 and mkv.reads == 0
 
 
-def test_a_long_title_hidden_by_a_higher_minimum_reads_again_and_rips(tmp_path, monkeypatch):
-    """MakeMKV's minimum length set above an episode's: it's listed once there's no minimum."""
-    got, planned, mkv, _ = rip(tmp_path, monkeypatch, reading(DEFAULT), DEFAULT, ids=(PLAY_ALL, CLIP), no_minimum=EVERYTHING,
-                               on_disc=((PLAY_ALL, 15415), (CLIP, 2521)))
-    assert got == {PLAY_ALL + ".mkv": PLAY_ALL, CLIP + ".mkv": CLIP} and planned == 2 and mkv.short_reads == 1 and mkv.short_rips == 2
-
-
-def test_a_title_no_minimum_lists_either_counts_as_not_ripped(tmp_path, monkeypatch):
-    """Chuck's episodes, with no way to reach them: asked once, and said so."""
+def test_a_title_makemkv_doesnt_list_counts_as_not_ripped(tmp_path, monkeypatch):
+    """Chuck's episodes, with no way to reach them (no sting here): said so, and the disc not read again for them."""
     got, planned, mkv, _ = rip(tmp_path, monkeypatch, reading([PLAY_ALL]), [PLAY_ALL], ids=(PLAY_ALL, "00016.m2ts"),
                                on_disc=((PLAY_ALL, 15415), ("00016.m2ts", 2521)))
-    assert got == {PLAY_ALL + ".mkv": PLAY_ALL} and planned == 2 and mkv.reads == 1 and mkv.short_reads == 1
-
-
-def test_a_short_title_never_listed_counts_as_not_ripped(tmp_path, monkeypatch):
-    got, planned, mkv, _ = rip(tmp_path, monkeypatch, reading(DEFAULT), DEFAULT, ids=(PLAY_ALL, CLIP), on_disc=SCAN)
-    assert got == {PLAY_ALL + ".mkv": PLAY_ALL} and planned == 2 and mkv.short_reads == 1
+    assert got == {PLAY_ALL + ".mkv": PLAY_ALL} and planned == 2 and mkv.reads == 0
 
 
 def test_a_short_one_clip_playlist_listed_as_its_stream_file_keeps_its_identity():

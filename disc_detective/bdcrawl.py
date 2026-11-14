@@ -866,7 +866,7 @@ def crawl_result(root, c, pressed, extras, out_dir):
     everything = pressed + extras
     out = {"drive": root, "pages": pages_of(pressed, extras, *c.extras_heading), "chapters": {}, "opening": [], "reader": "rapidocr",
            "suspects": len(everything),
-           "tv": {"readings": readings_of(everything), "played": [p["title"] for p in everything], "promos": [], "promo_names": {},
+           "tv": {"readings": readings_of(everything), "played": [p["title"] for p in everything], "promos": [], "promo_said": {},
                   "play_alls": [], "opening": [], "commentary_versions": []},
            # (what VLC can open by itself: it can't seek a Play All to an episode inside it)
            "watch": {p["title"]: {"title": p["vlc"]} for p in everything if p.get("vlc") not in (None, c.playing)}}
@@ -922,7 +922,7 @@ def from_files(root, label, titles, log=print, read=None, out_dir=None):
                                                 only_kind=x["of_episode"] is not None, of_episode=x["of_episode"], place=[100 + i]), x))
     log("the disc's menu files list %d of its titles, nothing played" % len(readings))
     return {"tv": {"readings": readings, "exact": True, "season": menu["season"], "disc": menu["disc"], "played": [r["title"] for r in readings],
-                   "promos": [], "promo_names": {}, "play_alls": [],
+                   "promos": [], "promo_said": {}, "play_alls": [],
                    "opening": [], "commentary_versions": []}, "pages": [], "found": {}, "suspects": len(readings), "watch": {}}
 
 

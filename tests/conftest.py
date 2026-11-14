@@ -29,6 +29,9 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "DISCDB_RAW", DEAD + "raw/")
     monkeypatch.setattr(core, "IMDB_BASE", DEAD + "imdb/")
     monkeypatch.setattr(core, "TMDB_API", DEAD + "tmdb")
+    monkeypatch.setattr(core, "GITHUB_API", DEAD + "github")
+    monkeypatch.setattr(core, "WIKIDATA_SPARQL", DEAD + "wikidata")
+    monkeypatch.setattr(core, "HOME_COUNTRY", "US")      # (the same on every machine: CI's aren't American)
     monkeypatch.setattr(core, "TVMAZE_API", DEAD + "tvmaze")
     # nor to this machine's own MakeMKV and VLC: a test's fake disc would set them reading it (and
     # left running, a real drive waits on them); a test wanting them sets its own
@@ -42,6 +45,8 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "_CHOSEN", {})
     monkeypatch.setattr(tools, "_USUAL", {})
     monkeypatch.setattr(menus, "VLC_DIRS", [])
+    from disc_detective import bdhdmv                     # (no drive of this machine read for a menu's still)
+    monkeypatch.setattr(bdhdmv, "video_still", lambda *a, **k: None)
     try:                                  # (nor its drives asked what they are)
         from disc_detective import app
         monkeypatch.setattr(app, "drive_models", lambda drives=None: {})

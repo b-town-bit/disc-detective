@@ -13,11 +13,11 @@ import time
 from .core import find_child, logger, parse_makemkv_log, parse_mpls, read_file, u16, u32
 
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0   # keep makemkvcon from flashing a console
-# MakeMKV's switches for every run: robot output, and --noscan: it opens only the drive it's
-# given, not every drive in the machine (a sensitive drive left alone while another is read)
-MAKEMKV_SWITCHES = ["-r", "--noscan", "--cache=1"]
-# Every title on the disc, whatever minimum length MakeMKV is set to
-NO_MINIMUM = ("--minlength=0",)
+# MakeMKV's switches for every run: robot output; --noscan: it opens only the drive it's given, not
+# every drive in the machine (a sensitive drive left alone while another is read); and no minimum
+# length, whatever MakeMKV is set to: every title listed, however short (the app sorts out which
+# are worth ripping), numbered the same in every reading and rip, and as TheDiscDB's logs are
+MAKEMKV_SWITCHES = ["-r", "--noscan", "--cache=1", "--minlength=0"]
 # What can go wrong setting up a sting: the rip goes on without it
 STING_ERRORS = (OSError, RuntimeError, ValueError, IndexError, struct.error, subprocess.SubprocessError)
 
@@ -53,21 +53,21 @@ class Rip:
         if self.proc:
             self.proc.terminate()
 
-    def read_titles(self, source, switches=()):
+    def read_titles(self, source):
         """MakeMKV's reading of the disc, as it stands (its robot-mode text)."""
-        info = subprocess.run([self.exe, *MAKEMKV_SWITCHES, *switches, "info", source], capture_output=True, text=True,
+        info = subprocess.run([self.exe, *MAKEMKV_SWITCHES, "info", source], capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=900,
                               creationflags=NO_WINDOW).stdout
         if not parse_makemkv_log(info)["titles"]:
             raise RuntimeError("MakeMKV found no titles on %s" % source)
         return info
 
-    def title(self, source, idx, work, expected=None, switches=(), progress=lambda fraction: None):
+    def title(self, source, idx, work, expected=None, progress=lambda fraction: None):
         """Rip title idx. expected: the titles of the reading idx came from (makemkv_added). This
         run scans the disc for itself: numbered differently, it stops before saving anything, since
         idx would be some other title, and says so in numbers_changed. MakeMKV's last word on
         anything going wrong stays in problem."""
-        cmd = [self.exe, *MAKEMKV_SWITCHES, *switches, "--progress=-same", "mkv", source, str(idx), work]
+        cmd = [self.exe, *MAKEMKV_SWITCHES, "--progress=-same", "mkv", source, str(idx), work]
         logger.info("  run: %s", subprocess.list2cmdline(cmd))
         self.numbers_changed, self.problem, self.exit_code = False, None, None
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,

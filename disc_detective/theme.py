@@ -407,6 +407,7 @@ def setup(root):
     # dialogs (shared names the dialogs already use)
     label("Plan.TLabel", font=(SERIF, 11, "bold"))
     label("Sub.TLabel", fg=INK_MUTED)
+    label("Hint.TLabel", fg=INK_MUTED, font=(SANS, 9))           # (a field's instructions, under it)
     label("Cap.TLabel", fg=INK_MUTED, font=(MONO, 8))
     label("Detail.TLabel", font=(MONO, 8))
     label("Title.TLabel", font=(SERIF, 15, "bold"))
@@ -433,6 +434,9 @@ def setup(root):
     label("Source.TLabel", bg=PARCHMENT, fg=PRUSSIAN_700, font=(MONO, 9, "italic"))
     label("Guess.TLabel", bg=PARCHMENT, fg=WAX, font=(MONO, 9, "italic"))
     label("DeskSub.TLabel", bg=PARCHMENT, fg=INK_MUTED, font=(SANS, 9))
+    # a finding set apart from the help text round it: a menu page's way there, what its button read as
+    label("DeskFind.TLabel", bg=PARCHMENT, fg=INK, font=(MONO, 10, "bold"))
+    label("DeskFindLink.TLabel", bg=PARCHMENT, fg=PRUSSIAN_700, font=(MONO, 10, "bold", "underline"))
     label("Poster.TLabel", bg=CARD)
     label("PosterCap.TLabel", bg=BRASS_200, fg=INK_MUTED, font=(MONO, 8))
     label("StripCap.TLabel", bg=PARCHMENT, fg=INK_MUTED, font=(MONO, 8))
@@ -457,6 +461,8 @@ def setup(root):
     label("BarStatus.TLabel", bg=VELLUM_200, fg=INK, font=(MONO, 9))
     label("BarPct.TLabel", bg=VELLUM_200, fg=BRASS_700, font=(MONO, 9, "bold"))
     label("FootLink.TLabel", bg=VELLUM_300, fg=INK, font=(MONO, 8))
+    # (About, when a newer version's out: its upgrade icon, highlighted, the message inside)
+    label("FootLinkNew.TLabel", bg=AMBER_50, fg=AMBER_800, font=(MONO, 8, "bold"), padding=(5, 1))
     label("FootSep.TLabel", bg=VELLUM_300, fg=BRASS_400, font=(MONO, 8))
     return st
 

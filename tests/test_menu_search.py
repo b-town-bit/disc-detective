@@ -367,8 +367,14 @@ def test_the_crawl_searches_for_titles(monkeypatch, tmp_path):
     monkeypatch.setattr(dvdvm, "explore", lambda eng: ({"goes_to": MAIN}, ENGINE, []))
     monkeypatch.setattr(dvdvm, "opening", lambda eng: [])
     FakeCrawler.made.clear()
-    out = menus._crawl("E:\\", "vlc", {}, str(tmp_path), log=lambda m: None)
+    told = []
+    out = menus._crawl("E:\\", "vlc", {}, str(tmp_path), log=lambda m: None, progress=lambda *a: told.append(a))
     c = FakeCrawler.made[0]
+    # how far along: the titles sought settled, k of n, while they're looked for (n growing as a press finds
+    # title 7's way); then the search's end, whether or not each was named (title 9's button read, no words)
+    counts = [t[1:] for t in told if t[0] == "titles"]
+    assert counts[0] == (1, 3) and counts[-1] == (3, 4) and all(0 <= k <= n for k, n in counts)
+    assert told.index(("finish",)) > max(i for i, t in enumerate(told) if t[0] == "titles")
     # Bonus before the page behind "Audio Commentary", which is still read for its title 9. Scenes and
     # Credits hold only the film, named by Play: not read, whatever they say
     assert c.visited == [MAIN, BONUS, AUDIO]

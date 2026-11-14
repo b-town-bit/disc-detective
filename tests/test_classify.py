@@ -385,6 +385,37 @@ def test_discdb_extras_too_short_for_the_scan():
                     "Title 28": "promo"}
 
 
+def test_discdb_trailers_for_other_films_are_promos():
+    """Muppets from Space's DVD on TheDiscDB: Trailers named for other well-known films (The Dark
+    Crystal, The Storyteller, "Labrynth" misspelt) are ads, judged as a menu's page of trailers is
+    (menus.other_films): its own Theatrical Trailer and Teaser Trailer, named without the film, are
+    beside them, so the other names are other films'. No film known: only the ad words."""
+    t = lambda i: {"id": "Title %d" % i, "duration": 100, "role": "extra", "note": ""}
+    names = {23: "Theatrical Trailer", 24: "Teaser Trailer", 25: "The Dark Crystal", 26: "Labrynth",
+             27: "The Storyteller"}
+    hit = {"titles": [{"source": "%02d" % i, "item": {"type": "Trailer", "title": n}} for i, n in names.items()]}
+    known = {"The Dark Crystal": "The Dark Crystal", "The Storyteller": "The Storyteller"}
+    titles = [t(i) for i in names]
+    changed = core.discdb_promos(titles, hit, film="Muppets from Space", known_film=known.get)
+    assert [x["id"] for x in changed] == ["Title 25", "Title 26", "Title 27"]
+    assert {x["id"]: x["role"] for x in titles} == {"Title 23": "extra", "Title 24": "extra", "Title 25": "promo",
+                                                    "Title 26": "promo", "Title 27": "promo"}
+    assert "another film" in titles[2]["note"]
+    # named as the menus' ads are, by the one namer, in the hit itself (Edit titles and a rip go by it);
+    # TheDiscDB's own words kept beside, and a second look at the same hit finds them promos still
+    items = {x["source"]: x["item"] for x in hit["titles"]}
+    assert items["25"]["type"] == "Promo" and items["25"]["title"] == "Previews - The Dark Crystal"
+    assert items["26"]["title"] == "Previews - Labrynth" and items["26"]["discdb"] == {"type": "Trailer",
+                                                                                     "title": "Labrynth"}
+    assert items["23"] == {"type": "Trailer", "title": "Theatrical Trailer"}
+    titles = [t(i) for i in names]
+    assert [x["id"] for x in core.discdb_promos(titles, hit, film="Muppets from Space")] == [
+        "Title 25", "Title 26", "Title 27"]
+    hit = {"titles": [{"source": "%02d" % i, "item": {"type": "Trailer", "title": n}} for i, n in names.items()]}
+    titles = [t(i) for i in names]
+    assert core.discdb_promos(titles, hit) == []                           # (no film known: as before)
+
+
 def test_discdb_main_movie_that_we_called_a_duplicate():
     """Aladdin 4K UCE: 00099 and 00800 play the same film; we kept 00099 and called 00800 its
     duplicate, but TheDiscDB names 00800. It becomes the feature; 00099 the duplicate."""

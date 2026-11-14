@@ -711,7 +711,7 @@ def test_scenes_on_a_page_of_no_known_kind_still_go_with_their_episodes():
     made = {"title": "00018.mpls", "number": None, "name": "Chuck Versus The Ex Sc. 51 - Sexual Harassment Seminar", "seconds": 90, "box": (0, 0, 1, 1),
             "order": 100, "image": None, "extra": True, "kind": None}
     ep = {"title": "00020.m2ts", "number": 6, "name": "Chuck Versus the Ex", "seconds": LENGTH, "box": (0, 0, 1, 1), "order": 4, "image": None}
-    tv = {"readings": bdcrawl.readings_of([ep, made]), "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+    tv = {"readings": bdcrawl.readings_of([ep, made]), "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     extra = menus.tv_found(tv, {0: {"season": 2, "number": 6, "name": "Chuck Versus the Ex", "score": 1.0, "by": "name"}})["extras"][0]
     assert (extra["season"], extra["episode"], extra["name"]) == (2, 6, "Sc. 51 - Sexual Harassment Seminar")
     assert extra["kind"] == "DeletedScene"
@@ -721,7 +721,7 @@ def found_for(name, kind=None):
     made = {"title": "00018.mpls", "number": None, "name": name, "seconds": 90, "box": (0, 0, 1, 1),
             "order": 100, "image": None, "extra": True, "kind": kind}
     ep = {"title": "00020.m2ts", "number": 6, "name": "Chuck Versus the Ex", "seconds": LENGTH, "box": (0, 0, 1, 1), "order": 4, "image": None}
-    tv = {"readings": bdcrawl.readings_of([ep, made]), "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+    tv = {"readings": bdcrawl.readings_of([ep, made]), "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     return menus.tv_found(tv, {0: {"season": 2, "number": 6, "name": "Chuck Versus the Ex", "score": 1.0, "by": "name"}})["extras"][0]
 
 
@@ -833,7 +833,7 @@ def test_scenes_keep_their_own_names_under_their_episode(monkeypatch, tmp_path):
     made = {"title": "00017.mpls", "number": None, "name": "Chuck Versus Santa Claus Sc. 13 - Casey and Sarah", "seconds": 11.3, "box": (0, 0, 1, 1),
             "order": 100, "image": None, "extra": True, "kind": "DeletedScene"}
     ep = {"title": "00001.m2ts", "number": 11, "name": "Chuck Versus Santa Claus", "seconds": LENGTH, "box": (0, 0, 1, 1), "order": 4, "image": None}
-    tv = {"readings": bdcrawl.readings_of([ep, made]), "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+    tv = {"readings": bdcrawl.readings_of([ep, made]), "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     found = menus.tv_found(tv, {0: {"season": 2, "number": 11, "name": "Chuck Versus Santa Claus", "score": 1.0, "by": "name"}})
     assert [e["episode"] for e in found["episodes"]] == [11]
     extra = found["extras"][0]
@@ -1012,7 +1012,7 @@ def test_a_title_two_buttons_land_on_is_nobodys():
 def test_a_blu_rays_episodes_become_labels_under_its_own_ids():
     pressed = [{"title": "00018.m2ts", "number": 10, "name": "Chuck Versus the DeLorean", "seconds": LENGTH, "box": (0, 0, 1, 1),
                 "order": 3, "image": None}]
-    tv = {"readings": bdcrawl.readings_of(pressed), "promos": [], "promo_names": {}, "play_alls": [], "opening": []}
+    tv = {"readings": bdcrawl.readings_of(pressed), "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     found = menus.tv_found(tv, {0: {"season": 2, "number": 10, "name": "Chuck Versus the DeLorean", "score": 1.0, "by": "name"}})
     labels = menus.detected_tv_labels(found, TITLES)
     assert labels["00018.m2ts"]["episode"] == 10 and labels["00018.m2ts"]["title"] == "Chuck Versus the DeLorean"
@@ -1355,7 +1355,7 @@ def test_a_dvd_films_crawl_keeps_its_feature(monkeypatch):
     monkeypatch.setattr(core, "film_credits", lambda *args, **kw: [])
     raw = {"tv": {"readings": [{"title": 1, "text": "PLAY MOVIE", "seconds": 5277, "bonus": True}]},
            "pages": [{"domain": 1, "page": 5, "program": 1}], "suspects": 1,
-           "found": {"feature": 1, "feature_name": "", "extras": [], "promos": [], "promo_names": {}, "play_alls": [], "opening": []}}
+           "found": {"feature": 1, "feature_name": "", "extras": [], "promos": [], "promo_said": {}, "play_alls": [], "opening": []}}
     found = a._name_titles(raw, {"kind": "movie", "content_hash": "AB", "match": {"name": "Film", "imdb_id": "tt1"}})
     assert found["feature"] == 1
 

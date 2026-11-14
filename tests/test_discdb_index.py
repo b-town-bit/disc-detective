@@ -150,3 +150,83 @@ def test_lookup_and_near_match(github, tmp_path, movie_disc):
 
 def test_no_index_is_not_an_error(tmp_path):
     assert core.discdb_index_open(str(tmp_path / "none"), allow_download=False) is None
+
+
+def test_each_release_keeps_its_country_and_names_its_film_by_it(index_gz, tmp_path):
+    """A release's locale, in the index and so in its match ("en-gb"): what names its film. An American release
+    takes IMDb's name (the American one: Harry Potter and the Sorcerer's Stone); any other TheDiscDB's (TMDB's,
+    the original's: ...Philosopher's Stone); not known (an index from before), this computer's country says."""
+    db = tmp_path / "i.sqlite"
+    with gzip.open(index_gz) as src, open(db, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    con = sqlite3.connect(db)
+    con.row_factory = sqlite3.Row
+    h = con.execute("SELECT hash FROM discs WHERE kind='movie'").fetchone()[0]
+    assert core.index_hit(con, h)["locale"] == "en-gb"
+    us, uk = {"title": "Harry Potter and the Philosopher's Stone", "locale": "en-us"}, \
+        {"title": "Harry Potter and the Philosopher's Stone", "locale": "en-gb"}
+    imdb = "Harry Potter and the Sorcerer's Stone"
+    assert core.discdb_film_name(us, imdb) == imdb
+    assert core.discdb_film_name(uk, imdb) == uk["title"]
+    assert core.discdb_film_name(dict(uk, locale="de"), imdb) == uk["title"]
+    assert core.discdb_film_name(uk, None) == uk["title"]                # (no IMDb data: TheDiscDB's)
+    import locale
+    core.HOME_COUNTRY = None                             # (conftest's put back after: monkeypatch)
+    for here, american in (("English_United States", True), ("en_GB", False), ("en_US", True)):
+        orig = locale.getlocale
+        locale.getlocale = lambda *a, here=here: (here, "UTF-8")
+        try:
+            assert core.us_release({"title": "x"}) is american, here
+        finally:
+            locale.getlocale = orig
+    # an index built before locales were kept: none, and no error
+    old = sqlite3.connect(":memory:")
+    old.row_factory = sqlite3.Row
+    old.executescript(core.DISCDB_INDEX_SCHEMA.replace(", locale TEXT", ""))
+    old.execute("INSERT INTO discs (hash, title, titles) VALUES ('A', 'Film', '[]')")
+    assert core.index_hit(old, "A")["locale"] is None
+
+
+def test_a_newer_version_is_looked_for_with_the_weekly_index(github, tmp_path, monkeypatch):
+    """No check of its own: when the index is fetched (the first time, then weekly, or refreshed by hand), GitHub is
+    also asked for a newer Disc Detective; a failed look never holds up the index."""
+    looked = []
+    monkeypatch.setattr(core, "check_for_update", lambda: looked.append(1) or (_ for _ in ()).throw(OSError("down")))
+    d = str(tmp_path / "discdb")
+    core.discdb_index_open(d).close()                     # first use: the index, and a look
+    assert len(looked) == 1 and core.discdb_index_info(d)
+    core.discdb_index_open(d).close()                     # within a week: neither
+    assert len(looked) == 1
+    core.discdb_index_download(d, force=True)             # refreshed by hand: both
+    assert len(looked) == 2
+
+
+def test_the_newest_release_and_whether_its_newer(monkeypatch):
+    """The newest of Disc Detective's own releases (version tags: not the TheDiscDB index's, drafts or pre-releases;
+    0.10 after 0.9), noted for the About box; only a newer one than this counts."""
+    import io
+    import json
+    releases = [{"tag_name": "discdb-index", "html_url": "x"},
+                {"tag_name": "v0.9", "html_url": "https://github.com/r/releases/tag/v0.9", "body": "old",
+                 "published_at": "2026-12-01T00:00:00Z", "assets": []},
+                {"tag_name": "v0.10", "html_url": "https://github.com/r/releases/tag/v0.10", "body": "Box sets",
+                 "published_at": "2027-01-02T10:00:00Z",
+                 "assets": [{"name": "Disc-Detective-0.10-windows.zip", "browser_download_url": "https://dl/w.zip"}]},
+                {"tag_name": "v0.11", "draft": True}, {"tag_name": "v0.12", "prerelease": True}]
+    asked = []
+    monkeypatch.setattr(core.urllib.request, "urlopen", lambda req, timeout=None: (
+        asked.append(req.full_url), io.BytesIO(json.dumps(releases).encode()))[1])
+    rel = core.latest_release()
+    assert asked[0].startswith(core.GITHUB_API + "/repos/%s/releases" % core.PROJECT_REPO)
+    assert rel == {"version": "0.10", "url": "https://github.com/r/releases/tag/v0.10", "notes": "Box sets",
+                   "published": "2027-01-02", "assets": {"Disc-Detective-0.10-windows.zip": "https://dl/w.zip"}}
+    assert core.known_update() is None                    # (nothing looked for yet)
+    monkeypatch.setattr(core, "VERSION", "0.3")
+    assert core.check_for_update()["version"] == "0.10" and core.known_update()["version"] == "0.10"
+    monkeypatch.setattr(core, "VERSION", "0.10")          # (updated: as new as it)
+    assert core.known_update() is None and core.check_for_update() is None
+    releases[:] = [{"tag_name": "discdb-index"}]          # (none of its own yet)
+    assert core.check_for_update() is None and core.known_update() is None
+    with open(os.path.join(core.data_home(), core.UPDATE_FILE), "w") as fh:
+        fh.write("{not json")
+    assert core.known_update() is None

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 tk = pytest.importorskip("tkinter")
-from disc_detective import app as dd_app, core  # noqa: E402
+from disc_detective import app as dd_app, core, menus  # noqa: E402
 import fixtures  # noqa: E402
 
 pytestmark = pytest.mark.gui
@@ -682,6 +682,18 @@ def made_widgets(w):
         yield from made_widgets(c)
 
 
+def on_screen(pump, *widgets):
+    """Wait until each widget is drawn, as before anyone clicks it: macOS drops events sent to a window not yet shown
+    (a dialog just opened) or to a list on a notebook tab behind another."""
+    assert pump(lambda: all(w.winfo_viewable() for w in widgets), 10)
+
+
+def to_tab(d, key, pump):
+    """Help TheDiscDB's tab for one of its lists brought forward, as a click on it would, and drawn."""
+    d.tabs.select(d.lists[key]["page"])
+    on_screen(pump, d.lists[key]["tv"])
+
+
 def test_a_discdb_hit_needs_no_confirming(gui, monkeypatch):
     root, made, pump = gui
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
@@ -1051,10 +1063,13 @@ def test_help_thediscdb_lists_your_discs(gui, tmp_path, monkeypatch):
     with con:
         con.execute("INSERT INTO discs (hash, format, label, status, best_guess, truth, first_seen, last_seen) "
                     "VALUES (?, 'DVD', 'ARSENIC', 'probable: x', 'Arsenic and Old Lace (1944)', "
-                    "'Arsenic and Old Lace (1944)', '2026', '2026')", ("9B9067B7" + "0" * 24,))
+                    "'Arsenic and Old Lace (1944) {imdb-tt0036613}', '2026', '2026')", ("9B9067B7" + "0" * 24,))
         con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?, 'Title 1', 'feature', 7080)",
                     ("9B9067B7" + "0" * 24,))
+    core.set_label(con, "9B9067B7" + "0" * 24, "Title 1", "MainMovie", "Arsenic and Old Lace")
     con.close()
+    (tmp_path / "lab.txt").write_text('TINFO:0,9,0,"1:58:00"\nTINFO:0,24,0,"1"\nTINFO:0,27,0,"t00.mkv"\n')
+    monkeypatch.setattr(dd_app.di, "makemkv_log_store", lambda h: str(tmp_path / "lab.txt"))
     orig = app.scan_args
 
     def args():
@@ -1066,10 +1081,324 @@ def test_help_thediscdb_lists_your_discs(gui, tmp_path, monkeypatch):
     assert pump(lambda: "Up to date" in d.status.cget("text"), 20)
     tv = d.lists["submit"]["tv"]
     assert [tv.item(i)["values"][0] for i in tv.get_children()] == ["Arsenic and Old Lace (1944)"]
-    assert d.tabs.tab(0, "text") == "NOT IN THEDISCDB (1)"
+    assert d.tabs.tab(0, "text") == "READY TO SUBMIT (1)"
     tv.selection_set(tv.get_children()[0])
     root.update()
     assert str(d.packet_btn.cget("state")) == "normal" and "Confirmed by you" in d.lists["submit"]["note"].cget("text")
+    # no TMDB column, no TMDB or edition buttons, no link out: those are in the guide, on their form's pages
+    assert not any(hasattr(d, b) for b in ("tmdb_btn", "edition_btn", "copy_s"))
+    assert not any(w.winfo_class() == "TLabel" and "contribute" in str(w.cget("text")) for w in made_widgets(d.top))
+    # its TMDB id, which TheDiscDB's form can find the film by: not known and no TMDB key, nothing of TMDB's, only
+    # what to search their form for (it finds the film itself)
+    asked, opened = [], []
+    monkeypatch.setattr(dd_app.di, "find_tmdb", lambda imdb, key=None: (asked.append(imdb), ("movie", 212))[1])
+    monkeypatch.setattr(dd_app.webbrowser, "open", opened.append)
+    # (the edition the disc names itself, read from it as it's verified: the release's name in the guide)
+    monkeypatch.setattr(dd_app.di, "release_edition", lambda root, label=None, cover=True: {
+        "name": "Special Edition", "from": "its own name", "text": "Arsenic (Special Edition)"})
+    d.packet_work(d.current("submit"), "E:\\")
+    assert pump(lambda: getattr(d, "guide", None) is not None, 10)
+    g = d.guide
+    g.show(2)
+    assert "YYYY Special Edition" in [w.cget("text") for w in made_widgets(g.page) if w.winfo_class() == "TLabel"]
+    monkeypatch.setattr(dd_app.di, "release_edition", lambda root, label=None, cover=True: None)
+    g.top.destroy()
+    d.guide = None
+    d.packet_work(d.current("submit"), "E:\\")
+    assert pump(lambda: getattr(d, "guide", None) is not None, 10)
+    g = d.guide
+    g.show(1)
+    assert g.head.cget("text") == "Identify the release"
+    labels = [w.cget("text") for w in made_widgets(g.page) if w.winfo_class() == "TLabel"]
+    assert "Search for" in labels and "TMDB ID" not in labels and not g.find_tmdb
+    g.top.destroy()
+    # with a TMDB key: found from its IMDb id in the guide, kept, shown and copied; one nobody knows, TMDB's search
+    monkeypatch.setenv("TMDB_API_KEY", "k")
+    d.guide = None
+    d.packet_work(d.current("submit"), "E:\\")
+    assert pump(lambda: getattr(d, "guide", None) is not None, 10)
+    g = d.guide
+    g.show(1)
+    on_screen(pump, g.tmdb_link)
+    g.tmdb_link.event_generate("<Button-1>")
+    assert pump(lambda: "Copied: 212" in g.status.cget("text"), 10)
+    assert asked == ["tt0036613"] and root.clipboard_get() == "212"
+    assert "212" in [w.cget("text") for w in made_widgets(g.page) if w.winfo_class() == "TLabel"]
+    con = core.library_open(db)
+    assert con.execute("SELECT tmdb FROM discs").fetchone()[0] == "movie/212"
+    con.close()
+    g.pk["tmdb"] = None
+    g.steps = core.submission_steps(g.pk, None)
+    g.show(1)
+    monkeypatch.setattr(dd_app.di, "find_tmdb", lambda imdb, key=None: None)
+    on_screen(pump, g.tmdb_link)
+    g.tmdb_link.event_generate("<Button-1>")
+    assert pump(lambda: "doesn't know" in g.status.cget("text"), 10)
+    assert opened and opened[-1].startswith("https://www.themoviedb.org/search?query=Arsenic")
+    # the edition's details their form asks for (ASIN, UPC, date): its Amazon listing found before you start, and
+    # what it says typed in there
+    g.show(0)
+    amazon = next(w for w in made_widgets(g.page) if w.winfo_class() == "TLabel"
+                  and w.cget("text") == "Find the edition on Amazon")
+    on_screen(pump, amazon)
+    amazon.event_generate("<Button-1>")
+    assert opened[-1].startswith("https://www.amazon.com/s?k=Arsenic+and+Old+Lace") and "(1944)" not in opened[-1]
+    copies = lambda: [getattr(w, "copies", None) for w in made_widgets(g.page) if hasattr(w, "copies")]
+    g.show(2)
+    assert copies() == ["YYYY DVD"]                     # (nothing typed in yet: only the title, its year unknown)
+    g.show(0)
+    g.boxes["upc"][0].set("4339632266")                 # (too short: said so)
+    root.update()
+    assert g.boxes["upc"][1].cget("text") == "12 or 13 digits"
+    g.boxes["asin"][0].set("https://www.amazon.com/dp/B000I0RNDS?th=1")
+    g.boxes["upc"][0].set("0 25192 08712 4")
+    g.boxes["date"][0].set("2006-08-29")
+    root.update()
+    assert g.boxes["date"][1].cget("text") == "✓ August 29, 2006"
+    g.show(2)
+    # a copy icon beside each value their form has typed in, in its terms; none beside the slug (their form makes
+    # it from the title) or a drop-down's
+    assert copies() == ["B000I0RNDS", "025192087124", "August 29, 2006", "2006 DVD"]
+    g.show(0)                                           # (kept, going back)
+    assert g.boxes["asin"][0].get() == "https://www.amazon.com/dp/B000I0RNDS?th=1"
+    g.top.destroy()                                     # (and Submit again: still there, while this window's open)
+    d.guide = None
+    d.packet_work(d.current("submit"), "E:\\")
+    assert pump(lambda: getattr(d, "guide", None) is not None, 10)
+    g = d.guide
+    assert g.boxes["date"][0].get() == "2006-08-29"
+    # on a screen scaled up (150%, 200%...), its notes wrap at the width meant, scaled once, not twice
+    g.top.destroy()
+    monkeypatch.setattr(dd_app.th, "SCALE", 2.0)
+    dd_app.th._install_scaling()
+    g = d.guide = dd_app.SubmitGuide(root, d.guide.pk)
+    for page in (0, 2, 3):
+        g.show(page)
+        root.update()
+        wraps = {int(str(w.cget("wraplength")) or 0) for w in made_widgets(g.page) if w.winfo_class() == "TLabel"}
+        assert max(wraps) <= 2 * dd_app.SubmitGuide.WRAP
+        assert g.top.winfo_reqwidth() < 2 * (dd_app.SubmitGuide.WRAP + 200)
+    g.top.destroy()
+    monkeypatch.setattr(dd_app.th, "SCALE", 1.0)
+    g = d.guide = dd_app.SubmitGuide(root, g.pk)
+    g.show(3)
+    assert copies() == ["E:\\", "DVD", "dvd"]
+    g.top.destroy()
+    # the disc's name takes the room the others leave it, they as wide as their contents, the last at the right edge;
+    # no sideways scroll, and no volume label
+    root.update()
+    cols = tv["columns"]
+    assert cols == ("title", "format", "labelled") and not str(tv.cget("xscrollcommand"))
+    assert abs(sum(tv.column(c, "width") for c in cols) - tv.winfo_width()) <= 4
+    assert tv.column("format", "width") < tv.column("title", "width")
+    assert tv.set(tv.get_children()[0], "title") == "Arsenic and Old Lace (1944)"
+    # a name too long for it: cut short, the whole of it under the pointer
+    iid = tv.get_children()[0]
+    d.lists["submit"]["full"][iid] = ("A Very Long Title " * 12,) + tuple(d.lists["submit"]["full"][iid][1:])
+    dd_app.fit_first(tv, d.lists["submit"]["full"])
+    assert tv.set(iid, "title").endswith("…") and d.cell_tip("submit", iid, "title") == "A Very Long Title " * 12
+    assert d.cell_tip("submit", iid, "format") == ""
+    d.top.destroy()
+
+
+def test_needs_more_info_until_a_disc_is_read_and_labelled(gui, tmp_path, monkeypatch):
+    """A confirmed disc TheDiscDB lacks waits under Needs more info, saying what to do, until the lab has read every
+    title and you've labelled some; then it's Ready to submit, and its packet is built from that reading (no MakeMKV
+    run, the disc needn't be in the drive)."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    db = str(tmp_path / "lib.sqlite")
+    h = "9B9067B7" + "0" * 24
+    con = core.library_open(db)
+    with con:
+        con.execute("INSERT INTO discs (hash, format, label, status, best_guess, truth, first_seen, last_seen) "
+                    "VALUES (?, 'DVD', 'ARSENIC', 'x', 'Arsenic and Old Lace (1944)', 'Arsenic and Old Lace (1944)', "
+                    "'2026', '2026')", (h,))
+        con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?, 'Title 1', 'feature', 7080)", (h,))
+    con.close()
+    orig = app.scan_args
+
+    def args():
+        a = orig()
+        a.db, a.discdb_dir, a.no_discdb_online = db, str(tmp_path / "none"), True
+        return a
+    monkeypatch.setattr(app, "scan_args", args)
+    logs = tmp_path / "makemkv_logs"
+    monkeypatch.setattr(dd_app.di, "makemkv_log_store", lambda h: str(logs / ("%s-all.txt" % h)))
+    monkeypatch.setattr(dd_app.di, "makemkv_old_log_store", lambda h: str(logs / ("%s.txt" % h)))
+    monkeypatch.setattr(dd_app.os, "startfile", lambda p: None, raising=False)
+    monkeypatch.setattr(dd_app.subprocess, "Popen", lambda *a, **k: None)
+    runs = []
+    monkeypatch.setattr(dd_app.subprocess, "run", lambda cmd, **kw: runs.append(cmd))
+    d = dd_app.HelpDiscDBDialog(root, app)
+    assert pump(lambda: "Up to date" in d.status.cget("text"), 20)
+    assert [d.tabs.tab(i, "text") for i in range(3)] == [
+        "READY TO SUBMIT (0)", "NEEDS MORE INFO (1)", "READY TO UPDATE (0)"]
+    tv = d.lists["needs"]["tv"]
+    assert tv.item(tv.get_children()[0])["values"][2] == "Lab report, film labelled"
+    to_tab(d, "needs", pump)
+    tv.selection_set(tv.get_children()[0])
+    root.update()
+    note = d.lists["needs"]["note"].cget("text")
+    assert note.startswith("To do: Put the disc in the drive and scan it with MakeMKV linked")
+    assert note.endswith("; then label the film in Edit titles.")
+    assert not hasattr(d, "label_n")                 # (a title can't be checked without the disc: Edit titles)
+    # read by the lab and labelled: ready, and its packet from that reading
+    logs.mkdir()
+    (logs / ("%s-all.txt" % h)).write_text('CINFO:2,0,"ARSENIC"\nTINFO:0,9,0,"1:58:00"\nTINFO:0,24,0,"1"\n'
+                                          'TINFO:0,27,0,"t00.mkv"\n')
+    con = core.library_open(db)
+    core.set_label(con, h, "Title 1", "MainMovie", "Arsenic and Old Lace")
+    con.close()
+    d.load(online=False)
+    assert pump(lambda: d.tabs.tab(0, "text") == "READY TO SUBMIT (1)", 20)
+    tv = d.lists["submit"]["tv"]
+    to_tab(d, "submit", pump)
+    tv.selection_set(tv.get_children()[0])
+    root.update()
+    assert "1 title labelled, lab report on file" in d.lists["submit"]["note"].cget("text")
+    assert "have it in the drive" in d.lists["submit"]["note"].cget("text")
+    # TheDiscDB's form scans the disc as it's added: no disc in a drive, and no backup of it, no packet
+    in_drive = {"E:\\": None}
+    monkeypatch.setattr(dd_app.di, "release_edition", lambda root, label=None, cover=True: None)   # (not E:'s own)
+    monkeypatch.setattr(dd_app, "optical_drives", lambda: list(in_drive))
+    monkeypatch.setattr(dd_app.di, "same_disc", lambda root, hh: in_drive.get(root) == hh or root == "C:/backup")
+    asked = []
+    monkeypatch.setattr(dd_app.messagebox, "askyesno", lambda *a, **k: asked.append(a) or False)
+    d.build_packet()
+    assert pump(lambda: "Put the disc in the drive" in d.status.cget("text"), 10) and asked
+    # a backup folder of the whole disc will do; another disc's folder won't
+    monkeypatch.setattr(dd_app.messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(dd_app.filedialog, "askdirectory", lambda **k: "C:/elsewhere")
+    d.build_packet()
+    assert pump(lambda: "isn't this disc" in d.status.cget("text"), 10)
+    monkeypatch.setattr(dd_app.filedialog, "askdirectory", lambda **k: "C:/backup")
+    d.build_packet()
+    assert pump(lambda: "Log ready" in d.status.cget("text"), 10)
+    assert d.guide.pk["root"] == os.path.normpath("C:/backup")
+    d.guide.top.destroy()
+    # the disc in the drive: no questions
+    monkeypatch.setattr(dd_app.messagebox, "askyesno", lambda *a, **k: asked.append(a) or False)
+    in_drive["E:\\"] = h
+    asked.clear()
+    d.status.config(text="")
+    d.build_packet()
+    assert pump(lambda: "Log ready" in d.status.cget("text"), 10)
+    assert not runs and not asked
+    # the packet: the log their form takes, nothing else; their form walked through a page at a time
+    g = d.guide
+    assert os.listdir(os.path.dirname(g.pk["log_path"])) == ["disc01.txt"]
+    texts = lambda: [w.cget("text") for w in made_widgets(g.page) if w.winfo_class() == "TLabel"]
+    assert g.head.cget("text") == "Before you start" and str(g.back_btn.cget("state")) == "disabled"
+    heads = [g.head.cget("text")]
+    while g.next_btn.cget("text") == "Next":
+        g.next_btn.invoke()
+        root.update()
+        heads.append(g.head.cget("text"))
+        if heads[-1] == "Add the disc":
+            assert "E:\\" in texts()
+        if heads[-1] == "Identify the titles":
+            assert "Arsenic and Old Lace" in texts() and "MainMovie" in texts()
+            name = next(w for w in made_widgets(g.page) if getattr(w, "copies", None) == "Arsenic and Old Lace")
+            on_screen(pump, name)
+            name.event_generate("<Button-1>")
+            assert root.clipboard_get() == "Arsenic and Old Lace" and "Copied" in g.status.cget("text")
+    assert heads == ["Before you start", "Identify the release", "Release details", "Add the disc", "Disc log",
+                     "Identify the titles", "Review and submit"]
+    assert g.count.cget("text") == "Step 6 of 6"
+    g.back_btn.invoke()
+    assert g.head.cget("text") == "Identify the titles"
+    g.show(len(g.steps) - 1)
+    g.next_btn.invoke()                                # Done
+    assert not g.top.winfo_exists()
+    d.top.destroy()
+
+
+def test_could_be_labelled_lists_your_edits_title_by_title(gui, tmp_path, monkeypatch):
+    """A disc TheDiscDB has, with labels of yours it lacks: Ready to update, its Suggest edits listing each title by
+    its name there, with its page (opened) and its name (copied). One with only titles the scan found TheDiscDB
+    leaves blank: under Needs more info, to label first."""
+    import json
+    import sqlite3
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    db = str(tmp_path / "lib.sqlite")
+    yours, found = "H" * 32, "J" * 32
+    con = core.library_open(db)
+    with con:
+        for h, name in ((yours, "Harry Potter and the Half-Blood Prince (2009)"), (found, "Holes (2003)")):
+            con.execute("INSERT INTO discs (hash, format, label, status, truth, first_seen, last_seen) VALUES "
+                        "(?, 'Blu-ray', 'X', 'identified (TheDiscDB)', ?, '2026', '2026')", (h, name))
+            con.execute("INSERT INTO titles (hash, title_id, role, duration, clips) VALUES (?, '00200.mpls', 'extra', 207, '00001')", (h,))
+    core.set_label(con, yours, "00200.mpls", "Featurette", "Close-Up with the Cast")
+    con.close()
+    index_dir = tmp_path / "discdb"
+    index_dir.mkdir()
+    index = sqlite3.connect(str(index_dir / "discdb_index.sqlite"))
+    index.executescript(core.DISCDB_INDEX_SCHEMA)
+    for h, title, slug in ((yours, "Harry Potter and the Half-Blood Prince", "2009-special-edition"), (found, "Holes", "dvd")):
+        index.execute("INSERT INTO discs (hash, kind, title, year, release, slug, disc, titles) VALUES "
+                      "(?, 'Movie', ?, 2009, 'Special Edition', ?, 'Movie', ?)",
+                      (h, title, slug, json.dumps([{"source": "00001.m2ts", "duration": "0:03:27", "item": {}}])))
+    index.commit()
+    index.close()
+    monkeypatch.setattr(dd_app.di, "discdb_index_open", lambda d, allow_download=False: (
+        lambda c: (setattr(c, "row_factory", sqlite3.Row), c)[1])(sqlite3.connect(str(index_dir / "discdb_index.sqlite"))))
+    orig = app.scan_args
+
+    def args():
+        a = orig()
+        a.db, a.discdb_dir, a.no_discdb_online = db, str(index_dir), True
+        return a
+    monkeypatch.setattr(app, "scan_args", args)
+    opened = []
+    monkeypatch.setattr(dd_app.webbrowser, "open", opened.append)
+    d = dd_app.HelpDiscDBDialog(root, app)
+    assert pump(lambda: "Up to date" in d.status.cget("text"), 20)
+    assert d.tabs.tab(2, "text") == "READY TO UPDATE (1)" and d.tabs.tab(1, "text") == "NEEDS MORE INFO (1)"
+    tv = d.lists["needs"]["tv"]
+    assert tv.get_children() == (found,) and tv.item(found)["values"][2] == "1 title labelled"
+    to_tab(d, "needs", pump)
+    tv.selection_set(found)
+    root.update()
+    assert "label the titles TheDiscDB leaves blank in Edit titles" in d.lists["needs"]["note"].cget("text")
+    tv = d.lists["improve"]["tv"]
+    assert tv.get_children() == (yours,) and tv.item(yours)["values"][2] == "1 new"
+    to_tab(d, "improve", pump)
+    tv.selection_set(yours)
+    root.update()
+    d.edits_btn.invoke()
+    e = d.edits_dialog
+    root.update()
+    assert e.tv.item("0")["values"][:4] == ["00001.m2ts", "0:03:27", "Featurette", "Close-Up with the Cast"]
+    e.open()                                                    # (its form: a link, thediscdb.com's)
+    assert opened == ["https://thediscdb.com/movie/harry-potter-and-the-half-blood-prince-2009/releases/"
+                      "2009-special-edition/discs/movie/00001/m2ts/edit"]
+    assert e.form_link.winfo_manager() == "pack"
+    e.copy_btn.invoke()
+    assert root.clipboard_get() == "Close-Up with the Cast"
+    # marked submitted: kept with the date, not counted as to do; TheDiscDB's data with it later: gone, and its record
+    assert e.mark_btn.cget("text") == "Mark submitted"
+    e.mark_btn.invoke()
+    assert e.mark_btn.cget("text") == "Not submitted" and e.tv.item("0")["values"][5].startswith("submitted ")
+    assert pump(lambda: d.lists["improve"]["tv"].exists(yours) and
+                d.lists["improve"]["tv"].item(yours)["values"][2] == "1 submitted", 10)
+    con = core.library_open(db)
+    assert [tuple(x) for x in con.execute("SELECT type, title FROM suggested")] == [("Featurette", "Close-Up with the Cast")]
+    con.close()
+    e.top.destroy()
+    index = sqlite3.connect(str(index_dir / "discdb_index.sqlite"))
+    index.execute("UPDATE discs SET titles=? WHERE hash=?", (json.dumps([{"source": "00001.m2ts", "duration": "0:03:27",
+                  "item": {"type": "Featurette", "title": "Close-Up with the Cast"}}]), yours))
+    index.commit()
+    index.close()
+    d.load(online=False)
+    assert pump(lambda: d.tabs.tab(2, "text") == "READY TO UPDATE (0)", 10)
+    con = core.library_open(db)
+    assert con.execute("SELECT COUNT(*) FROM suggested").fetchone()[0] == 0
+    con.close()
     d.top.destroy()
 
 
@@ -1120,6 +1449,72 @@ def test_label_titles_saves_your_labels(gui, tmp_path, monkeypatch):
     assert core.get_labels(core.library_open(db), h) == {}
     assert dd_app.tracks_text('{"video":{"aspect":"16:9"},"audio":[{"lang":"en","codec":"AC3","channels":6}],'
                               '"subs":[{"lang":"en"}]}') == "16:9  ·  English AC3 5.1  ·  1 subtitle"
+
+
+def test_help_thediscdbs_titles_are_edit_titles_makemkvs_only(gui, tmp_path, monkeypatch):
+    """Help TheDiscDB's Label titles: the titles as Edit titles has them (yours applied: Muppets from Space's
+    outtake, 23 s, the scan's "junk", an extra you named), those MakeMKV's saved reading has only (not one it
+    hasn't, nor a short clip nobody named), to look over: nothing to change but by a row's pencil; no
+    Detect titles, nothing to watch."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    db = str(tmp_path / "lib.sqlite")
+    h = "M" * 32
+    con = core.library_open(db)
+    with con:
+        con.execute("INSERT INTO discs (hash, format, label, first_seen, last_seen) VALUES (?, 'Blu-ray', 'X', '2026', '2026')", (h,))
+        for tid, role, secs in (("00004.mpls", "feature", 5292), ("00745.mpls", "junk", 23), ("00749.mpls", "junk", 8),
+                                ("00300.mpls", "junk", 5)):
+            con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?,?,?,?)", (h, tid, role, secs))
+    con.close()
+    core.set_label(core.library_open(db), h, "00745.mpls", "Extra", "Cardshark Serenade")
+    orig = app.scan_args
+
+    def args():
+        a = orig()
+        a.db, a.discdb_dir = db, str(tmp_path / "none")
+        return a
+    monkeypatch.setattr(app, "scan_args", args)
+    d = dd_app.TitlesDialog(root, app, h, "Muppets")
+    assert list(d.vars) == ["00004.mpls"]                       # (no reading saved: as before, the longer ones)
+    d.close()
+    log = ['CINFO:2,0,"Muppets"']
+    for i, (tid, t) in enumerate((("00004.mpls", "1:28:12"), ("00745.mpls", "0:00:23"), ("00749.mpls", "0:00:08"))):
+        log += ['TINFO:%d,9,0,"%s"' % (i, t), 'TINFO:%d,16,0,"%s"' % (i, tid), 'TINFO:%d,27,0,"t%02d.mkv"' % (i, i)]
+    os.makedirs(os.path.dirname(core.makemkv_log_store(h)), exist_ok=True)
+    with open(core.makemkv_log_store(h), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(log))
+    con = core.library_open(db)
+    with con:          # (a feature MakeMKV doesn't list: not the packet's, so not here)
+        con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?, '00800.mpls', 'extra', 900)", (h,))
+    con.close()
+    core.set_label(core.library_open(db), h, "00004.mpls", "MainMovie", "Muppets from Space")
+    with open(core.makemkv_log_store(h), "a", encoding="utf-8") as fh:     # (a play-all MakeMKV lists: never here)
+        fh.write('\nTINFO:3,9,0,"0:06:06"\nTINFO:3,16,0,"00664.mpls"\nTINFO:3,27,0,"t03.mkv"\n')
+    con = core.library_open(db)
+    with con:
+        con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?, '00664.mpls', 'play-all', 366)", (h,))
+    con.close()
+    d = dd_app.TitlesDialog(root, app, h, "Muppets", review=True)
+    # in view, what the packet labels; under Show more, what it leaves blank (not the play-all)
+    assert sorted(t["id"] for t in d.rows) == ["00004.mpls", "00745.mpls", "00749.mpls"]
+    assert d.sent == {"00004.mpls", "00745.mpls"} and sorted(d.shown) == ["00004.mpls", "00745.mpls"]
+    assert d.detect_btn is None and d.top.title() == "Titles for TheDiscDB"
+    assert d.more.cget("text") == "Show 1 more: titles that go in blank"
+    d.show_all.set(True)
+    d.refill()
+    assert not d.vars                                           # (nothing to change as it is)
+    texts = [w.cget("text") for w in d.area.inner.winfo_children() if w.winfo_class() == "TLabel"]
+    assert "Cardshark Serenade" in texts and "MainMovie" in texts and d.shown[-1] == "00749.mpls"
+    pencils = [w for w in d.area.inner.winfo_children()
+               if w.grid_info().get("column") == d.cols[""] and w.grid_info().get("row") > 0]
+    assert len(pencils) == 2                                    # (one that goes in blank: labelled with the disc in)
+    d.unlock("00745.mpls")                                      # (its pencil: its type and name to put right)
+    assert list(d.vars) == ["00745.mpls"] and d.vars["00745.mpls"]["title"].get() == "Cardshark Serenade"
+    d.vars["00745.mpls"]["title"].set("Card Shark Serenade")
+    d.save()
+    assert core.get_labels(core.library_open(db), h)["00745.mpls"]["title"] == "Card Shark Serenade"
 
 
 def test_an_episodes_name_comes_from_its_season_and_number(gui, tmp_path, monkeypatch):
@@ -1474,12 +1869,31 @@ def test_a_copy_is_shown_as_one(gui, tmp_path, monkeypatch):
     d.save()
     assert core.get_labels(core.library_open(app.scan_args().db), rep["content_hash"]) == {}
     d.close()
+    # the play-all's edit link brings in its type and name, where it is, to put it right all the same;
+    # a row with values has a clear link, gone once they're cleared
+    d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
+    d.show_all.set(True)
+    d.refill()
+    where = d.shown.index("Title 15")
+    d.unlock("Title 15")
+    assert "Title 15" in d.vars and d.shown.index("Title 15") == where
+    d.vars["Title 15"]["type"].set("DeletedScene")
+    d.vars["Title 15"]["title"].set("Deleted Scenes")
+    assert d.clear_links["Title 15"].winfo_manager() == "grid"
+    d.clear_row("Title 15")
+    assert all(not d.vars["Title 15"][k].get() for k in ("type", "title", "season", "episode"))
+    assert not d.clear_links["Title 15"].winfo_manager()
+    d.vars["Title 15"]["type"].set("DeletedScene")
+    d.save()
+    assert core.get_labels(core.library_open(app.scan_args().db), rep["content_hash"])["Title 15"]["type"] == "DeletedScene"
+    d.close()
 
 
 def test_the_menu_button_that_plays_a_title(gui, tmp_path, monkeypatch):
     """Edit titles: a title a menu button plays (Detect titles saw the page) has a picture beside
     it; clicked, the page shows with the button outlined and what was read on it."""
     from PIL import Image
+    from disc_detective import theme as th
     root, made, pump = gui
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
     app = dd_app.App(root)
@@ -1488,21 +1902,47 @@ def test_the_menu_button_that_plays_a_title(gui, tmp_path, monkeypatch):
     found = {"feature": 1, "extras": [{"title": 2, "name": "Making Of"}], "promos": [],
              "pictures": {1: {"image": page, "rect": [10, 10, 200, 40], "text": ""},
                           2: {"image": page, "rect": [10, 50, 200, 80], "text": "Making Of"},
-                          3: {"image": str(tmp_path / "gone.png"), "rect": [0, 0, 1, 1], "text": ""}}}
+                          3: {"image": str(tmp_path / "gone.png"), "rect": [0, 0, 1, 1], "text": ""},
+                          4: {"image": page, "rect": [10, 90, 200, 120], "text": "Odette Reads", "page_from": "Jean-Bob",
+                              "page_trail": ["Bonus Features", "Odette's Friends", "Jean-Bob"]}}}
     rep = {"content_hash": "8" * 32, "format": "DVD", "kind": "movie", "best_guess": "Film (2001)", "path": str(tmp_path),
            "candidates": [{"kind": "movie", "name": "Film", "year": 2001, "imdb_id": "tt0000001", "score": 90}],
-           "titles": [{"id": "Title %d" % n, "role": "extra", "duration": 300 + n} for n in (1, 2, 3)],
+           "titles": [{"id": "Title %d" % n, "role": "extra", "duration": 300 + n} for n in (1, 2, 3, 4)],
            "labels": {}, "menu_found": found}
     app.rep = rep
     app.edit_titles()
     d = app.titles_dialog
-    assert sorted(d.pictures) == ["Title 1", "Title 2"]         # (a picture no longer there: none)
+    assert sorted(d.pictures) == ["Title 1", "Title 2", "Title 4"]    # (a picture no longer there: none)
+    # a page deeper in: the way to it from the main menu, in place of a heading
+    d.show_picture("Title 4")
+    v = d.viewer
+    assert pump(lambda: v.path.winfo_width() > 100 and str(v.path.cget("text")) == v.trail)
+    assert not hasattr(v, "head") and v.path.winfo_manager() and v.path.cget("style") == "DeskFind.TLabel"
+    # (the words as read set apart the same way, not the line round them)
+    assert v.words.cget("style") == "DeskFind.TLabel" and v.said.cget("style") == "DeskSub.TLabel"
+    assert v.said.cget("text") == "Detect titles read it as " and v.words.cget("text") == "“Odette Reads”"
+    assert v.trail == "Main Menu › Bonus Features › Odette's Friends › Jean-Bob"
+    assert str(v.path.cget("text")) == v.trail                   # (room for it all: no ellipsis)
+    # too long for the window: cut short, the whole on hover
+    v.trail = "Main Menu › " + " › ".join(["A Very Long Menu Name"] * 12)
+    dd_app.fit_label(v.path, v.trail, "DeskFind.TLabel")
+    assert str(v.path.cget("text")).endswith("…") and v.path.winfo_reqwidth() <= v.top.winfo_width() + th.px(40)
     d.show_picture("Title 2")
     v = d.viewer
-    assert v.alive() and v.head.cget("text") == "Title 2 plays from this button"
-    assert "Making Of" in v.said.cget("text") and v.photo is not None
+    # (the menu it's on, the first here; the button's own words on the picture link's hover)
+    assert v.alive() and v.trail == "Main Menu" and pump(lambda: str(v.path.cget("text")) == "Main Menu")
+    assert d.button_title("Title 2") == "Making Of" and d.button_title("Title 1") == ""
+    assert "Making Of" in v.words.cget("text") and v.photo is not None
     d.show_picture("Title 1")
     assert d.viewer is v and "couldn't read" in v.read.cget("text")      # one window, reused
+    assert dd_app.menu_name("Yearbook Character Clips") == "Yearbook Character Clips Menu"
+    assert dd_app.menu_name("SPECIAL FEATURES") == "Special Features Menu" and dd_app.menu_name("Bonus Menu") == "Bonus Menu"
+    # a photo of the page beside its picture (a Blu-ray's, over its video): that one shown, the picture kept
+    red = lambda: v.photo.get(5, 5)
+    assert red()[2] > red()[0]                                  # (the picture's navy)
+    Image.new("RGB", (720, 480), (200, 30, 30)).save(menus.photo_of(page))
+    d.show_picture("Title 1")
+    assert red()[0] > red()[2]                                  # (the photo's red, dimmed round the button)
     # the guide to the types (TYPE's help): every type in the list, one window
     assert {t for t, _, _ in dd_app.TypeGuide.TYPES} == set(core.LABEL_TYPES)
     d.heads["TYPE"].event_generate("<Button-1>")
@@ -1536,6 +1976,31 @@ def test_redrawing_the_details_keeps_the_layout(gui, monkeypatch):
     app.show_details(rep)                                       # changed: redrawn, in the same place
     assert row() == before and app.details.winfo_children() != shown
     assert any(str(w.cget("text")) == "ANOTHER_DISC" for w in app.details.winfo_children() if w.winfo_class() == "TLabel")
+
+
+def test_the_fingerprint_shows_whole_on_hover_and_copies_whole(gui, monkeypatch):
+    """The card shows a fingerprint's first 8 characters; it's the whole one that names the disc (on TheDiscDB, in
+    your case files), so that's the one on hover and the one copied."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    full = "C5993CC7FF62E0471F3C1A871B271A7E"
+    rep = {"content_hash": full, "format": "Blu-ray", "kind": "movie", "best_guess": "Film (2001)",
+           "candidates": [{"kind": "movie", "name": "Film", "year": 2001, "imdb_id": "tt0000001", "score": 90}],
+           "titles": [{"id": "00000.mpls", "role": "feature", "duration": 6000}], "facts": {}}
+    app.scan_done(rep, None)
+    root.update()
+    shown, copy = app.fingerprint_tips
+    assert shown.widget.cget("text") == "C5993CC7"
+    for tip, said in ((shown, full), (copy, "Copy the whole fingerprint")):
+        tip.show()
+        root.update()
+        assert [w.cget("text") for w in tip.tip.winfo_children()[0].winfo_children()] == [said]
+        tip.hide()
+    copy.widget.event_generate("<Button-1>")
+    copy.widget.event_generate("<ButtonRelease-1>")
+    root.update()
+    assert root.clipboard_get() == full
 
 
 def test_detect_titles_button(gui, tmp_path, monkeypatch):
@@ -1681,7 +2146,7 @@ def test_makemkv_reads_a_confirmed_disc_ahead(gui, tmp_path, monkeypatch):
     app.prescan(rep)
     job = app.mkv_scan
     assert job and pump(lambda: runs, 5)
-    assert runs[-1][1:] == ["-r", "--noscan", "--cache=1", "info", "dev:E:"]      # this drive only
+    assert runs[-1][1:] == ["-r", "--noscan", "--cache=1", "--minlength=0", "info", "dev:E:"]   # this drive, every title
     # the rip card's lab light: it breathes while the lab works, then says it's done
     assert app.bg_box.winfo_manager() and app.bg_lbl.cget("text") == "The lab is examining the disc…"
     assert app.bg_dot._pulse
@@ -1943,7 +2408,7 @@ def test_a_menu_picture_shows_the_words_read_on_demand(tmp_path):
         Image.new("RGB", (120, 40), (40, 60, 90)).save(small)
         v.show("00051.mpls", {"image": small, "rect": [0, 0, 120, 40], "button": [0, 0, 120, 40], "text": "Pilot", "alone": True})
         root.update()
-        assert v.photo.width() == 120 and "Pilot" in v.said.cget("text") and not v.photos
+        assert v.photo.width() == 120 and "Pilot" in v.words.cget("text") and not v.photos
         # a name put right: the name as a link; pointed at or clicked, what it was read as
         v.show("00052.mpls", {"image": small, "rect": [0, 0, 120, 40], "button": [0, 0, 120, 40], "text": "Meville's Cactus",
                               "alone": True, "read_as": "Meville's Cactus", "name": "Neville's Cactus"})
@@ -2115,6 +2580,41 @@ def test_a_blu_rays_menus_own_words_are_saved_as_known(monkeypatch, tmp_path):
     assert saved["00745.mpls"]["title"] == "Cardshark Serenade" and saved["00751.mpls"]["title"] == "Eyes Wide Shut (mine)"
     assert rep["labels"] == saved and rep["staked_out"]            # (the ad and the shorthand wait for you)
     assert {k for k in rep["detected"] if k not in saved} == {"00802.mpls", "00002.mpls"}
+
+
+def test_a_menu_projects_whole_or_its_pieces_whichever_has_buttons(monkeypatch, tmp_path):
+    """A Sony menu project naming a whole and its pieces: the pieces with no button words of their own
+    (Muppets from Space's "This Elevator 1, 2, 3") set aside for the whole; each with its button's
+    words, each its own and the whole their Play All."""
+    import types
+    from disc_detective import bdmenus
+    monkeypatch.setattr(bdmenus, "menu_project", lambda root: [{"name": "x", "playlist": "p", "fps": 1, "seconds": 1}])
+    monkeypatch.setattr(bdmenus, "menu_texts", lambda root, entries: {})
+    monkeypatch.setattr(bdmenus, "project_play_alls", lambda titles, entries: [])
+    monkeypatch.setattr(core, "imdb_open", lambda *a, **k: types.SimpleNamespace(close=lambda: None))
+    t = lambda pid, clips, secs: {"id": pid, "clip_list": clips, "duration": secs, "role": "junk"}
+
+    def run(exact):
+        labels = {"00746.mpls": {"type": "Extra", "title": "This Elevator", "exact": True},
+                  "00809.mpls": {"type": "Extra", "title": "This Elevator 1", "exact": exact},
+                  "00808.mpls": {"type": "Extra", "title": "This Elevator 2", "exact": exact}}
+        monkeypatch.setattr(bdmenus, "project_labels", lambda *a, **k: dict(labels))
+        rep = {"format": "Blu-ray", "content_hash": "D" * 32, "kind": "movie", "candidates": [], "labels": {},
+               "titles": [t("00746.mpls", "00554,00553", 26.1), t("00809.mpls", "00554", 11.2), t("00808.mpls", "00553", 14.9)]}
+        con = core.library_open(str(tmp_path / ("lib%d.sqlite" % exact)))
+        with con:
+            for x in rep["titles"]:
+                con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?,?,?,?)",
+                            (rep["content_hash"], x["id"], x["role"], x["duration"]))
+        args = types.SimpleNamespace(library=con, imdb_dir=str(tmp_path))
+        dd_app.App._bd_menus_seen(types.SimpleNamespace(settings={}), "E:\\", args, rep)
+        stored = dict(con.execute("SELECT title_id, role FROM titles").fetchall())
+        assert stored == {x["id"]: x["role"] for x in rep["titles"]}      # (in your case files too)
+        return {x["id"]: x["role"] for x in rep["titles"]}, set(rep["detected"])
+    roles, named = run(False)
+    assert roles["00809.mpls"] == roles["00808.mpls"] == "segment" and named == {"00746.mpls"}
+    roles, named = run(True)
+    assert roles["00746.mpls"] == "play-all" and named == {"00809.mpls", "00808.mpls"}
 
 
 def test_a_menus_play_alls_put_the_scan_right():
@@ -2612,6 +3112,41 @@ def test_every_crawls_progress_reads_the_same_on_the_status_line(monkeypatch):
     assert told[3:] == [appmod.suspect_line("Interrogating", k, n) for k, n in ((1, 2), (2, 2), (3, 3))]
 
 
+def test_a_long_stakeouts_time_left_shows_beside_its_busy_bar(gui, monkeypatch):
+    """App._crawl_estimate: the bar busy throughout; the time left, beside it, only once the stakeout has run
+    two minutes, at the rate its titles have been settled since they were sought ("titles", k of n; never
+    counted back though n grows); gone once they're found ("finish"). Edit titles' own, while it's up."""
+    import time as _time
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    app.show_progress(True, indeterminate=True)
+    now = _time.time()
+    app._stakeout_t0, app._crawl_phase = now, None
+    app._crawl_estimate(1, 4)
+    app._crawl_estimate(2, 4)
+    assert app.progress.cget("mode") == "indeterminate" and app.status_pct.cget("text") == ""   # (under two minutes)
+    app._stakeout_t0, app._crawl_phase = now - 200, (now - 60, 0.25, 0.25)
+    app._crawl_estimate(2, 4)                                         # (a quarter more in a minute: two to go)
+    assert app.status_pct.cget("text") == "about 2 min left" and app.progress.cget("mode") == "indeterminate"
+    app._crawl_estimate(2, 5)                                         # (a press found a way to one more: not back)
+    assert app._crawl_phase[2] == 0.5
+    app._crawl_estimate()
+    assert app.status_pct.cget("text") == ""
+    # Detect titles from Edit titles: beside its own bar
+    rep = {"content_hash": "7" * 32, "format": "DVD", "kind": "movie", "best_guess": "Film (2001)", "path": "E:\\",
+           "titles": [{"id": "Title 1", "role": "feature", "duration": 6000}], "labels": {}}
+    app.rep = rep
+    d = app.titles_dialog = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
+    d.show_status("Going on stakeout…")
+    app._crawl_phase = (now - 60, 0.25, 0.25)
+    app._crawl_estimate(3, 4)
+    assert d.news_pct.cget("text") == "under a minute left" and d.news_bar.cget("mode") == "indeterminate"
+    d.show_outcome("The suspects named the film", "#0a0")
+    assert d.news_pct.cget("text") == ""
+    d.close(ask=False)
+
+
 def test_closing_edit_titles_while_its_menus_are_read_asks_and_stops_the_reading(gui, tmp_path, monkeypatch):
     """Edit titles closed (Cancel, Escape, its close box) while Detect titles reads its disc's menus: asked
     first; no, it stays open and the reading goes on; yes, the reading is called off (its crawl stops at its
@@ -2740,6 +3275,66 @@ def test_a_disc_taken_out_mid_stakeout_ends_it_within_seconds(gui, tmp_path, mon
     app._detect_worker(rep, "vlc")
     assert pump(lambda: told, 5)
     assert told == [app.GONE_STAKEOUT] and len(waits) <= 5
+
+
+def test_detect_titles_reads_a_menu_project_again_with_no_stakeout(gui, monkeypatch):
+    """Muppets from Space's Blu-ray (Sony's BD-J, its menus in its own files): Detect titles reads its
+    menu project again and classifies its titles, in a moment, with no VLC and no crawl, and says
+    so; not "Could not go on Stakeout"."""
+    root, made, pump = gui
+    from disc_detective import bdmenus, menus
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    monkeypatch.setattr(core, "same_disc", lambda root, h: True)
+    monkeypatch.setattr(bdmenus, "menu_project", lambda root: [{"name": "SF_Music_Video", "playlist": "00758.mpls"}])
+    seen = []
+
+    def bd_seen(self, drive, args, rep):
+        seen.append(drive)
+        rep["detected"] = {"00758.mpls": {"type": "Music", "title": "Shining Star", "note": "its menu button"}}
+    monkeypatch.setattr(dd_app.App, "_bd_menus_seen", bd_seen)
+    monkeypatch.setattr(dd_app.App, "_stakeout", lambda self, rep, vlc: (_ for _ in ()).throw(menus.Unsupported("BD-J")))
+    outcomes = []
+    monkeypatch.setattr(app, "detect_outcome", lambda text, colour: outcomes.append(text))
+    rep = {"content_hash": "D8A7ED9A" + "0" * 24, "format": "Blu-ray", "kind": "movie", "path": "E:\\", "bd_project": 41,
+           "titles": [{"id": "00758.mpls", "role": "extra", "duration": 124.0}], "labels": {}}
+    app.rep = rep
+    assert app.reads_without_vlc(rep)                         # (no VLC needed to ask)
+    app._detect_worker(rep, None)
+    assert pump(lambda: outcomes, 5)
+    assert seen == ["E:\\"] and outcomes == ["The disc's own files name 1 of its titles"]
+    assert rep["titles"][0]["role"] == "extra"                  # (relabelled: an extra, a Music one)
+
+
+def test_a_title_a_bd_j_menu_doesnt_name_is_blank_and_last(gui, tmp_path, monkeypatch):
+    """Edit titles on a disc whose own files named its titles (a BD-J menu's): one they don't name isn't in its menus,
+    so no guess is put on it (its row blank) and it goes after the named ones, nothing to look into."""
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    monkeypatch.setattr(app, "extras", SimpleNamespace(get=lambda: True))
+    db = str(tmp_path / "lib.sqlite")
+    orig = app.scan_args
+
+    def args():
+        a = orig()
+        a.db, a.discdb_dir = db, str(tmp_path / "none")
+        return a
+    monkeypatch.setattr(app, "scan_args", args)
+    rep = {"content_hash": "W" * 32, "format": "Blu-ray", "kind": "movie", "bd_project": 15, "from_sample": True,
+           "titles": [{"id": "00001.mpls", "role": "extra", "duration": 131.0},
+                      {"id": "00200.mpls", "role": "extra", "duration": 207.0},
+                      {"id": "00201.mpls", "role": "extra", "duration": 116.0}],
+           "labels": {"00200.mpls": {"type": "Extra", "title": "The Millennium Bridge", "season": None, "episode": None}},
+           "detected": {"00201.mpls": {"type": "Extra", "title": "Shooting on Location", "note": "its menu button"}}}
+    d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
+    assert d.shown == ["00200.mpls", "00201.mpls", "00001.mpls"]
+    assert {k: d.state["00001.mpls"][k] for k in d.FIELDS} == {"type": "", "title": "", "season": "", "episode": ""}
+    d.close()
+    rep.pop("bd_project")                                       # (another disc: the scan's guess, as before)
+    d = dd_app.TitlesDialog(root, app, rep["content_hash"], "Film", rep=rep)
+    assert d.state["00001.mpls"]["type"] == "Extra"
+    d.close()
 
 
 def test_a_disc_taken_out_during_the_scans_stakeout_ends_the_scan(gui, monkeypatch):
@@ -2983,3 +3578,77 @@ def test_a_tool_whose_files_the_app_has_open_is_installed_after_a_restart(gui, m
     alive["old"] = False
     assert pump(lambda: ran == ["vlc"], 5)
     assert "install_on_start" not in dd_app.load_settings()
+
+
+def test_a_piece_of_a_named_title_says_whose():
+    """Edit titles and Choose titles: a piece of a named title says whose it is (as a copy does), not a
+    blank type; the film's own pieces and other titles say nothing of it."""
+    seg = lambda note: {"role": "segment", "note": note}
+    assert dd_app.piece_text(seg("part 2 of 3 of 00753.mpls (Pepe's Pick Up Pointers), which plays it whole")) == \
+        "Part 2 of 3 of 00753.mpls"
+    assert dd_app.piece_text(seg("a piece of 00746.mpls (This Elevator), which plays it whole")) == "Piece of 00746.mpls"
+    assert dd_app.piece_text(seg("a piece of the film")) == ""
+    assert dd_app.piece_text({"role": "junk", "note": "part 1 of 2 of 00001.mpls"}) == ""
+
+
+def test_a_fields_instructions_a_line_a_part():
+    """Under each field of the submit guide, its instructions in small print, a line for each part ("; ", ". "), each
+    begun with a capital; never split inside brackets."""
+    assert dd_app.hint_lines("the barcode's number: on the case; the disc never carries it. Their form needs it") == (
+        "The barcode's number: on the case\nThe disc never carries it\nTheir form needs it")
+    assert dd_app.hint_lines('what sets it apart ("Disc 1" in a set; both names on a double feature)') == (
+        'What sets it apart ("Disc 1" in a set; both names on a double feature)')
+    assert dd_app.hint_lines("amazon.com/dp/B002CAWNHE") == "Amazon.com/dp/B002CAWNHE"
+    assert dd_app.hint_lines("") == ""
+
+
+def test_a_newer_version_shows_on_the_about_link_and_inside(gui, monkeypatch):
+    """No popup: a newer version seen (with the weekly index, or by opening About) puts an upgrade icon on the About
+    link, highlighted; About says what's out and how to update, and looks again as it opens. Working offline, it
+    doesn't look."""
+    import json
+    root, made, pump = gui
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    monkeypatch.setattr(dd_app.di, "VERSION", "0.3")
+    rel = {"version": "0.4", "url": "https://github.com/x/releases/tag/v0.4", "notes": "", "published": "2027-01-01",
+           "assets": {}}
+    with open(os.path.join(core.data_home(), core.UPDATE_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"checked": "2027-01-02", "release": rel}, fh)
+    app = dd_app.App(root)
+    assert str(app.about_link.cget("style")) == "FootLinkNew.TLabel" and app.update["version"] == "0.4"
+    assert str(dd_app.th.icon("upgrade")) in str(app.about_link.cget("image"))
+    # opened: says so, and looks again (still 0.4 the newest)
+    looked = []
+    monkeypatch.setattr(dd_app.di, "check_for_update", lambda: looked.append(1) or rel)
+    opened = []
+    monkeypatch.setattr(dd_app.webbrowser, "open", opened.append)
+    app.about()
+    texts = lambda: [str(w.cget("text")) for w in made_widgets(app.about_win.news) if w.winfo_class() == "TLabel"]
+    assert pump(lambda: looked, 5)
+    root.update()
+    assert "  Version 0.4 is out (you have 0.3)" in texts() and any("git pull" in t for t in texts())
+    link = next(w for w in made_widgets(app.about_win.news) if w.winfo_class() == "TLabel"
+                and w.cget("text") == "What's new, and the downloads")
+    link.event_generate("<Button-1>")
+    assert opened == [rel["url"]]
+    app.about_win.top.destroy()
+    # updated since (this is 0.4 now): no icon, and About says it's the newest
+    monkeypatch.setattr(dd_app.di, "VERSION", "0.4")
+    app.about()
+    assert pump(lambda: "You have the newest version." in texts(), 5)
+    assert str(app.about_link.cget("style")) == "FootLink.TLabel"
+    app.about_win.top.destroy()
+    # GitHub out of reach: said so
+    monkeypatch.setattr(dd_app.di, "check_for_update", lambda: (_ for _ in ()).throw(OSError("offline")))
+    app.about()
+    assert pump(lambda: "Couldn't reach GitHub to look for a newer version." in texts(), 5)
+    app.about_win.top.destroy()
+    # working offline: not looked for
+    looked.clear()
+    monkeypatch.setattr(dd_app.di, "check_for_update", lambda: looked.append(1) or rel)
+    orig = app.scan_args
+    monkeypatch.setattr(app, "scan_args", lambda: (lambda a: (setattr(a, "offline", True), a)[1])(orig()))
+    app.about()
+    root.update()
+    assert "Working offline: not looking for a newer version." in texts() and not looked
+    app.about_win.top.destroy()
