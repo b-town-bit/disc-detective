@@ -682,6 +682,18 @@ def made_widgets(w):
         yield from made_widgets(c)
 
 
+def on_screen(pump, *widgets):
+    """Wait until each widget is drawn, as before anyone clicks it: macOS drops events sent to a window not yet shown
+    (a dialog just opened) or to a list on a notebook tab behind another."""
+    assert pump(lambda: all(w.winfo_viewable() for w in widgets), 10)
+
+
+def to_tab(d, key, pump):
+    """Help TheDiscDB's tab for one of its lists brought forward, as a click on it would, and drawn."""
+    d.tabs.select(d.lists[key]["page"])
+    on_screen(pump, d.lists[key]["tv"])
+
+
 def test_a_discdb_hit_needs_no_confirming(gui, monkeypatch):
     root, made, pump = gui
     monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
@@ -1107,6 +1119,7 @@ def test_help_thediscdb_lists_your_discs(gui, tmp_path, monkeypatch):
     assert pump(lambda: getattr(d, "guide", None) is not None, 10)
     g = d.guide
     g.show(1)
+    on_screen(pump, g.tmdb_link)
     g.tmdb_link.event_generate("<Button-1>")
     assert pump(lambda: "Copied: 212" in g.status.cget("text"), 10)
     assert asked == ["tt0036613"] and root.clipboard_get() == "212"
@@ -1118,6 +1131,7 @@ def test_help_thediscdb_lists_your_discs(gui, tmp_path, monkeypatch):
     g.steps = core.submission_steps(g.pk, None)
     g.show(1)
     monkeypatch.setattr(dd_app.di, "find_tmdb", lambda imdb, key=None: None)
+    on_screen(pump, g.tmdb_link)
     g.tmdb_link.event_generate("<Button-1>")
     assert pump(lambda: "doesn't know" in g.status.cget("text"), 10)
     assert opened and opened[-1].startswith("https://www.themoviedb.org/search?query=Arsenic")
@@ -1126,6 +1140,7 @@ def test_help_thediscdb_lists_your_discs(gui, tmp_path, monkeypatch):
     g.show(0)
     amazon = next(w for w in made_widgets(g.page) if w.winfo_class() == "TLabel"
                   and w.cget("text") == "Find the edition on Amazon")
+    on_screen(pump, amazon)
     amazon.event_generate("<Button-1>")
     assert opened[-1].startswith("https://www.amazon.com/s?k=Arsenic+and+Old+Lace") and "(1944)" not in opened[-1]
     copies = lambda: [getattr(w, "copies", None) for w in made_widgets(g.page) if hasattr(w, "copies")]
@@ -1222,6 +1237,7 @@ def test_needs_more_info_until_a_disc_is_read_and_labelled(gui, tmp_path, monkey
         "READY TO SUBMIT (0)", "NEEDS MORE INFO (1)", "READY TO UPDATE (0)"]
     tv = d.lists["needs"]["tv"]
     assert tv.item(tv.get_children()[0])["values"][2] == "Lab report, film labelled"
+    to_tab(d, "needs", pump)
     tv.selection_set(tv.get_children()[0])
     root.update()
     note = d.lists["needs"]["note"].cget("text")
@@ -1238,6 +1254,7 @@ def test_needs_more_info_until_a_disc_is_read_and_labelled(gui, tmp_path, monkey
     d.load(online=False)
     assert pump(lambda: d.tabs.tab(0, "text") == "READY TO SUBMIT (1)", 20)
     tv = d.lists["submit"]["tv"]
+    to_tab(d, "submit", pump)
     tv.selection_set(tv.get_children()[0])
     root.update()
     assert "1 title labelled, lab report on file" in d.lists["submit"]["note"].cget("text")
@@ -1284,6 +1301,7 @@ def test_needs_more_info_until_a_disc_is_read_and_labelled(gui, tmp_path, monkey
         if heads[-1] == "Identify the titles":
             assert "Arsenic and Old Lace" in texts() and "MainMovie" in texts()
             name = next(w for w in made_widgets(g.page) if getattr(w, "copies", None) == "Arsenic and Old Lace")
+            on_screen(pump, name)
             name.event_generate("<Button-1>")
             assert root.clipboard_get() == "Arsenic and Old Lace" and "Copied" in g.status.cget("text")
     assert heads == ["Before you start", "Identify the release", "Release details", "Add the disc", "Disc log",
@@ -1342,11 +1360,13 @@ def test_could_be_labelled_lists_your_edits_title_by_title(gui, tmp_path, monkey
     assert d.tabs.tab(2, "text") == "READY TO UPDATE (1)" and d.tabs.tab(1, "text") == "NEEDS MORE INFO (1)"
     tv = d.lists["needs"]["tv"]
     assert tv.get_children() == (found,) and tv.item(found)["values"][2] == "1 title labelled"
+    to_tab(d, "needs", pump)
     tv.selection_set(found)
     root.update()
     assert "label the titles TheDiscDB leaves blank in Edit titles" in d.lists["needs"]["note"].cget("text")
     tv = d.lists["improve"]["tv"]
     assert tv.get_children() == (yours,) and tv.item(yours)["values"][2] == "1 new"
+    to_tab(d, "improve", pump)
     tv.selection_set(yours)
     root.update()
     d.edits_btn.invoke()
