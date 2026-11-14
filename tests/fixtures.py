@@ -269,7 +269,7 @@ def build_discdb_repo(root, movie_disc_hash, movie_disc_sizes):
     write(m + "/metadata.json", {"Title": "Test Movie Mystery", "Year": 2011, "Type": "Movie",
                                  "ExternalIds": {"Imdb": "tt7000001", "Tmdb": "1"}})
     write(m + "/cover.jpg", POSTER_JPG)
-    write(m + "/2012-blu-ray/release.json", {"Slug": "2012-blu-ray", "Title": "2012 Blu-ray", "Year": 2012})
+    write(m + "/2012-blu-ray/release.json", {"Slug": "2012-blu-ray", "Title": "2012 Blu-ray", "Year": 2012, "Locale": "en-gb"})
     write(m + "/2012-blu-ray/front.jpg", BOX_JPG)
     write(m + "/2015-4k/front.jpg", BOX_JPG)              # another release's box (no disc of it)
     write(m + "/2012-blu-ray/disc01.json", {"Index": 1, "Name": "Blu-ray", "Format": "Blu-ray",

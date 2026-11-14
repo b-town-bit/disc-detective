@@ -29,6 +29,9 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "DISCDB_RAW", DEAD + "raw/")
     monkeypatch.setattr(core, "IMDB_BASE", DEAD + "imdb/")
     monkeypatch.setattr(core, "TMDB_API", DEAD + "tmdb")
+    monkeypatch.setattr(core, "GITHUB_API", DEAD + "github")
+    monkeypatch.setattr(core, "WIKIDATA_SPARQL", DEAD + "wikidata")
+    monkeypatch.setattr(core, "HOME_COUNTRY", "US")      # (the same on every machine: CI's aren't American)
     monkeypatch.setattr(core, "TVMAZE_API", DEAD + "tvmaze")
     # nor to this machine's own MakeMKV and VLC: a test's fake disc would set them reading it (and
     # left running, a real drive waits on them); a test wanting them sets its own

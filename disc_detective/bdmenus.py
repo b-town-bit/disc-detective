@@ -190,6 +190,50 @@ def _sheet_reader(folder, read):
     return words, picture
 
 
+WB_TICKS = 1e9          # a Warner menu file's running times, in these a second ("206000000000": 206 s)
+
+
+def wb_film(root, read=None):
+    """A film disc's titles as Warner's BD-J framework's plain text files have them (Harry Potter and the
+    Half-Blood Prince's): (entries, texts), the shape of menu_project() and menu_texts(), for project_labels.
+    The film is states.prop's main movie ("main_movie.streamIds=100": FPL_MainFeature); each special feature a
+    button that plays a clip ("millennium.videoStream=200,206000000000", its helper a SpecialFeatureClipButton),
+    named "SF_The_Millennium_Bridge" from its name there; texts: its button's art as read (a picture to its words)
+    reads it ("The Millennium Bridge"; none without read). ([], {}) for another kind of disc."""
+    folder, shared = _wb_folders(root)
+    if not folder:
+        return [], {}
+    try:
+        props = _props(os.path.join(folder, "menu_base.prop"))
+        states = _props(os.path.join(shared, "states.prop")) if shared else {}
+    except OSError:
+        return [], {}
+    words = _sheet_reader(folder, read)[0]
+    entries, texts, seen = [], {}, set()
+    main = states.get("main_movie") or {}
+    m = re.match(r"(\d+)", main.get("streamIds") or "")
+    if m:
+        secs = float(main.get("duration") or 0) / WB_TICKS
+        entries.append({"name": "FPL_MainFeature", "playlist": "%05d.mpls" % int(m.group(1)), "fps": None, "seconds": secs})
+        seen.add(entries[-1]["playlist"])
+    for o in props.values():
+        v = re.match(r"(\d+),(\d+)$", o.get("videoStream") or "")
+        if not v or not (o.get("class") or "").startswith("com.wb.bdj.menu.SpecialFeatureClipButtonHelper"):
+            continue
+        pl = "%05d.mpls" % int(v.group(1))
+        if pl in seen:
+            continue
+        seen.add(pl)
+        # ("DirectorDavidYatesReturns" -> SF_Director_David_Yates_Returns: nice() makes it words)
+        parts = re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+", o.get("name") or "")
+        entries.append({"name": "SF_" + "_".join(parts), "playlist": pl, "fps": None, "seconds": int(v.group(2)) / WB_TICKS})
+        images = (o.get("image") or "").split(",")
+        said = re.sub(r"\s+", " ", words(images[1] if len(images) > 1 else images[0])).strip()
+        if said:
+            texts[pl] = said
+    return (entries if len(entries) > 1 else []), texts
+
+
 def wb_menu(root, label, read=None):
     """What Warner's BD-J framework's plain text files say of this disc (its menu covers the whole set):
     {"season", "disc", "episodes": [{"number", "playlist", "read"}], "extras": [{"playlist", "read", "under",
@@ -503,6 +547,7 @@ def project_labels(titles, entries, film=None, known_film=None, texts=None):
     film: Trailer; the rest extras by their names (Muppets from Space's 26 outtakes, which the
     scan, by length alone, took for junk)."""
     from collections import Counter
+    from . import menus
     from .core import AD_RE
     by = {t["id"]: t for t in titles}
     plain = lambda s: " ".join(re.findall(r"[a-z0-9]+", (s or "").lower()))
@@ -511,37 +556,56 @@ def project_labels(titles, entries, film=None, known_film=None, texts=None):
     # 23.976 among outtakes at 29.97. All at one rate: no ads by name)
     rates = Counter(e["fps"] for e in entries if e["name"].startswith("SF_"))
     usual = rates.most_common(1)[0][0] if rates else None
-    out = {}
+    out, extras = {}, []
     for e in entries:
         t = by.get(e["playlist"])
-        if not t or abs((t.get("duration") or 0) - e["seconds"]) > max(2.0, LENGTH_FIT * e["seconds"]):
+        if not t:
+            continue
+        # a name whose running time isn't its playlist's: not trusted, but for an ad (hidden, never ripped
+        # unless ticked: Muppets from Space's "SF_Previews", 197 s for its two previews' 116) and a trailer
+        # whose time in the project can't be one (its "SF_Teaser_Trailer", 1 s for 59): yours to confirm
+        off = abs((t.get("duration") or 0) - e["seconds"]) > max(2.0, LENGTH_FIT * e["seconds"])
+        if off and not (AD_RE.search(nice(e["name"])) or
+                        (e["seconds"] < BROKEN_LENGTH and re.search(r"\btrailer\b|\bteaser\b", nice(e["name"]), re.I))):
             continue
         # (the menu's own words when its code has them, texts: menu_texts(); else the project's name)
         name, word = nice(e["name"]), "the menus' project names it \"%s\"" % e["name"]
-        exact = bool((texts or {}).get(e["playlist"]))     # (its button's words, its playlist: known)
+        exact = bool((texts or {}).get(e["playlist"])) and not off    # (its button's words, its playlist: known)
         if exact:
             name, word = texts[e["playlist"]], "its menu button reads \"%s\"" % texts[e["playlist"]]
+        if off:
+            word += " (%s s in the project, %s s on the disc: worth a look)" % (_secs(e["seconds"]), _secs(t.get("duration")))
         if e["name"].startswith("TMPL") or re.search(r"\bmenu\b|\bplay all\b|\bbackground|\bbckgrnd", name, re.I):
             continue
         if e["name"].startswith("FPL_"):
             if t.get("role") not in ("duplicate", "loop"):
                 out[t["id"]] = {"type": "MainMovie", "title": None, "note": word, "exact": True}
             continue
-        if re.search(r"easter egg", name, re.I):
-            out[t["id"]] = {"type": "Extra", "title": "Easter Egg", "note": word}
-            continue
         if AD_RE.search(name) or re.fullmatch(r"SPHE|Sony.*", name):
-            out[t["id"]] = {"type": "Promo", "title": "Previews", "note": word}
+            # (named as any disc's ads are: menus.ad_name)
+            out[t["id"]] = {"type": "Promo", "title": menus.ad_name({"said": name}), "note": word}
             continue
-        if re.search(r"\btrailer\b|\bteaser\b", name, re.I):
-            out[t["id"]] = {"type": "Trailer", "title": name, "note": word, "exact": exact}
-            continue
-        other = known_film(name) if known_film and usual and e["fps"] != usual else None
+        trailer = menus.title_kind(name)[0] == "Trailer"
+        other = known_film(name) if known_film and not trailer and usual and e["fps"] != usual else None
         if other and not (film and (plain(film) in plain(other) or plain(other) in plain(film))):
-            out[t["id"]] = {"type": "Promo", "title": "Previews - %s" % other, "note": word + ": another film, an ad"}
+            out[t["id"]] = {"type": "Promo", "title": menus.ad_name({"own": other}), "note": word + ": another film, an ad"}
             continue
-        out[t["id"]] = {"type": "Extra", "title": name, "note": word, "exact": exact}
+        extras.append({"key": t["id"], "name": name, "note": word, "exact": exact,
+                       **({"names_film": known_film(name)} if trailer and known_film else {})})
+    # what each is, and what it's called: the one namer's, as on any disc (menus.name_extras): "Music Video:
+    # “Shining Star” by ..." Music, its name what follows; another film's trailer an ad, a judgement, not exact
+    said = {e["key"]: e for e in extras}
+    for key, (kind, title, why) in menus.name_extras(extras, film).items():
+        out[key] = {"type": kind, "title": title, "note": menus.with_why(said[key]["note"], why),
+                    **({"exact": said[key]["exact"]} if kind != "Promo" else {})}
     return out
+
+
+BROKEN_LENGTH = 2.0     # seconds: a running time in a menu project this short is no trailer's
+
+
+def _secs(x):
+    return ("%.1f" % (x or 0)).rstrip("0").rstrip(".")
 
 
 # ---- a title played to see what it is (Edit titles' play link): ffmpeg's ffplay, the playlist by

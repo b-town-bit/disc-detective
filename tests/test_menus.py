@@ -339,9 +339,9 @@ def test_menu_titles():
     assert found["feature"] == 1
     assert found["extras"] == [
         {"title": 10, "name": "An Invitation to Father of the Bride", "seconds": 637.0, "listed": 635, "kind": None,
-         "page": [1, 10, 1]},
+         "page": [1, 10, 1], "via": "BONUS FEATURES "},
         {"title": 11, "name": "Martin & Short Interview Each Other", "seconds": 316.0, "listed": 313, "kind": "Interview",
-         "page": [1, 10, 1]}]
+         "page": [1, 10, 1], "via": "BONUS FEATURES "}]
     assert found["promos"] == [6, 9]
     assert "menu says 10:35, plays 10:37" in menus.found_text(found)
     # Father of the Bride Part II: the film's trailer in 2 chapters, an ad reel in 4 (one each)
@@ -418,6 +418,67 @@ def test_detected_labels():
     previews = menus.detected_labels({"feature": 10, "extras": [], "opening": [2, 3]}, reel)
     assert previews["Title 3"]["type"] == previews["Title 2"]["type"] == "Promo"
     assert previews["Title 3"]["title"] == "Previews" and "before the menu" in previews["Title 3"]["note"]
+
+
+def test_other_films_trailers_are_ads_and_sing_alongs_music():
+    """The Swan Princess (DVD): a Trailers page of other films' trailers (ads: Promos, named as the menus'
+    other ads are, "Previews - Daddy Day Care"), and its songs on a Sing-Along page (Music, "Sing-Along:
+    <song>"). The same rule on a show's disc and a BD-J's (extra_label)."""
+    titles = [{"id": "Title %d" % n, "role": "feature" if n == 1 else "extra"} for n in range(1, 8)]
+    trailers = [("The Swan Princess Collection", 2), ("Daddy Day Care", 3), ("Family Pun Trailer", 4),
+                ("Theatrical Trailer", 5), ("The Swan Princess Teaser", 6)]
+    found = {"feature": 1, "extras": [{"title": t, "name": n, "kind": "Trailer"} for n, t in trailers] +
+             [{"title": 7, "name": "Far Longer Than Forever", "kind": "Music", "sing": True}]}
+    labels = menus.detected_labels(found, titles, film="The Swan Princess")
+    assert labels["Title 2"] == {"type": "Promo", "title": "Previews - The Swan Princess Collection",
+                                 "note": "the menus: a trailer for another film, an ad"}
+    assert labels["Title 3"]["type"] == labels["Title 4"]["type"] == "Promo"
+    assert labels["Title 5"]["type"] == labels["Title 6"]["type"] == "Trailer"      # its own
+    assert labels["Title 7"]["type"] == "Music" and labels["Title 7"]["title"] == "Sing-Along: Far Longer Than Forever"
+    # the film not known: trailers as the page has them
+    assert menus.detected_labels(found, titles)["Title 3"]["type"] == "Trailer"
+    assert menus.heading_kind("SING-ALONG SONGS") == "Music" and menus.heading_kind("Sing Along") == "Music"
+    assert menus.sing_along("Sing-Along: Practice, Practice, Practice") == "Sing-Along: Practice, Practice, Practice"
+    # a show's disc: another show's trailer an ad, its own season's not
+    tv = {"episodes": [], "extras": [{"title": 2, "name": "Monk", "kind": "Trailer", "seconds": 90},
+                                     {"title": 3, "name": "Psych Season 2 Trailer", "kind": "Trailer", "seconds": 90},
+                                     {"title": 4, "name": "The Psych Theme", "kind": "Music", "seconds": 90, "sing": True}]}
+    shows = menus.detected_tv_labels(tv, [{"id": "Title %d" % n, "role": "extra"} for n in (2, 3, 4)], film="Psych")
+    assert (shows["Title 2"]["type"], shows["Title 2"]["title"]) == ("Promo", "Previews - Monk")
+    assert shows["Title 3"]["type"] == "Trailer"
+    assert (shows["Title 4"]["type"], shows["Title 4"]["title"]) == ("Music", "Sing-Along: The Psych Theme")
+    # a BD-J's menu project (Sony's): the same
+    from disc_detective import bdmenus
+    entries = [{"name": "SF_Daddy_Day_Care_Trailer", "playlist": "00010.mpls", "seconds": 120, "fps": 23.976},
+               {"name": "SF_Theatrical_Trailer", "playlist": "00011.mpls", "seconds": 120, "fps": 23.976}]
+    got = bdmenus.project_labels([{"id": "00010.mpls", "duration": 120}, {"id": "00011.mpls", "duration": 120}],
+                                 entries, film="The Swan Princess")
+    assert (got["00010.mpls"]["type"], got["00010.mpls"]["title"]) == ("Promo", "Previews - Daddy Day Care Trailer")
+    assert got["00011.mpls"]["type"] == "Trailer" and got["00011.mpls"]["exact"] is False
+
+
+def test_one_namer_for_every_disc():
+    """The same words named the same on a film's DVD, a show's disc and a BD-J's menu project: one namer
+    (name_extras) after the crawl, the labels' builders only saying which title is an extra."""
+    said = ["Music Video: Shining Star", "THEATRICAL TAAILER", "Sing-Along: Far Longer Than Forever",
+            "Easter Egg", "Daddy Day Care Trailer", "The Making of"]
+    want = [("Music", "Shining Star"), ("Trailer", "THEATRICAL TAAILER"),
+            ("Music", "Sing-Along: Far Longer Than Forever"), ("Extra", "Easter Egg"),
+            ("Promo", "Previews - Daddy Day Care Trailer"), ("Extra", "The Making of")]
+    ids = range(2, 2 + len(said))
+    film = menus.detected_labels({"feature": 1, "extras": [{"title": t, "name": n} for t, n in zip(ids, said)]},
+                                 [{"id": "Title %d" % t, "role": "extra"} for t in ids], film="The Swan Princess")
+    show = menus.detected_tv_labels({"episodes": [], "extras": [{"title": t, "name": n, "seconds": 60 + t}
+                                                                for t, n in zip(ids, said)]},
+                                    [{"id": "Title %d" % t, "role": "extra"} for t in ids], film="The Swan Princess")
+    from disc_detective import bdmenus
+    entries = [{"name": "SF_" + n.replace(" ", "_"), "playlist": "%05d.mpls" % t, "seconds": 60, "fps": 23.976}
+               for t, n in zip(ids, said)]
+    project = bdmenus.project_labels([{"id": "%05d.mpls" % t, "duration": 60} for t in ids], entries,
+                                     film="The Swan Princess", texts={"%05d.mpls" % t: n for t, n in zip(ids, said)})
+    for t, w in zip(ids, want):
+        for labels, key in ((film, "Title %d" % t), (show, "Title %d" % t), (project, "%05d.mpls" % t)):
+            assert (labels[key]["type"], labels[key]["title"]) == w, (key, labels[key])
 
 
 def test_the_previews_a_player_shows_before_the_menu():
@@ -765,13 +826,14 @@ def test_an_ad_is_named_as_an_ad():
             page(2, "", [{"text": "PLAY", "plays": plays(1)}, {"text": word, "goes_to": {"page": 7}}]),
             page(7, word, [{"text": "HITCH", "plays": plays(17, 147.0)}, {"text": "", "plays": plays(11, 90.0)}])]})
         assert found["promos"] == [11, 17]
-        assert found["promo_names"] == {11: lead, 17: "%s - Hitch" % lead}
+        assert {t: menus.ad_name(a) for t, a in found["promo_said"].items()} == {11: lead, 17: "%s - Hitch" % lead}
     titles = [{"id": "Title 1", "role": "feature"}, {"id": "Title 11", "role": "extra"}, {"id": "Title 17", "role": "extra"}]
     assert menus.detected_labels(found, titles)["Title 17"] == {"type": "Promo", "title": "Sneak Peeks - Hitch",
                                                                  "note": "the menus: an ad", "place": [2, 1]}
     # its own words unreadable: just the ad words
-    junk = menus.plain_names(dict(found, promo_names={17: "Previews - Qxzv Wrrt"}), lambda w: w.lower() == "previews")
-    assert junk["promo_names"] == {17: "Previews"}
+    junk = menus.plain_names(dict(found, promo_said={17: {"said": "PREVIEWS", "own": "Qxzv Wrrt"}}),
+                             lambda w: w.lower() == "previews")
+    assert menus.ad_name(junk["promo_said"][17]) == "Previews"
 
 
 def test_trademark_signs_read_as_letters():
@@ -1141,7 +1203,7 @@ def test_an_ad_buttons_run_of_titles_are_all_ads(tmp_path):
         page(6, [{"text": "Play All", "plays": plays(38, 159.0, (22,))}, {"text": "Campfire", "plays": plays(22, 337.0)}])]}
     found = menus.menu_titles(out)
     assert found["promos"] == [66, 70, 74]
-    assert {found["promo_names"][t] for t in (66, 70, 74)} == {"Sneak Peeks"}
+    assert {menus.ad_name(found["promo_said"][t]) for t in (66, 70, 74)} == {"Sneak Peeks"}
     assert [e["title"] for e in found["extras"]] == [22] and found["play_alls"] == [38]
     pics = menus.title_pictures(out, str(tmp_path))
     assert pics[70]["text"] == pics[66]["text"] == "Peeks"
@@ -1162,7 +1224,7 @@ def test_a_play_all_known_by_its_page_not_its_lettering():
                   {"text": "Sneak Peeks Ariel's Beginning", "plays": plays(54)},
                   {"text": "Sneak Peeks Tinker Bell", "plays": plays(18)}])]})
     assert found["play_alls"] == [20, 21, 56, 57] and found["promos"] == [18, 54]
-    assert "PLAY aul" not in " ".join(found["promo_names"].values())
+    assert "PLAY aul" not in " ".join(menus.ad_name(a) for a in found["promo_said"].values())
 
 
 def test_a_menus_bullet_icons_read_as_digits():
@@ -1200,11 +1262,11 @@ def test_names_put_right_by_the_films_credits():
     assert menus.credit_fix("The Centaurs Take Umbridge", potter, is_word) == "The Centaurs Take Umbridge"
     assert menus.credit_fix("The Weasleys' Fireworks", potter, is_word) == "The Weasleys' Fireworks"
     assert menus.credit_fix("The Thestrels", potter, is_word) == "The Thestrals"
-    found = {"feature": 1, "promos": [9], "promo_names": {9: "Previews - Ghost Riderm"},
+    found = {"feature": 1, "promos": [9], "promo_said": {9: {"said": "Previews", "own": "Ghost Riderm"}},
              "extras": [{"title": 23, "name": "Hagart Hughs", "seconds": 60, "listed": None, "kind": None}]}
     fixed = menus.correct_names(found, people, is_word, lambda t: "Ghost Rider" if t == "Ghost Riderm" else t)
     assert fixed["extras"][0]["name"] == "Hogarth Hughes" and fixed["extras"][0]["read"] == "Hagart Hughs"
-    assert fixed["promo_names"][9] == "Previews - Ghost Rider" and fixed["promo_read"][9] == "Ghost Riderm"
+    assert menus.ad_name(fixed["promo_said"][9]) == "Previews - Ghost Rider" and fixed["promo_read"][9] == "Ghost Riderm"
     labels = menus.detected_labels(fixed, [{"id": "Title 1", "role": "feature"}, {"id": "Title 23", "role": "extra"},
                                            {"id": "Title 9", "role": "extra"}])
     assert labels["Title 23"]["title"] == "Hogarth Hughes" and 'read as "Hagart Hughs"' in labels["Title 23"]["note"]
@@ -1428,22 +1490,28 @@ def test_a_name_read_by_rapidocr_needs_only_letters_here(tmp_path):
 
 
 def test_a_trailers_page_of_other_films_is_ads():
-    """A trailers page whose names are mostly well-known other films: those are ads, promos
-    ("Previews - xXx"); the film's own trailer stays an extra, and so does a page of its own
-    spots, though one is named like a film ("Epic"). Spider-Man's Trailers and TV Spots pages."""
+    """The one rule for other films' trailers (menus.other_films), Spider-Man's two pages of them: its
+    Trailers page, the film's own among them, the others ads ("Previews - Men in Black II", the well-known
+    film's name as known_films looked it up; Stan Lee's Mutants as read); its TV Spots page (its heading
+    says, "via"), one named like a film ("Epic"): the film's own spots."""
     films = {"xXx": "xXx", "Mr. Deeds": "Mr. Deeds", "Men in Black Ii": "Men in Black II", "Epic": "Epic",
              "Spider-man": "Spider-Man"}
-    t = lambda n, name, page: {"title": n, "name": name, "seconds": 60, "listed": None, "kind": "Trailer", "page": page}
-    found = {"feature": 1, "promos": [], "promo_names": {}, "extras": [
+    t = lambda n, name, page: {"title": n, "name": name, "seconds": 60, "listed": None, "kind": "Trailer", "page": page,
+                               "via": "SPECIAL FEATURES " + ("TRAILERS" if page[2] == 16 else "TV SPOTS")}
+    found = {"feature": 1, "promos": [], "promo_said": {}, "extras": [
         t(8, "Spider-man", [1, 9, 16]), t(9, "xXx", [1, 9, 16]), t(10, "Stan Lee's Mutants", [1, 9, 16]),
         t(11, "Mr. Deeds", [1, 9, 16]), t(12, "Men in Black Ii", [1, 9, 16]),
         t(14, "Amazing", [1, 9, 18]), t(15, "Epic", [1, 9, 18]), t(16, "Thread of Hope", [1, 9, 18]),
         t(17, "Suit Up", [1, 9, 18])]}
-    got = menus.trailer_ads(found, "Spider-Man", films.get)
-    assert got["promos"] == [9, 11, 12]
-    assert got["promo_names"][12] == "Previews - Men in Black II"
-    assert [e["title"] for e in got["extras"]] == [8, 10, 14, 15, 16, 17]
-    assert menus.trailer_ads(found, None, films.get) is found                 # (no film known: as found)
+    found = menus.known_films(found, films.get, "Spider-Man")
+    assert "names_film" not in found["extras"][0]                   # (the film's own: not looked up)
+    titles = [{"id": "Title %d" % n, "role": "feature" if n == 1 else "extra"} for n in (1, 8, 9, 10, 11, 12, 14, 15, 16, 17)]
+    labels = menus.detected_labels(found, titles, film="Spider-Man")
+    assert sorted(int(t.split()[1]) for t, x in labels.items() if x["type"] == "Promo") == [9, 10, 11, 12]
+    assert labels["Title 12"]["title"] == "Previews - Men in Black II"
+    assert labels["Title 10"]["title"] == "Previews - Stan Lee's Mutants"
+    assert {labels["Title %d" % n]["type"] for n in (8, 14, 15, 16, 17)} == {"Trailer"}
+    assert menus.detected_labels(found, titles)["Title 9"]["type"] == "Trailer"     # (no film known: as found)
 
 
 def test_play_all_as_ocr_reads_it():
@@ -1873,7 +1941,7 @@ def test_a_pages_words_are_those_outside_where_its_names_were_read(monkeypatch):
 
 def test_a_trailers_page_is_judged_trailer_by_trailer():
     """A page headed as trailers isn't a page of ads for its other words ("OTHER HENSON ADVENTURES
-    AVAILABLE FROM COLUMBIA TRISTAR HOME VIDEO"): trailer_ads judges each, the film's own trailer and
+    AVAILABLE FROM COLUMBIA TRISTAR HOME VIDEO"): each is judged (other_films), the film's own trailer and
     teaser kept, the other films' made previews, however many of the film's own there are."""
     buttons = [{"text": "MUPPETS FROM SPACE"}, {"text": "LABYRINTH"}]
     words = "THEATRICAL TRAILERS OTHER HENSON ADVENTURES ALSO AVAILABLE FROM COLUMBIA TRISTAR HOME VIDEO"
@@ -1884,8 +1952,12 @@ def test_a_trailers_page_is_judged_trailer_by_trailer():
                         ((23, "Muppets from Space"), (24, "Muppets from Space Teaser"), (25, "The Dark Crystal"),
                          (26, "Labyrinth"), (27, "The Storyteller"))]}
     known = {"The Dark Crystal": "The Dark Crystal", "Labyrinth": "Labyrinth"}
-    got = menus.trailer_ads(found, "Muppets from Space", known.get)
-    assert [e["title"] for e in got["extras"]] == [23, 24, 27] and got["promos"] == [25, 26]
+    found = menus.known_films(found, known.get, "Muppets from Space")
+    labels = menus.detected_labels(found, [{"id": "Title %d" % t, "role": "extra"} for t in range(23, 28)],
+                                   film="Muppets from Space")
+    # (beside the film's own, The Storyteller too, though no well-known film: Henson's series, another ad)
+    assert [t for t in range(23, 28) if labels["Title %d" % t]["type"] == "Promo"] == [25, 26, 27]
+    assert labels["Title 24"]["type"] == "Trailer"
 
 
 def test_a_markers_name_is_the_line_level_with_its_highlight():
@@ -2086,6 +2158,49 @@ def test_a_crawls_waits_are_told_on_its_own_thread():
     menus.pause(0)                                  # (and nothing told after: the crawl's gone)
 
 
+def test_a_line_across_a_row_of_buttons_is_cut_to_each_ones_words():
+    """The Swan Princess's main menu: OCR reads its bottom row as one line, "SCENE SELECTIONS SPECIAL
+    FEATURES TRAILERS", its middle over Special Features. That button gets its own words, not the row's."""
+    boxes = [(68, 404, 299, 443), (298, 404, 529, 441), (528, 403, 654, 444), (85, 361, 237, 404)]
+    row = ("SCENE SELECTIONS SPECIAL FEATURES TRAILERS", (75, 408, 649, 428), 0.97)
+    t, b, s = menus._row_cut(row, boxes[1], boxes)
+    assert t == "SPECIAL FEATURES" and 298 <= b[0] and b[2] <= 529 and s == 0.97
+    assert menus._row_cut(row, boxes[2], boxes)[0] == "TRAILERS"
+    alone = ("PLAY MOVIE", (90, 373, 233, 396), 0.99)                 # (a line in one button: as it is)
+    assert menus._row_cut(alone, boxes[3], boxes) == alone
+
+
+def test_a_story_per_friend_picked_before_has_its_own_picture_and_way_there(tmp_path):
+    """The Swan Princess: title set 1's Special Features leads to title set 10's friends page; each friend
+    leads to one page whose Odette Reads plays that friend's story (the disc remembers the choice). Each
+    story gets the page's picture, its way there named by the friend picked."""
+    page = lambda d, n, prog, route, buttons, image=None: ((d, n, prog), dict(
+        {"domain": d, "page": n, "program": prog, "route": route, "buttons": buttons}, **({"image": image} if image else {})))
+    rect = [0, 0, 10, 10]
+    story = {"title": 16, "chapter": 1, "seconds": 245, "others": [
+        {"title": 17, "chapter": 1, "by": [[1, 5, 1, 5], [1, 29, 1, 1], [10, 2, 2, 2]]},
+        {"title": 18, "chapter": 1, "by": [[1, 5, 1, 5], [1, 29, 1, 1], [10, 2, 2, 3]]}]}
+    pages = dict([
+        page(1, 5, 1, [], [{"n": 5, "text": "SPECIAL FEATURES", "goes_to": {"page": 29, "program": 1}, "rect": rect}]),
+        page(1, 29, 1, [{"page": 5, "program": 1, "button": 5}],
+             [{"n": 1, "text": "ODETTE'S BOOK OF WONDERFUL FRIENDS", "goes_to": {"page": 2, "program": 2}, "rect": rect}]),
+        page(10, 2, 2, [{"page": 5, "program": 1, "button": 5}, {"page": 29, "program": 1, "button": 1}],
+             [{"n": k, "text": f, "goes_to": {"page": 2, "program": 5}, "rect": rect}
+              for k, f in ((1, "Jean-Bob"), (2, "Speed"), (3, "Puffin"))]),
+        page(10, 2, 5, [{"page": 5, "program": 1, "button": 5}, {"page": 29, "program": 1, "button": 1},
+                        {"page": 2, "program": 2, "button": 1}],
+             [{"n": 1, "text": "Odette Reads", "plays": story, "rect": [5, 5, 50, 20]},
+              {"n": 3, "text": "friends", "goes_to": {"page": 2, "program": 3}, "rect": rect}], image="page_10_2_5.png"),
+    ])
+    # (the friends page's parent: in another title set's menus)
+    assert menus.page_trail(pages, (10, 2, 5)) == ["SPECIAL FEATURES", "ODETTE'S BOOK OF WONDERFUL FRIENDS", "Jean-Bob"]
+    assert menus.route_names(pages, story["others"][0]["by"])[-1] == "Speed"
+    pics = menus.title_pictures({"pages": list(pages.values()), "found": {"feature": 1, "extras": []}}, str(tmp_path))
+    assert (pics[16]["page_from"], pics[17]["page_from"], pics[18]["page_from"]) == ("Jean-Bob", "Speed", "Puffin")
+    assert pics[17]["page_trail"] == ["SPECIAL FEATURES", "ODETTE'S BOOK OF WONDERFUL FRIENDS", "Speed"]
+    assert pics[17]["image"] == pics[16]["image"] and pics[17]["text"] == "Odette Reads"
+
+
 def test_a_page_is_named_by_the_button_its_reached_by_past_any_next_or_arrow():
     """A page's name: the button it's reached by, on the page before; a Next, a Back, an arrow, an unread one
     passed over for the one before it (Harry Potter 1's yearbook pages: an arrow, then "Yearbook Character
@@ -2108,7 +2223,48 @@ def test_a_page_is_named_by_the_button_its_reached_by_past_any_next_or_arrow():
     assert menus.page_from(pages, ("bd", 2, 1)) == "Yearbook Character Clips"
     assert menus.page_from(pages, ("bd", 3, 1)) == "Yearbook Character Clips"          # (past an arrow)
     assert menus.page_from(pages, ("bd", 4, 1)) == "Yearbook Character Clips"          # (past an arrow and a Next)
+    # the way to it from the first menu, each name once (the arrow and Next pages named as the one before)
+    assert menus.page_trail(pages, ("bd", 4, 1)) == ["SPECIAL FEATURES", "Yearbook Character Clips"]
+    assert menus.page_trail(pages, ("bd", 1, 1)) == ["SPECIAL FEATURES"] and menus.page_trail(pages, ("bd", 0, 1)) == []
+    from disc_detective import app
+    assert app.menu_trail(["SPECIAL FEATURES", "Odette's Friends", "Jean-Bob"]) == \
+        "Main Menu › Special Features › Odette's Friends › Jean-Bob"
+    assert app.menu_trail(["SPECIAL FEATURES"]) == "Main Menu › Special Features" and app.menu_trail([]) == ""
     for nav in ("Next", "BACK", ">>", "Main Menu", "Page 2", "Next Page", "Menu", "2"):
         assert menus.NAV_RE.match(nav), nav
     for name in ("Yearbook Character Clips", "More Features", "Back to the Future", "Special Features"):
         assert not menus.NAV_RE.match(name), name
+
+
+def test_a_name_that_opens_with_its_kind():
+    """A title named with its kind first, then a colon or a dash: that kind, and the rest its name;
+    its kind alone, or a page saying it's something else, as it is."""
+    assert menus.kind_name("Music Video: “Shining Star” by The Dust Brothers") == (
+        "Music", "“Shining Star” by The Dust Brothers")
+    assert menus.kind_name("Featurette - The Making of", "Extra") == ("Featurette", "The Making of")
+    assert menus.kind_name("Deleted Scenes – Alternate Ending") == ("DeletedScene", "Alternate Ending")
+    assert menus.kind_name("Music Video", "Music") == ("Music", "Music Video")
+    assert menus.kind_name("Interview: Jim Henson", "Featurette") == ("Featurette", "Interview: Jim Henson")
+    assert menus.kind_name("Pepe: The King Prawn", "Extra") == ("Extra", "Pepe: The King Prawn")
+    assert menus.kind_name(None) == (None, None)
+
+
+def test_a_play_all_or_its_clips_whichever_the_menus_name():
+    """A Blu-ray's crawl: a button plays a gag reel whose clips are each a title of their own, which no
+    button plays. The reel is named; its clips aren't ads ("nothing plays it") but its pieces, set aside
+    once the labels are applied. With a button for each clip too, each clip's its own and the reel their
+    Play All."""
+    from disc_detective import core
+    t = lambda pid, secs, clips: {"id": pid, "role": "extra", "duration": secs, "clip_list": clips, "note": ""}
+    titles = [{"id": "00800.mpls", "role": "feature", "duration": 5000, "clip_list": "00001", "note": ""},
+              t("00700.mpls", 300, "00011,00012"), t("00711.mpls", 140, "00011"), t("00712.mpls", 160, "00012")]
+    found = {"feature": "00800.mpls", "extras": [{"title": "00700.mpls", "name": "Gag Reel"}], "promos": []}
+    labels = menus.detected_labels(found, titles)
+    assert set(labels) == {"00800.mpls", "00700.mpls"}
+    core.apply_labels(titles, labels)
+    assert [x["role"] for x in titles] == ["feature", "extra", "segment", "segment"]
+    found["extras"] += [{"title": "00711.mpls", "name": "Take One"}, {"title": "00712.mpls", "name": "Take Two"}]
+    labels = menus.detected_labels(found, titles)
+    core.apply_labels(titles, labels)
+    assert [x["role"] for x in titles] == ["feature", "play-all", "extra", "extra"]
+    assert titles[1]["note"] == "plays 00711.mpls, 00712.mpls (each named)"

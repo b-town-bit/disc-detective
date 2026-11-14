@@ -788,6 +788,9 @@ def _explore(engine, max_menus):
     # where the Menu key leads from the first page (back to it: a way past its intro animation)
     menu = engine.follow(p.copy(), {"op": "vtsm", "menu": 3, "call": False}, through=False)
     queue, seen, menus = [p], {p.key()}, [out["menu"]]
+    # the presses each menu state was reached by, and each answer's ({button: [route, an answer each]}): which
+    # earlier choice makes a button play what (The Swan Princess's Odette Reads: a story per friend picked before)
+    way, routes = {p.key(): []}, {}
     while queue and len(seen) < max_menus:
         p = queue.pop(0)
         for b in engine.buttons(p):
@@ -796,13 +799,15 @@ def _explore(engine, max_menus):
             k = (p.domain, p.pgcn, p.pgn, b["n"])
             if a not in found.setdefault(k, []):
                 found[k].append(a)
+                routes.setdefault(k, []).append(way.get(p.key(), []))
             nxt = out.get("player")
             if "goes_to" in a and nxt is not None and nxt.key() not in seen:
                 seen.add(nxt.key())
+                way[nxt.key()] = way.get(p.key(), []) + [k]
                 queue.append(nxt)
                 if a["goes_to"] not in menus:
                     menus.append(a["goes_to"])
-    began = {"goes_to": menus[0]}
+    began = {"goes_to": menus[0], "routes": routes}
     if out0.get("button"):
         began["select"] = out0["button"]
     if out0.get("menu_key"):

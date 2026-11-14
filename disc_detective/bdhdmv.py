@@ -572,10 +572,15 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
         order = sorted(holds, key=lambda pk: (loaded[pk[:2]]["n"], pk[2]))
         rank = lambda pk: best[pk] * len(order) + order.index(pk)
         found, tried, done = set(), {}, set()
+        sought = {v for vs in holds.values() for v in vs}
         while True:
             left = {pk: {v for v in vs if v not in found and tried.get(v, 0) < TRIES} for pk, vs in holds.items()}
             todo = menus.plan_pages({pk: v for pk, v in left.items() if v}, {}, done, rank)
             count["total"] = len(count["pages"]) + len([pk for pk in todo if pk not in count["pages"]])
+            # (the titles sought settled: named, given up on, or with no page left to read them on)
+            waiting = {v for pk in todo for v in left[pk]}
+            if sought:
+                tell("titles", len(sought - waiting), len(sought))
             if not todo:
                 break
             pk = todo[0]
@@ -597,6 +602,7 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
         count["total"] = len({key[:3] for key in wanted})
         for key in wanted:
             look(key)
+    tell("finish")                  # (the search for titles over: the pages written up, then their photos)
     # each page, its buttons that play a title or lead to a page, read or not
     pages, also = [], {}
     for key, m in sorted(loaded.items(), key=lambda kv: kv[1]["n"]):

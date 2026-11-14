@@ -1054,6 +1054,27 @@ def _worded(text):
     return bool(re.search(r"[A-Za-z]{2}", text or ""))
 
 
+def _row_cut(line, box, boxes):
+    """A line (text, its box, how sure) as a button's (its box: box) when it runs across the boxes of others of
+    its row too (boxes: the page's buttons'; two or more crossed, level with the line): their names read as one
+    line. Its words whose middles are over this button's box, each placed by its letters' share of the line's
+    width, and their part of the line; None if none are. Any other line: as it is."""
+    t, b, s = line
+    level = lambda r: min(b[3], r[3]) - max(b[1], r[1]) > 0.5 * (b[3] - b[1])
+    crossed = [r for r in boxes if level(r) and min(b[2], r[2]) - max(b[0], r[0]) > 0.25 * (r[2] - r[0])]
+    if len(crossed) < 2 or not any(r[0] < box[0] - 1 or r[2] > box[2] + 1 for r in crossed):
+        return line
+    per = (b[2] - b[0]) / max(1, len(t))
+    kept = []
+    for m in re.finditer(r"\S+", t):
+        a, c = b[0] + m.start() * per, b[0] + m.end() * per
+        if box[0] <= (a + c) / 2 <= box[2]:
+            kept.append((m.group(), a, c))
+    if not kept:
+        return None
+    return " ".join(w for w, _, _ in kept), (kept[0][1], b[1], kept[-1][2], b[3]), s
+
+
 def name_button(image, rect, rects, frame_size=(720, 480), lines=None, lit=None, alone=None, beside=None,
                 is_word=None):
     """A button's name off its page's picture, the one way for a DVD's (VLC's frame) and a Blu-ray's (the
@@ -1132,7 +1153,10 @@ def name_button(image, rect, rects, frame_size=(720, 480), lines=None, lit=None,
         hit = level_name(box, lines, worded, BESIDE * sx)
         return (hit[0], frame(hit[1]), hit[2]) if hit else None
     mid_in = lambda b: box[0] <= (b[0] + b[2]) / 2 <= box[2] and box[1] <= (b[1] + b[3]) / 2 <= box[3]
-    mine = [l for l in lines if mid_in(l[1])]
+    # (a line across a row of buttons, their names read as one: its words over this one's box, The Swan
+    # Princess's "SCENE SELECTIONS SPECIAL FEATURES TRAILERS", its Special Features button's "SPECIAL FEATURES")
+    boxes = [(r[0] * sx, r[1] * sy, r[2] * sx, r[3] * sy) for r in rects]
+    mine = [cut for l in lines if mid_in(l[1]) for cut in [_row_cut(l, box, boxes)] if cut]
     if len(mine) >= 2:                  # (a page heading's line dipping into its box: the page's, as on a DVD it
         heads = _heading_boxes(image, rect, rects, frame_size)          # always was: Enchanted's "Comes To
         over = lambda b, h: min(b[2], h[2]) > max(b[0], h[0]) and             min(b[3], h[3]) - max(b[1], h[1]) > 0.5 * (b[3] - b[1])    # Life" over "Happy Working Song")
@@ -2931,7 +2955,7 @@ def _ads_page(way, heading, buttons, line=None):
     heading: Rush Hour 3's page of a trailer and "SNEAK PEEKS", its heading read "THEATRICAL TRAILE
     SNEAK PEEI". (Those buttons are ads by their own words.) Nor, by its words alone, for a page whose
     heading line names it a page of trailers (line: page_headings'): its trailers are each judged,
-    the film's own an extra (trailer_ads: Muppets from Space's "THEATRICAL TRAILERS", "OTHER HENSON
+    the film's own an extra (other_films: Muppets from Space's "THEATRICAL TRAILERS", "OTHER HENSON
     ADVENTURES AVAILABLE FROM COLUMBIA TRISTAR HOME VIDEO", its own trailer and teaser among them)."""
     if any(_ad_text(w) for w in way):
         return True
@@ -4226,8 +4250,11 @@ def no_progress(stage, k=0, n=0):
 # the library; bdcrawl.crawl, VLC) alike, for the app to put in its own words: "setup", the disc's menus got
 # ready (a DVD's menu data read, a Blu-ray opened and unlocked); "start", the crawl begun; "page", the k-th
 # page of n read; "press", the k-th button of a round of n pressed (a player's: what it plays watched); "wait",
-# a moment spent waiting on the player (nothing to tell: a chance to call the crawl off, its disc taken out).
-CRAWL_STAGES = ("setup", "start", "page", "press", "wait", "photos")
+# a moment spent waiting on the player (nothing to tell: a chance to call the crawl off, its disc taken out);
+# "titles", k of the n titles sought settled (named, or given up on; n those a button is known to play, which may
+# grow as presses find more: a crawl looking for titles, not one reading everything); "finish", the search for
+# titles over (what's left: the last words, pictures).
+CRAWL_STAGES = ("setup", "start", "page", "press", "wait", "titles", "finish", "photos")
 # ("photos": a Blu-ray's menu pages, their names read, photographed over their video for Edit titles: photo_of)
 
 
@@ -4385,11 +4412,14 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
             if all("plays" in x for x in answers) and len({x["plays"] for x in answers}) > 1:
                 # a title or another by route (WALL-E's deleted scenes: their commentary versions
                 # with its switch on): the first route's, and the others as other versions
+                # (each with the presses that make it the one played: its own picture and way there)
                 others, titles_seen = [], {a["plays"]}
-                for x in answers[1:]:
+                ways = (began.get("routes") or {}).get((d, pgc, prog, n)) or []
+                for i, x in enumerate(answers[1:], 1):
                     if x["plays"] not in titles_seen:
                         titles_seen.add(x["plays"])
-                        others.append({"title": x["plays"], "chapter": x["chapter"] or 1})
+                        others.append(dict({"title": x["plays"], "chapter": x["chapter"] or 1},
+                                           **({"by": [list(w) for w in ways[i]]} if i < len(ways) else {})))
                 known[(s, n)] = {"plays": {"title": a["plays"], "chapter": a["chapter"] or 1}, "engine": True,
                                  "others": others}
                 continue
@@ -4432,6 +4462,13 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
     def no_way():
         """The titles sought that no button is known to play yet."""
         return sought - _titles_with_a_way(routes, known, pressed, opening)
+
+    def tell_titles(found):
+        """progress("titles"): of the titles sought a button is known to play, those settled (found: named,
+        or given up on). Not for a crawl reading everything: no titles sought."""
+        hunted = sought - no_way()
+        if hunted and not everything:
+            progress("titles", len(hunted & found), len(hunted))
 
     def passed_by(s):
         """Why a state wasn't worth a visit, or None."""
@@ -4482,7 +4519,9 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
                 done = set(c.reading) | {s for s in routes if tries.get(s, 0) >= 2}
                 found = named(hoping=True)
                 # (and those read on TITLE_TRIES pages to no name: looked for no further, as on a Blu-ray)
-                found |= _given_up(pages, c.reading, known, found, c.read)
+                given_up = _given_up(pages, c.reading, known, found, c.read)
+                found |= given_up
+                tell_titles(named() | given_up)          # (as read so far, not hoped)
                 plan = [] if everything else _page_plan(pages, routes, done, found, known, c.learned,
                                                         {} if every_title else copies, page_rank)
                 if not plan and not everything and not all(c.read(x) for x in c.reading):
@@ -4615,6 +4654,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
             r = pressed[(s, n)]
             land = c.learned.get((s, n))
             progress("press", i, len(tasks))
+            tell_titles(named() | _given_up(pages, c.reading, known, named(), c.read))
             log("  [%d/%d] %s button %d: %s" % (i, len(tasks), s, n, r.get("error") or (
                 "goes to page %s (program %s)" % land[1:] if land else " -> ".join(
                     "menus" if e["title"] <= 0 else "title %d ch %s" % (e["title"], e["chapter"]) for e in r["chain"]))))
@@ -4626,6 +4666,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
                 log("  VLC gets no picture from the drive any more: stopping with what's been found")
                 stop = True
                 break
+    progress("finish")                          # (the search for titles over: the pages written up)
     result, also = [], {}
     for s in routes:
         page = {"domain": s[0], "page": s[1], "program": s[2],
@@ -4786,7 +4827,9 @@ def nice_name(text):
 # (and scenes or footage cut, in other words: Order of the Phoenix's "Additional Footage", "Additional Scenes")
 DELETED_WORDS = r"\bdeleted(?:\s+\w+){0,2}?\s*scenes?\b|\bextended\s+scenes?\b|" \
                 r"\b(?:additional|unused|extended|deleted)\s+(?:scenes?|footage)\b"
-HEADING_KINDS = (("Music", r"\bmusic\s*videos?\b"), ("DeletedScene", DELETED_WORDS),
+# a page of the film's songs to sing along to: Music, each named "Sing-Along: <song>" (The Swan Princess's)
+SING_RE = re.compile(r"\bsing\W{0,2}alongs?\b|\bkaraoke\b", re.I)
+HEADING_KINDS = (("Music", r"\bmusic\s*videos?\b|" + SING_RE.pattern), ("DeletedScene", DELETED_WORDS),
                  ("Featurette", r"\bfeaturettes?\b"), ("Interview", r"\binterviews?\b"),
                  ("Trailer", r"\btrailers?\b|\bspots\b"), ("Short", r"\bshort\s*films?\b|\bshorts\b"))
 HUB_RE = re.compile(r"\b(bonus|special)\s*(features?|materials?)\b|\bextras\b", re.I)
@@ -4817,6 +4860,30 @@ def page_from(pages, s):
     return ""
 
 
+def page_trail(pages, s):
+    """The names of the pages on the way to a menu page, from the first menu's down to its own (page_from of each:
+    ["Bonus Features", "Odette's Friends", "Jean-Bob"]), a name passed twice once: for telling apart pages named
+    alike, the buttons of each friend's story on The Swan Princess. [] for the first menu."""
+    names = []
+    for page in reversed(_menu_path(pages, s)[:-1] if s in pages else []):
+        name = page_from(pages, page)
+        if name and (not names or names[-1] != name):
+            names.append(name)
+    return names
+
+
+def route_names(pages, presses):
+    """The buttons' words along a way the disc's program went ([[domain, page, program, button], ...],
+    dvdvm.explore's routes), as page_trail has a page's: the named ones, a Next or an arrow passed over."""
+    names = []
+    for d, pg, prog, n in presses or []:
+        b = next((x for x in (pages.get((d, pg, prog)) or {}).get("buttons") or [] if x["n"] == n), None)
+        text = " ".join(((b or {}).get("text") or "").split())
+        if re.search(r"[A-Za-z]{2}", text) and not NAV_RE.match(text) and (not names or names[-1] != text):
+            names.append(text)
+    return names
+
+
 def heading_kind(heading):
     """The type a page's heading gives its titles, or None: the kind it opens with (its first
     few words: a page's title, "SCORP TRAILERS"), and only one. Not a hub's: a page of bonus
@@ -4827,6 +4894,18 @@ def heading_kind(heading):
     opening = " ".join(heading.split()[:5])
     kinds = {k for k, rx in HEADING_KINDS if re.search(rx, opening, re.I)}
     return kinds.pop() if len(kinds) == 1 else None
+
+
+def kind_name(name, kind=None):
+    """(kind, name) for a title its menu names with its kind first, then a colon or a dash: the kind
+    it says, and its name without it ("Music Video: “Shining Star” by The Dust Brothers": Music,
+    "“Shining Star” by The Dust Brothers"; "Featurette - The Making of"). Its kind alone ("Music
+    Video"), or a page saying it's something else (kind, not Extra): as it is."""
+    for k, rx in HEADING_KINDS:
+        m = re.match(r"\s*(?:%s)\s*[:\-–—]\s*" % rx, name or "", re.I)
+        if m and re.search(r"[A-Za-z0-9]", name[m.end():]) and kind in (None, "Extra", k):
+            return k, name[m.end():].strip()
+    return kind, name
 
 
 def menu_titles(out):
@@ -4962,7 +5041,7 @@ def menu_titles(out):
                 for t in sorted(own)] \
         if len(own) >= 2 else []
     film_pages = {p: t for t, p in own.items()}
-    extras, promos, promo_names, play_alls = [], [], {}, []
+    extras, promos, promo_said, play_alls = [], [], {}, []
     for t, xs in sorted(by.items()):
         if t == feature or t in own and features:
             continue
@@ -4971,7 +5050,7 @@ def menu_titles(out):
             continue
         if any(x["promo"] for x in xs):
             promos.append(t)
-            promo_names[t] = promo_name(xs)
+            promo_said[t] = ad_words(xs)           # (named after: ad_name)
             continue
         text = max((x["text"] for x in xs), key=_wordy)
         if PLAY_ALL_RE.search(text):            # a page's "Play All": its titles, one after another
@@ -4988,6 +5067,7 @@ def menu_titles(out):
         name = nice_name(_unicon(LISTED_RE.sub("", text), icons)) if named and (own_scene or not _nav_only(text)) else ""
         # (or its own button says: Jurassic World's "Deleted Scenes", on a page saying nothing)
         kind = next((x["kind"] for x in xs if x.get("kind")), None) or heading_kind(name)
+        sing = kind == "Music" and any(SING_RE.search(x.get("via") or "") for x in xs) or bool(SING_RE.search(text))
         other = all(x.get("other") for x in xs)     # (only by another route: a commentary version?)
         if other and name:
             name += " (another version)"
@@ -4997,10 +5077,13 @@ def menu_titles(out):
         also = [nice_name(_unicon(LISTED_RE.sub("", a), icons)) for a in (out.get("also") or {}).get(text) or []] \
             if name else []
         film = _film_of(xs, pages, film_pages) if features else None
+        # (the words on the way to it and its page's heading: for the namer, a page of the film's TV spots)
+        via = next((x["via"] for x in xs if x.get("via")), "")
         extras.append(dict({"title": t, "name": name, "seconds": xs[0]["seconds"], "listed": listed, "kind": kind,
-                            "page": page}, **({"sure": round(sure, 3)} if sure is not None else {}),
+                            "page": page}, **({"via": via} if via else {}), **({"sure": round(sure, 3)} if sure is not None else {}),
                            **({"also": [a for a in also if a and a != name]} if also else {}),
-                           **({"other": True} if other else {}), **({"film": film} if film else {})))
+                           **({"other": True} if other else {}), **({"film": film} if film else {}),
+                           **({"sing": True} if sing else {})))
     # the feature's own button, when it says more than Play ("Signature Edition": another cut of
     # the film may be on the disc, and is named the same way)
     # (from its start: a scene button's words name the scene)
@@ -5038,7 +5121,7 @@ def menu_titles(out):
         extras = [e for e in extras if e["title"] not in unread]
         play_alls += [t for t in unread if t not in play_alls]
     return dict({"feature": feature, "feature_name": feature_name, "extras": extras, "promos": promos,
-                 "promo_names": promo_names, "play_alls": play_alls, "opening": opening,
+                 "promo_said": promo_said, "play_alls": play_alls, "opening": opening,
                  "places": {t: p for t, p in places.items() if p}},
                 **({"features": features} if features else {}), **({"play_all_parts": parts} if parts else {}))
 
@@ -5059,7 +5142,11 @@ def _menu_parent(pages, s):
         return g.get("page") == s[1] and g.get("program", 1) in (s[2], None)
     # (October Collections: both films in one menu set, the second's page reached from the disc's
     # own first menu, not from the first film's page of the same number)
-    return next((c for c in here if leads_here(c)), here[0] if here else None)
+    if here:
+        return next((c for c in here if leads_here(c)), here[0])
+    # (reached from another title set's menus: The Swan Princess's friends, title set 10's, from title set 1's
+    # Special Features; the one there whose button pressed leads here)
+    return next((c for c in pages if c != s and c[1:] == (r["page"], r["program"]) and leads_here(c)), None)
 
 
 def _menu_path(pages, s):
@@ -5134,19 +5221,22 @@ AD_NAMES = (("Sneak Peeks", r"\bsneak|\bpeeks?\b"), ("Coming Soon", r"\bcoming\s
             ("Advertisements", r"\badvert"), ("Previews", r"\bpreviews?\b|\btrailers?\b"))
 
 
-def promo_name(xs):
-    """A name for an ad from what the menus said (xs: its plays, each with the words that made it
-    an ad, "via", and its button's): the ad words first ("Previews"), then its button's own words
-    if they read as a name ("Previews - Hitch"; a poster button says nothing: "Previews")."""
-    said = " ".join([x.get("via") or "" for x in xs] + [x["text"] for x in xs])
-    lead = next((name for name, rx in AD_NAMES if re.search(rx, said, re.I)), "Previews")
+def ad_words(xs):
+    """What the menus said of an ad (xs: its plays, each with the words that made it an ad, "via", and its
+    button's): {"said": all those words, "own": its button's own words if they read as a name ("Hitch"; a
+    poster button says nothing: "")}. A reading, not a name: ad_name names it."""
+    said = " ".join([x.get("via") or "" for x in xs] + [x["text"] or "" for x in xs])
     # (less a trademark sign read into its last word: Spider-Man 2's "Spider-ManT", WALL-E's "ON BLU-RaY DISCTM")
     text = max((TRADEMARK_RE.sub("", x["text"] or "").strip() for x in xs), key=_wordy)
     # its own words, unless they're only the ad words ("PREVIEWS"): an ad can say what it is
     # ("Spider-Man: Friend or Foe Video Game Preview", Spider-Man 3)
     rest = re.sub(r"\b(previews?|sneak|peeks?|coming|soon|trailers?|ads?|advertisements?)\b", " ", text, flags=re.I)
-    own = nice_name(text) if _wordy(text) > 0 and _wordy(rest) > 0 else ""
-    return "%s - %s" % (lead, own) if own else lead
+    return {"said": said, "own": nice_name(text) if _wordy(text) > 0 and _wordy(rest) > 0 else ""}
+
+
+def promo_name(xs):
+    """An ad's name from its plays (xs: ad_words'), as ad_name gives it: "Previews - Hitch"."""
+    return ad_name(ad_words(xs))
 
 
 def readable(name, is_word, sure=False):
@@ -5388,46 +5478,29 @@ def correct_names(found, people, is_word, title_fix=None, seen=None):
     for e in found.get("extras") or []:
         new = fix_reading(e.get("name"), people, is_word, e.get("also"), seen)
         extras.append(dict(e, name=new, read=e["name"]) if new != e.get("name") else e)
-    promo_names, promo_read = {}, dict(found.get("promo_read") or {})
-    for t, n in (found.get("promo_names") or {}).items():
-        lead, _, own = n.partition(" - ")
-        fixed = title_fix(own) if own and title_fix else own
-        promo_names[t] = "%s - %s" % (lead, fixed) if fixed else n
+    promo_said, promo_read = {}, dict(found.get("promo_read") or {})
+    for t, ad in (found.get("promo_said") or {}).items():
+        own = ad.get("own") or ""
+        fixed = (title_fix(own) or own) if own and title_fix else own
+        promo_said[t] = dict(ad, own=fixed)
         if fixed != own:
             promo_read[t] = own
-    return dict(found, extras=extras, promo_names=promo_names, promo_read=promo_read)
+    return dict(found, extras=extras, promo_said=promo_said, promo_read=promo_read)
 
 
-def trailer_ads(found, film, known_film):
-    """found with a trailers page's ads for other films made promos: on a page of trailers
-    (kind "Trailer"), when most are well-known films (known_film: core.known_film) other than
-    this one, those are ads ("Previews - xXx": Spider-Man's Trailers page, xXx, Mr. Deeds, Men in
-    Black II, Stuart Little 2); the film's own trailer stays an extra, and so does a page whose
-    names are mostly its own spots, a film's name among them or not (Spider-Man's TV Spots:
-    "Epic" is a film too). film: this disc's film's title."""
-    import difflib
-    if not found or not film:
+def known_films(found, known_film, film=None):
+    """found with each trailer's well-known film, where its name is one (known_film: core.known_film):
+    "names_film", for name_extras to judge another film's trailer by. A trailer as name_extras has it
+    (title_kind); not this disc's own film (film), nor a name of trailer words alone. A reading, looked up
+    off the Tk thread (the IMDb index); the judging is name_extras'."""
+    if not found or not known_film:
         return found
-    plain = lambda t: " ".join(re.findall(r"[a-z0-9]+", (t or "").lower()))
-    own = lambda n: plain(film) in plain(n) or difflib.SequenceMatcher(None, plain(n), plain(film)).ratio() >= 0.8
-    pages = {}
+    extras = []
     for e in found.get("extras") or []:
-        if e.get("kind") == "Trailer" and e.get("name") and e.get("page"):
-            pages.setdefault(tuple(e["page"]), []).append(e)
-    ads = {}
-    for es in pages.values():
-        # (most of those not the film's own well-known films; the film's own few: Muppets from Space's
-        # trailer and teaser, beside The Dark Crystal, Labyrinth and The Storyteller)
-        others = [e for e in es if not own(e["name"])]
-        films = {e["title"]: known_film(e["name"]) for e in others}
-        films = {t: f for t, f in films.items() if f}
-        if len(es) >= 2 and 2 * len(films) > len(others) and 2 * (len(es) - len(others)) < len(es):
-            ads.update(films)
-    if not ads:
-        return found
-    return dict(found, extras=[e for e in found["extras"] if e["title"] not in ads],
-                promos=sorted(set(found.get("promos") or []) | set(ads)),
-                promo_names={**(found.get("promo_names") or {}), **{t: "Previews - " + f for t, f in ads.items()}})
+        kind, name = title_kind(e.get("name"), e.get("kind"))
+        hit = known_film(name) if kind == "Trailer" and name and not _own_trailer(name, film) else None
+        extras.append(dict(e, names_film=hit) if hit else e)
+    return dict(found, extras=extras)
 
 
 # a ™ or ® read into a name's last word: a capital T after small letters ("Spider-ManT"), a TM ("DISCTM")
@@ -5467,11 +5540,12 @@ def plain_names(found, is_word):
     other = lambda e: next((a for a in e.get("also") or [] if ok(unmarked(a, is_word))), None)
     extras = [dict(e, name=e["name"] if good(e) or beside(e) else unmarked(other(e) or "", is_word)) for e in extras]
     # an ad's own words, too: unreadable, it's just "Previews" (the ad words, always readable)
-    promo_names = {t: unmarked(n, is_word) for t, n in (found.get("promo_names") or {}).items()}
-    promo_names = {t: n if " - " not in n or ok(n.split(" - ", 1)[1]) else n.split(" - ", 1)[0]
-                   for t, n in promo_names.items()}
+    promo_said = {}
+    for t, ad in (found.get("promo_said") or {}).items():
+        own = unmarked(ad.get("own") or "", is_word)
+        promo_said[t] = dict(ad, own=own if own and ok(own) else "")
     fname = unmarked(found.get("feature_name") or "", is_word)
-    return dict(found, extras=extras, promo_names=promo_names,
+    return dict(found, extras=extras, promo_said=promo_said,
                 feature_name=fname if fname and ok(fname) else "")
 
 
@@ -5506,6 +5580,7 @@ def title_pictures(out, out_dir):
         if not p.get("image"):
             continue
         came = page_from(states, (p["domain"], p["page"], p["program"])) if "domain" in p else ""
+        trail = page_trail(states, (p["domain"], p["page"], p["program"])) if "domain" in p else []
         for b in p["buttons"]:
             t = (b.get("plays") or {}).get("title")
             if not t:
@@ -5527,7 +5602,17 @@ def title_pictures(out, out_dir):
                 best[t] = (rank, {"image": os.path.join(out_dir, b.get("picture") or p["image"]), "rect": list(b["rect"]),
                                   "text": b.get("text") or "", "_rects": [x["rect"] for x in p["buttons"]],
                                   "_words": b.get("words"), "lit": bool(b.get("picture")),
-                                  **({"page_from": came} if came else {})})
+                                  **({"page_from": came} if came else {}),
+                                  **({"page_trail": trail} if trail else {})})
+            # another title the button plays, chosen on the way (each friend's story on The Swan Princess, the
+            # friend picked a page before): the same button, its own way there, named by the choice
+            for o in b["plays"].get("others") or []:
+                way = route_names(states, o.get("by"))
+                if o["title"] not in best and way:
+                    best[o["title"]] = ((0,), {"image": os.path.join(out_dir, b.get("picture") or p["image"]),
+                                               "rect": list(b["rect"]), "text": b.get("text") or "",
+                                               "_rects": [x["rect"] for x in p["buttons"]], "_words": b.get("words"),
+                                               "lit": bool(b.get("picture")), "page_from": way[-1], "page_trail": way})
     # outlined: where the name was read, as the reading says ("words": the lines kept, the name beside
     # a marker, its plate), never looked for again (a guess can show words that weren't the ones read);
     # not known (a reading saved before), the button's area, as the disc draws it ("button": that, either way)
@@ -5660,7 +5745,7 @@ def _episode_above(r, placed):
 def tv_titles(out):
     """What a TV disc's menus say, before anyone asks the show: {"readings": [{"title", "text",
     "seconds", "bonus", "kind", "page", "rect", "image"}], one for each title with words of its own,
-    in the menus' order; "promos", "promo_names", "play_alls", "opening"}. A button stands for the
+    in the menus' order; "promos", "promo_said", "play_alls", "opening"}. A button stands for the
     title it plays from its start, or the title of the scene page it leads to. "bonus": found only
     on a page of bonus materials (Psych's International Pilot, as long as an episode). A title with
     any other button isn't a bonus: Smallville's Special Features play its episodes, audio switched."""
@@ -5674,7 +5759,7 @@ def tv_titles(out):
         titles = {x["title"] for x in plays}
         return plays[0] if len(titles) == 1 and len({x.get("chapter") for x in plays}) >= 2 else None
 
-    seen, promos, promo_names, runs, versions = {}, [], {}, [], []
+    seen, promos, promo_said, runs, versions = {}, [], {}, [], []
     for s, p in pages.items():
         on_way = [(s[0], r["page"], r["program"]) for r in p["route"]]
         way = [words.get((x, r["button"]), "") for x, r in zip(on_way, p["route"])]
@@ -5694,7 +5779,7 @@ def tv_titles(out):
             t = plays["title"]
             if ads or _ad_text(text):
                 promos.extend(x for x in [t] + list(plays.get("after") or []) if x not in promos)
-                promo_names.setdefault(t, promo_name([{"text": text, "via": via}]))
+                promo_said.setdefault(t, ad_words([{"text": text, "via": via}]))
                 continue
             if PLAY_ALL_RE.search(text) or TV_PLAY_RE.search(text) or _play_text(text):
                 runs.append(t)
@@ -5715,7 +5800,9 @@ def tv_titles(out):
                                # (Psych S8 D2's "Director's Cut": no episode's name, whatever its place)
                                only_cut=bool(CUT_ALONE_RE.search(text)),
                                # (a page of them: its buttons say only whose)
-                               commentaries=bool(VIDEO_COMMENTARY_RE.search(via)))
+                               commentaries=bool(VIDEO_COMMENTARY_RE.search(via)), via=via,
+                               # (a page of songs to sing along to: each "Sing-Along: <song>", as on a film's)
+                               sing=kind == "Music" and bool(SING_RE.search(via)) or bool(SING_RE.search(text)))
             elif x["bonus"] and not bonus:        # (its own button, over a commentary's)
                 seen[t] = dict(x, text=text, bonus=False, kind=kind, page=list(s), rect=list(b["rect"]), words=b.get("words"),
                                image=b.get("picture") or p.get("image"), lit=bool(b.get("picture")), switch=False, place=place)
@@ -5735,7 +5822,7 @@ def tv_titles(out):
             got = b.get("plays") or scene_title(p["domain"], b.get("goes_to"))
             if got:
                 played.update([got["title"]] + list(got.get("after") or []) + [o["title"] for o in got.get("others") or []])
-    return {"readings": list(seen.values()), "promos": promos, "promo_names": promo_names, "played": sorted(played),
+    return {"readings": list(seen.values()), "promos": promos, "promo_said": promo_said, "played": sorted(played),
             "play_alls": play_alls, "commentary_versions": [v for v in versions if v],
             "opening": [t for t in out.get("opening") or [] if t not in offered and t not in play_alls]}
 
@@ -5780,6 +5867,10 @@ def tv_found(tv, picks=None):
                                                     (longest and (r["seconds"] or 0) < 0.5 * longest)):
             extras.append({"title": r["title"], "name": nice_name(LISTED_RE.sub("", r["text"])),
                            "seconds": r["seconds"], "kind": r.get("kind") or heading_kind(r["text"])})
+            if r.get("sing"):
+                extras[-1]["sing"] = True
+            if r.get("via"):                  # (its heading and the way there: for the namer)
+                extras[-1]["via"] = r["via"]
             if r.get("read"):                 # (put right: fix_tv_readings, what was read to show)
                 extras[-1]["read"] = r["read"]
             if r.get("own_name"):             # (a whole page of an episode's scenes: each says which)
@@ -5841,24 +5932,25 @@ def tv_found(tv, picks=None):
                 e.update(season=ep["season"], episode=ep["episode"])
                 if not e.get("own_name"):
                     e["name"] = "%s %s" % (ep["name"], nice_name(said.group(0)) if said else "Deleted Scene")
-    return dict({k: tv.get(k) for k in ("promos", "promo_names", "play_alls", "opening", "played")},
+    return dict({k: tv.get(k) for k in ("promos", "promo_said", "play_alls", "opening", "played")},
                 tv=True, episodes=episodes, extras=extras)
 
 
 NOT_IN_MENUS = "not in the disc's menus"
 
 
-def detected_tv_labels(found, titles, keep=()):
+def detected_tv_labels(found, titles, keep=(), film=None):
     """tv_found as labels for a scan's titles, the shape of core.get_labels. Only what the menus
     say: a title they say nothing of keeps the scan's guess (never an ad for that alone, as on a
     film's disc: a TV disc's own episodes may have no button). Titles in keep (your labels,
-    TheDiscDB's names) and those the scan sets aside as copies are left be."""
+    TheDiscDB's names) and those the scan sets aside as copies are left be. film: the show's name, to tell
+    another's trailer, an ad, from its own (name_extras)."""
     out = {}
     name = title_id
     episodes = {name(e["title"]): e for e in found.get("episodes") or []}
     extras = {name(e["title"]): e for e in found.get("extras") or []}
     promos = {title_id(n) for n in found.get("promos") or []}
-    names = {title_id(n): v for n, v in (found.get("promo_names") or {}).items()}
+    names = {title_id(n): ad_name(ad) for n, ad in (found.get("promo_said") or {}).items()}
     opening = {title_id(n) for n in found.get("opening") or []}
     labelled = set()
     played = found.get("played")
@@ -5880,6 +5972,8 @@ def detected_tv_labels(found, titles, keep=()):
                 extras[home] = dict(own, **e)
                 if own.get("place"):
                     extras[home]["place"] = own["place"]
+    # what each is, and what it's called: the one namer's, as on a film's disc (name_extras)
+    naming = name_extras([dict(e, key=tid) for tid, e in extras.items() if e["name"]], film)
     for t in titles:
         tid = t["id"]
         if tid in keep or t.get("role") in ("duplicate", "segment"):
@@ -5903,7 +5997,8 @@ def detected_tv_labels(found, titles, keep=()):
             if same in labelled:
                 continue
             labelled.add(same)
-            out[tid] = {"type": e.get("kind") or "Extra", "title": e["name"], "note": "the menus: an extra"}
+            kind, title, why = naming[tid]
+            out[tid] = {"type": kind, "title": title, "note": with_why("the menus: an extra", why)}
             if e.get("read"):               # (a name put right: as read, to show)
                 out[tid]["read"] = e["read"]
             if e.get("place"):
@@ -5928,16 +6023,22 @@ def _listed_off(text):
     return " ".join(re.sub(r"^\W*\d{1,2}\s*[).]\s+", "", text or "").split())
 
 
-def tv_pictures(tv, out_dir, pictures=None):
+def tv_pictures(tv, out_dir, pictures=None, pages=None):
     """title_pictures, with each reading's own button over it: the button that names the title, one
-    leading to its scene page too (no button there plays it: Smallville's Episodes page)."""
+    leading to its scene page too (no button there plays it: Smallville's Episodes page). pages: the
+    crawl's, for each reading's page's name and the way to it from the main menu, as a film's have."""
     out = dict(pictures or {})
+    states = {(p["domain"], p["page"], p["program"]): p for p in pages or [] if "domain" in p}
     for r in tv.get("readings") or []:
         if r.get("image"):
+            st = tuple(r["page"]) if r.get("page") else None
+            came = page_from(states, st) if st in states else ""
+            trail = page_trail(states, st) if st in states else []
             out[r["title"]] = {"image": os.path.join(out_dir, r["image"]), "rect": list(r.get("words") or r["rect"]),
                                "button": list(r["rect"]), "text": r.get("on_button", r.get("read") or r["text"]),
                                "alone": bool(r.get("alone")),       # (what was read, as a film's: put right, "read")
-                               "lit": bool(r.get("lit"))}              # (the page drawn with its button selected)
+                               "lit": bool(r.get("lit")),              # (the page drawn with its button selected)
+                               **({"page_from": came} if came else {}), **({"page_trail": trail} if trail else {})}
     return out
 
 
@@ -5965,7 +6066,131 @@ HIDDEN_ROLES = ("duplicate", "play-all", "segment", "promo", "loop", "junk", "de
 COPY_ROLES = ("duplicate", "play-all", "segment")
 
 
-def detected_labels(found, titles, keep=()):
+# ---- Naming: the one place a title the menus offer gets its type and its name, for every disc (a film's or a
+# show's; DVD, Blu-ray, BD-J), after the crawl, from what it found there (its readings, put right: correct_names,
+# plain_names, known_films). The labels' builders (detected_labels, detected_tv_labels, bdmenus.project_labels,
+# core.discdb_promos) say which title is which part of the disc, the feature, an episode, an extra, an ad;
+# what an extra or an ad is called, and what kind of extra, only these say. TheDiscDB's own names are its
+# window's to give (core.submission_labels: a Promo sent as a Trailer). ----
+
+def sing_along(name):
+    """A sing-along's name, its kind first, as TheDiscDB's Music titles have theirs: "Sing-Along: <song>"."""
+    song = SING_RE.sub("", name or "").strip(" :-–—")
+    return "Sing-Along: %s" % song if song else None
+
+
+def ad_name(ad=None):
+    """An ad's name (ad: ad_words'; or {"own": a film it's for}): the words that say it's an ad first
+    ("Previews", "Sneak Peeks"), then its own words ("Previews - Hitch"). Nothing said: "Previews"."""
+    ad = ad or {}
+    lead = next((name for name, rx in AD_NAMES if re.search(rx, ad.get("said") or "", re.I)), "Previews")
+    return "%s - %s" % (lead, ad["own"]) if ad.get("own") else lead
+
+
+def ad_own(name):
+    """What an ad's name (ad_name's) says it's for, its lead taken off: "Previews - Hitch" -> "Hitch". A name
+    saying only that it's an ad ("Previews"), or not one of ad_name's, as it is."""
+    for lead, _ in AD_NAMES:
+        rest = (name or "")[len(lead) + 3:].strip() if (name or "").startswith(lead + " - ") else ""
+        if rest:
+            return rest
+    return name
+
+
+# a trailer's words that say only what kind of trailer it is, not whose ("Theatrical Trailer", "Teaser #2",
+# "TV Spot 2", a show's "Psych Season 2 Trailer" but for its name): a disc's own trailer
+OWN_TRAILER_WORDS = {"trailer", "trailers", "teaser", "teasers", "theatrical", "original", "official",
+                     "international", "domestic", "final", "the", "film", "movie", "tv", "spot", "spots", "re",
+                     "release", "season", "seasons", "series", "complete", "show"}
+
+
+def _trailer_word(w):
+    """A word saying trailer, a letter misread or not (Abbott and Costello Go to Mars's "TAAILER"; not a
+    featurette's "Trainer"), or teaser."""
+    return w in ("teaser", "teasers") or (_edits(w, "trailer") <= 1 and w not in ("trainer", "trailed"))
+
+
+def title_kind(name, kind=None):
+    """(kind, name): what a title is (kind: its page's heading's, its menu project's), else what its own
+    words say (heading_kind; a trailer, "THEATRICAL TAAILER"), else an Extra; its kind first in its name,
+    "Music Video: “Shining Star”", taken off it (kind_name)."""
+    kind = kind or heading_kind(name) or \
+        ("Trailer" if any(_trailer_word(w) for w in re.findall(r"[a-z]+", (name or "").lower())) else None)
+    kind, name = kind_name(name, kind or "Extra")
+    return kind or "Extra", name
+
+
+def _own_trailer(name, film):
+    """Whether a trailer's name names this disc's film or nothing (film: its title, or the show's): its
+    words but the trailer words its film's name, or none ("Theatrical Trailer", "The Swan Princess Teaser";
+    not "The Swan Princess Collection")."""
+    import difflib
+    from .core import norm_title
+    words = [w for w in re.findall(r"[a-z0-9']+", (name or "").lower())
+             if not (w in OWN_TRAILER_WORDS or w.isdigit() or _trailer_word(w))]
+    if not words:
+        return True
+    if not film:
+        return False
+    rest, own = norm_title(" ".join(words)), norm_title(film)
+    return rest == own or difflib.SequenceMatcher(None, rest, own).ratio() >= 0.9     # (a letter misread)
+
+
+# a page of the film's own TV spots, by its heading or the way to it ("TV SPOTS"): each spot named for a
+# moment of the film, not for another film (Spider-Man's: "Epic", "Suit Up")
+SPOTS_RE = re.compile(r"\b(?:tv|television)\s*spots?\b|\bspots\b", re.I)
+
+
+def other_films(trailers, film):
+    """Of a disc's trailers, those for a film besides its own (film: its title, or the show's): {key: that
+    film's name}. trailers: [{"key", "name", "via", "names_film"}]: via, its page's heading and the words on
+    the way there; names_film, the well-known film its name is (known_films), to name it by. A trailer is
+    the film's own when its name says only theatrical, teaser and the like, or this film (_own_trailer), or
+    its page is the film's TV spots (SPOTS_RE); any other is another film's, an ad (The Swan Princess's
+    Trailers page: The Swan Princess Collection, Annie, Daddy Day Care, Stuart Little 2, Matilda). None
+    without the film."""
+    if not film:
+        return {}
+    return {t["key"]: t.get("names_film") or t["name"] for t in trailers
+            if t.get("name") and not _own_trailer(t["name"], film) and not SPOTS_RE.search(t.get("via") or "")}
+
+
+AD_OF_ANOTHER = "a trailer for another film, an ad"
+
+
+def name_extras(items, film=None):
+    """What each extra is, and what it's called: {key: (type, name, why)}. items: [{"key", "name" (its words,
+    put right), "kind" (its page's word on it), "page", "sing" (its page's songs to sing along to),
+    "names_film" (known_films), "via" (its heading, the way there)}]; film: the disc's film, or the show (None on a disc of several films: each
+    one's trailer is the disc's own). A song to sing along to: Music, "Sing-Along: <song>"; a trailer for
+    another film (other_films): a Promo named as the menus' other ads are, "Previews - Daddy Day Care", why
+    AD_OF_ANOTHER; an Easter egg as one; the rest by title_kind. why: "" where the menus said it outright."""
+    out, trailers = {}, []
+    for it in items:
+        if re.search(r"\beaster\s*egg", it.get("name") or "", re.I):
+            out[it["key"]] = ("Extra", "Easter Egg", "")
+            continue
+        kind, name = title_kind(it.get("name"), it.get("kind"))
+        # (its words as read: "Sing-Along: <song>" has its kind taken off by title_kind)
+        if it.get("sing") or SING_RE.search(it.get("name") or ""):
+            kind, name = "Music", sing_along(name)
+        out[it["key"]] = (kind, name, "")
+        if kind == "Trailer":
+            trailers.append(dict(it, name=name))
+    for key, other in other_films(trailers, film).items():
+        out[key] = ("Promo", ad_name({"own": other}), AD_OF_ANOTHER)
+    return out
+
+
+def with_why(note, why):
+    """A label's note, with what naming made of it (name_extras' why): "the menus: an extra" -> "the menus: a
+    trailer for another film, an ad"."""
+    if not why:
+        return note
+    return note.replace("an extra", why) if "an extra" in note else "%s: %s" % (note, why)
+
+
+def detected_labels(found, titles, keep=(), film=None):
     """menu_titles() as labels for a scan's titles ({"Title N": {"type", "title", "note"}}, the
     shape of core.get_labels): the feature MainMovie, each extra an Extra with its menu name,
     and every other title a Promo, the menus offering nothing that plays it. Titles in keep
@@ -5974,12 +6199,18 @@ def detected_labels(found, titles, keep=()):
     menus offer it (Muppets from Space's outtakes: 10-44 seconds each), but not made a Promo.
     Of two titles the scan found the same video, the one the menus play is the one labelled (its
     twin, then, the copy: Spider-Man 2's previews page plays title 17, the scan kept 10).
+    film: the disc's film (its title), to tell another film's trailer, an ad, from its own.
     {} when the menus said nothing (then nothing changes)."""
     if not found or not (found.get("feature") or found.get("extras")):
         return {}
+    # (as the scan had them, not as labels applied since left them: Detect titles run again)
+    titles = [dict(t, role=t["scan_role"], note=t.get("scan_note")) if "scan_role" in t else t for t in titles]
     named = {title_id(e["title"]): e["name"] for e in found.get("extras") or []}
-    kinds = {title_id(e["title"]): e.get("kind") for e in found.get("extras") or []}
     others = {title_id(e["title"]) for e in found.get("extras") or [] if e.get("other")}
+    # what each is, and what it's called: the one namer's (name_extras), its page's trailers judged together
+    roles = {t["id"]: t.get("role") for t in titles}
+    naming = name_extras([dict(e, key=title_id(e["title"])) for e in found.get("extras") or []
+                          if roles.get(title_id(e["title"])) not in ("feature", "version")], film)
     # (a name put right: as read, to show: correct_names)
     read_as = {title_id(e["title"]): e["read"] for e in found.get("extras") or [] if e.get("read")}
     read_as.update({title_id(t): r for t, r in (found.get("promo_read") or {}).items()})
@@ -5988,10 +6219,14 @@ def detected_labels(found, titles, keep=()):
     # several films, each with its own menu: each a main movie (its heading in the note)
     films = {title_id(f["title"]): f.get("name") or "" for f in found.get("features") or []}
     promos = {title_id(n) for n in found.get("promos") or []}
-    promo_names = {title_id(n): name for n, name in (found.get("promo_names") or {}).items()}
+    promo_names = {title_id(n): ad_name(ad) for n, ad in (found.get("promo_said") or {}).items()}
     # what a player shows before the menu: its previews (Jurassic World's preview reel)
     opening = {title_id(n) for n in found.get("opening") or []}
     played = lambda tid: tid in named or tid == feature or tid in promos or tid in films
+    # what a title the menus play plays in pieces, titles of their own no button plays (a Play All in the
+    # menus, its parts not): its pieces (core.title_pieces), not ads
+    from .core import title_pieces
+    pieces = title_pieces(titles, {t["id"] for t in titles if played(t["id"])})
     # the feature named by its button only beside another cut ("Signature Edition")
     cuts = any(t["id"] in named and t.get("role") in ("feature", "version") for t in titles)
     # a page's Play All: the scan says what it plays (left unlabelled, never an ad)
@@ -6020,22 +6255,19 @@ def detected_labels(found, titles, keep=()):
             # "Original Edition"): a main movie too, not an extra
             out[tid] = {"type": "MainMovie", "title": named[tid] or None, "note": "the menus: another cut of the film"}
         elif tid in named:
-            # its page's heading says ("MUSIC VIDEOS"); or the film's own trailer: TheDiscDB's
-            # Trailer (ads were promos already, by AD_RE)
-            # (a letter misread is still a trailer: Abbott and Costello Go to Mars's "THEATRICAL TAAILER",
-            # its name put right later)
-            # (not another word: a featurette's "Trainer")
-            kind = kinds.get(tid) or ("Trailer" if any(_edits(w, "trailer") <= 1 and w not in ("trainer", "trailed")
-                                                       for w in re.findall(r"[a-z]+", (named[tid] or "").lower()))
-                                      else "Extra")
-            out[tid] = {"type": kind, "title": named[tid] or None,
-                        "note": said(tid, "the menus: another version of an extra (a setting picks it): worth a look"
-                                     if tid in others else "the menus: an extra")}
+            # (its kind and name: its page's heading's word, "MUSIC VIDEOS", its own; another film's trailer
+            # an ad: name_extras. A nameless one, read nowhere: an Extra still)
+            kind, name, why = naming[tid]
+            note = "the menus: another version of an extra (a setting picks it): worth a look" if tid in others \
+                else "the menus: an extra"
+            out[tid] = {"type": kind, "title": name or None, "note": said(tid, with_why(note, why))}
         elif tid in promos:
             out[tid] = {"type": "Promo", "title": promo_names.get(tid), "note": said(tid, "the menus: an ad")}
         elif tid in opening:
             out[tid] = {"type": "Promo", "title": "Previews",
                         "note": "plays before the menu on a player (VLC skips it): previews, as a rule"}
+        elif tid in pieces:
+            continue             # (a piece of a title the menus play, and only that: core.apply_labels sets it aside)
         else:
             out[tid] = {"type": "Promo", "title": None, "note": "the menus: nothing plays it"}
     places = {title_id(n): p for n, p in (found.get("places") or {}).items()}

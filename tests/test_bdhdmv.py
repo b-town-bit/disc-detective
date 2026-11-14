@@ -118,9 +118,14 @@ def counting(names):
 
 
 def test_a_discs_hdmv_menus_named_by_their_buttons_and_what_they_play(library, tmp_path):
-    seen = []
-    got = bdhdmv.read("E:/", TITLES, str(tmp_path), log=lambda m: None, aacs="libaacs.dll", read_words=counting(seen))
+    seen, told = [], []
+    got = bdhdmv.read("E:/", TITLES, str(tmp_path), log=lambda m: None, aacs="libaacs.dll", read_words=counting(seen),
+                      progress=lambda *a: told.append(a))
     assert library.plans == ["titles"]
+    # how far along, as a DVD's crawl tells it: the titles sought settled, all by the end; then the search over
+    counts = [t[1:] for t in told if t[0] == "titles"]
+    assert counts and counts[-1][0] == counts[-1][1] and all(0 <= k <= n for k, n in counts)
+    assert told.index(("finish",)) > max(i for i, t in enumerate(told) if t[0] == "titles")
     # (a quick crawl: one button for each title, the film's first scene for want of a Play Movie; not the bar)
     assert sorted(seen) == ["1", "Play All", "The Explosion of Decrees"]
     found = got["found"]
@@ -546,6 +551,8 @@ def test_a_playlist_that_brings_up_a_menu_is_a_menu_page_and_names_the_pages_aft
     pics = menus.title_pictures(got, str(tmp_path))
     assert pics["00083.mpls"]["page_from"] == "Yearbook Character Clips"
     assert pics["00085.mpls"]["page_from"] == "Yearbook Character Clips"          # (past the arrow)
+    # the way there from the main menu, as a DVD's has it
+    assert pics["00085.mpls"]["page_trail"][-1] == "Yearbook Character Clips"
 
 
 def test_a_longer_title_ending_in_a_menu_is_still_a_title(library, tmp_path, monkeypatch):
