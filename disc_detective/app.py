@@ -573,7 +573,10 @@ def fit_first(tv, full, fill=None):
     if width <= 1:                                # (not drawn yet: as it asks to be)
         width = tv.winfo_reqwidth()
     rest = sum(tv.column(c, "width") for c in cols if c != fill)
-    room = max(th.real(th.px(120)), width - rest - 2)
+    # (the table asks for its columns plus its own border, which differs by theme: that border measured, not guessed,
+    # or a wider column asks for a wider table, a wider window, and round again with no end, as on Linux)
+    border = max(0, tv.winfo_reqwidth() - rest - tv.column(fill, "width"))
+    room = max(th.real(th.px(120)), width - rest - border)
     if tv.column(fill, "width") != room:
         tv.column(fill, width=room, minwidth=th.real(th.px(120)), stretch=True)
     measure = tree_fonts()[0].measure
