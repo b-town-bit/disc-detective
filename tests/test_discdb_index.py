@@ -201,6 +201,14 @@ def test_a_newer_version_is_looked_for_with_the_weekly_index(github, tmp_path, m
     assert len(looked) == 2
 
 
+def test_versions_in_order():
+    """0.10 after 0.9; 0.3.0 the same as 0.3 (and v0.3, a tag); a version between releases after the last, before its
+    own."""
+    order = ["0.2", "0.3", "0.4.dev0", "0.4", "0.4.1", "0.9", "0.10.dev0", "0.10", "1.0rc1", "1.0"]
+    assert sorted(order, key=core.version_key) == order
+    assert core.version_key("0.3.0") == core.version_key("0.3") == core.version_key("v0.3")
+
+
 def test_the_newest_release_and_whether_its_newer(monkeypatch):
     """The newest of Disc Detective's own releases (version tags: not the TheDiscDB index's, drafts or pre-releases;
     0.10 after 0.9), noted for the About box; only a newer one than this counts."""
@@ -223,6 +231,10 @@ def test_the_newest_release_and_whether_its_newer(monkeypatch):
     assert core.known_update() is None                    # (nothing looked for yet)
     monkeypatch.setattr(core, "VERSION", "0.3")
     assert core.check_for_update()["version"] == "0.10" and core.known_update()["version"] == "0.10"
+    monkeypatch.setattr(core, "VERSION", "0.10.dev0")     # (a copy from source before 0.10 was out: 0.10 is newer)
+    assert core.known_update()["version"] == "0.10"
+    monkeypatch.setattr(core, "VERSION", "0.11.dev0")     # (one after it: nothing newer)
+    assert core.known_update() is None
     monkeypatch.setattr(core, "VERSION", "0.10")          # (updated: as new as it)
     assert core.known_update() is None and core.check_for_update() is None
     releases[:] = [{"tag_name": "discdb-index"}]          # (none of its own yet)

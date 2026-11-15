@@ -46,7 +46,7 @@ jobs:
       - name: Build
         if: runner.os != 'Linux'
         run: python release/build.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: disc-detective-${{ runner.os }}
           path: dist/*.zip
@@ -59,7 +59,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: zips
           merge-multiple: true

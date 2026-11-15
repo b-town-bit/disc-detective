@@ -26,7 +26,14 @@ python release/build.py
 ```
 
 The zip lands in `dist/`. CI's **Build** workflow does the same on all three systems, and a
-version tag makes a draft release with the three zips. A package added to the app that ships
+version tag makes a draft release with the three zips.
+
+Between releases, `VERSION` in `disc_detective/core.py` names the next one as a development
+version (`0.4.dev0`), so a copy from source never passes for a release. To release, set it to the
+release's own (`0.4`), merge that, then tag `v0.4` on main; a tag that doesn't match `VERSION`
+stops the build. After publishing, set it to the next development version (`0.5.dev0`).
+
+A package added to the app that ships
 no licence file stops the build: put its licence's text in `release/licenses` and name it in
 `NO_FILE` in `release/build.py`.
 

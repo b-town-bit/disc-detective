@@ -70,7 +70,7 @@ from . import i18n
 from . import tools
 from .i18n import N_
 
-VERSION = "0.3"
+VERSION = "0.4.dev0"      # (between releases: the release's own, "0.4", set just before its tag)
 USER_AGENT = "disc-detective/" + VERSION
 # helper programs (ffmpeg, tesseract, git, makemkvcon) are console programs: on Windows each
 # would flash a console window from the app, so they start without one
@@ -675,8 +675,15 @@ def discdb_index_open(discdb_dir, allow_download=True, force=False, log=print, e
 
 
 def version_key(v):
-    """A version's numbers, for comparing: "0.10" after "0.9"."""
-    return tuple(int(x) for x in re.findall(r"\d+", str(v or "")))
+    """A version, for comparing: "0.10" after "0.9", "0.3.0" the same as "0.3", and a copy between releases
+    ("0.4.dev0", main's from source after 0.3 is out) after the last release but before its own."""
+    m = re.match(r"\D*(\d+(?:\.\d+)*)(.*)", str(v or ""))
+    if not m:
+        return ((), 1)
+    nums = [int(x) for x in m.group(1).split(".")]
+    while len(nums) > 1 and nums[-1] == 0:
+        nums.pop()
+    return (tuple(nums), 0 if re.search(r"dev|a|b|rc|pre", m.group(2), re.I) else 1)
 
 
 def latest_release(timeout=15):
@@ -1816,15 +1823,34 @@ def runtime_target(runtime, facts):
     return abs(runtime - best), round(best)
 
 
-def volume_label(root):
+LABEL_WAIT = 8.0       # seconds a scan waits for a disc just put in to say its name (Windows)
+
+
+def volume_label(root, wait=0.0):
+    """The disc's volume label (None: none, or a folder, not a disc's own root). wait: seconds to keep asking a drive
+    that can't say yet, its disc just put in (a scan: LABEL_WAIT); Windows reads its files a moment before it can name
+    the volume, and a scan that asked once went without (label=-, 2026-11-14)."""
     if os.name == "nt":
         try:
             import ctypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
             buf = ctypes.create_unicode_buffer(261)
             drive = os.path.splitdrive(os.path.abspath(root))[0] + "\\"
-            if ctypes.windll.kernel32.GetVolumeInformationW(drive, buf, 261, None, None, None, None, 0):
-                if os.path.abspath(root).rstrip("\\") == drive.rstrip("\\"):
+            if os.path.abspath(root).rstrip("\\") != drive.rstrip("\\"):
+                return None
+            start, err = time.monotonic(), None
+            while True:
+                if k32.GetVolumeInformationW(drive, buf, 261, None, None, None, None, 0):
+                    if err is not None:
+                        logger.info("%s: its volume label after %.1f s (Windows error %s before)", drive,
+                                    time.monotonic() - start, err)
                     return buf.value or None
+                err = ctypes.get_last_error()
+                if time.monotonic() - start >= wait or not os.path.isdir(root):
+                    if wait:
+                        logger.info("%s: no volume label (Windows error %s)", drive, err)
+                    return None
+                time.sleep(0.5)
         except Exception:
             pass
         return None
@@ -5287,7 +5313,9 @@ def match_episode_names(hints, seq):
 def _menu_key(text):
     """A menu's words for an episode, letters and digits only, the menu's own number off the front
     ("3Hothead", "MISSING 9. Forget Me Not" keeps its stray word: _menu_score looks inside)."""
-    t = re.sub(r"^(\W*\d+\W*)+(?=[^\W\d_])", "", text or "")
+    # (numbers and marks up to the first letter, one number among them at least: one run, not a repeated group,
+    # which a long run of digits would split every which way before giving up, as code scanning found)
+    t = re.sub(r"^(?=[\W\d]*\d)[\W\d]*(?=[^\W\d_])", "", text or "")
     t = re.sub(r"\bvs\b\.?", "versus", t.lower())           # (Chuck vs. the Ring, Chuck Versus the Ring)
     return re.sub(r"[^a-z0-9]", "", t)
 
@@ -6097,7 +6125,7 @@ def identify(root, args):
 
     # metadata
     step("clues")
-    label = args.label or (sample.get("label") if sample else volume_label(root))
+    label = args.label or (sample.get("label") if sample else volume_label(root, wait=LABEL_WAIT))
     rep["label"] = label
     rep["label_parsed"] = parse_label(label)
     cover = extract_cover(root, fmt, args.out or args.tmp_out, bd_meta) if not args.no_cover else None
@@ -7024,11 +7052,11 @@ def step(key):
         status_hook(i18n.ui(story) + "\u2026")
 
 
-def log(msg):
-    """A progress message: to the log file, and to the screen."""
+def log(msg, tone="info"):
+    """A progress message: to the log file, and to the screen (tone: its light there, "info", "warn", "bad", "good")."""
     logger.info(msg)
     if status_hook:
-        status_hook(msg)
+        status_hook(msg, tone)
     else:
         print(msg, file=sys.stderr, flush=True)
 
@@ -8969,7 +8997,8 @@ def _main(args, ap):
                 except SystemExit:
                     if not os.path.exists(old):
                         raise
-                    log("MakeMKV couldn't read the disc: using an older saved reading, which leaves out its shortest titles")
+                    log("MakeMKV couldn't read the disc: using an older saved reading, which leaves out its shortest titles",
+                        "bad")
                     with open(old, encoding="utf-8", errors="replace") as fh:
                         log_text = fh.read()
                     every = False

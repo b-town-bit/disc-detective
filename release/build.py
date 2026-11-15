@@ -182,8 +182,23 @@ def self_check(exe):
     return got
 
 
+def tag_mismatch(env=os.environ):
+    """On a release tag's build (GitHub's), why its version isn't the tag's ("v0.4" with VERSION still "0.4.dev0"):
+    zips that call themselves something else. None when they agree, or when it's no tag's build."""
+    if env.get("GITHUB_REF_TYPE") != "tag" or not env.get("GITHUB_REF_NAME", "").startswith("v"):
+        return None
+    tag = env["GITHUB_REF_NAME"]
+    if tag != "v" + VERSION:
+        return "tag %s but VERSION is %s: set VERSION in disc_detective/core.py to %s, then tag again" % (
+            tag, VERSION, tag[1:])
+    return None
+
+
 def main(argv):
     check = "--no-check" not in argv
+    wrong = tag_mismatch()
+    if wrong:
+        raise SystemExit(wrong)
     make_icons()
     print("building with PyInstaller ...")
     subprocess.run([sys.executable, "-m", "PyInstaller", os.path.join(HERE, "disc_detective.spec"), "--noconfirm",

@@ -88,3 +88,22 @@ def test_the_zip_keeps_symbolic_links_as_links(tmp_path):
 def _installed():
     import importlib.metadata as md
     return list(md.distributions())
+
+
+def test_a_release_tag_must_match_the_version(monkeypatch):
+    """A release tag's build stops when the version still says otherwise (main between releases is "0.4.dev0"):
+    zips calling themselves a dev copy, About never finding them older than the release. Builds of a branch or a
+    pull request, and the TheDiscDB index's tag, aren't held to it."""
+    sys.path.insert(0, os.path.join(ROOT, "release"))
+    try:
+        import build
+    finally:
+        sys.path.pop(0)
+    monkeypatch.setattr(build, "VERSION", "0.4.dev0")
+    wrong = build.tag_mismatch({"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v0.4"})
+    assert "v0.4" in wrong and "0.4.dev0" in wrong
+    monkeypatch.setattr(build, "VERSION", "0.4")
+    assert build.tag_mismatch({"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v0.4"}) is None
+    assert build.tag_mismatch({"GITHUB_REF_TYPE": "branch", "GITHUB_REF_NAME": "main"}) is None
+    assert build.tag_mismatch({"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "discdb-index"}) is None
+    assert build.tag_mismatch({}) is None

@@ -1375,7 +1375,7 @@ class App:
         self.refresh_drives(initial=True)
         self.find_drive_models()
         self.root.after(self.DRIVE_WATCH, self.watch_drive)
-        di.status_hook = lambda msg: self.post(self.tell, msg)   # identifier steps -> status line, in turn
+        di.status_hook = lambda msg, tone="info": self.post(self.tell, msg, tone)   # identifier steps -> status line, in turn
         for h in [h for h in di.logger.handlers if isinstance(h, NotesHandler)]:
             di.logger.removeHandler(h)                         # one app, one copy of the log
         self._notes_handler = NotesHandler(self)
@@ -1808,11 +1808,12 @@ class App:
     # the status line's light, by what a message is (not by its wording, which a translation changes)
     TONES = {"good": th.GREEN_DOT, "warn": th.AMBER_DOT, "bad": th.WAX, "info": th.BRASS_400}
 
-    def set_status(self, text, tone=None):
+    def set_status(self, text, tone="info"):
         """A passing message (a step of the investigation, what to do next, a rip's progress) on
         the strip just above the rip card (under the title while there's none); the strip folds
-        away when there's nothing to say. tone: its light ("good", "warn", "bad", "info"); not
-        given, it's taken from the wording (English only: messages not given one yet)."""
+        away when there's nothing to say. tone: its light ("good", "warn", "bad", "info"), said by
+        whoever says it, never read from its words (a translation changes them)."""
+        self._status_tone = tone
         v = self.titles_dialog
         if self.detecting and v is not None and v.alive():
             v.show_status(text)               # Detect titles: its news shows where it was asked for
@@ -1827,20 +1828,15 @@ class App:
                 self.status_strip.pack(fill="x", pady=(4, 4) if anchor is self._facts_row else (10, 0), before=anchor)
         elif showing:
             self.status_strip.pack_forget()
-        t = text.lower()
-        colour = self.TONES[tone] if tone else \
-            th.GREEN_DOT if t.startswith(("case closed", "confirmed", "done", "disc data updated",
-                                          "the suspect")) else \
-            th.WAX if ("fail" in t or "couldn't" in t) else \
-            th.AMBER_DOT if t.startswith(("best guess", "still a mystery", "cancel")) else th.BRASS_400
+        colour = self.TONES[tone]
         if colour == th.BRASS_400 and self.progress.winfo_manager():
             th.pulse_dot(self.status_dot, colour, th.VELLUM_200)       # under way: it breathes
         else:
             th.set_dot(self.status_dot, colour)
 
-    def tell(self, item):
-        """Queue a status line (or a callable, run when its turn comes: the scan's result)."""
-        self._story.append(item)
+    def tell(self, item, tone="info"):
+        """Queue a status line, with its tone (or a callable, run when its turn comes: the scan's result)."""
+        self._story.append(item if callable(item) else (item, tone))
         if self._story_job is None:
             self._story_next()
 
@@ -1853,7 +1849,7 @@ class App:
             item()
             self._story_next()
             return
-        self.set_status(item)
+        self.set_status(*item)
         self._story_job = self.root.after(self.MIN_STATUS_MS, self._story_next)
 
     def story_reset(self):
@@ -1878,7 +1874,7 @@ class App:
     def show_progress(self, on, indeterminate=False):
         if on:
             self.progress.pack(fill="x", pady=(4, 5))
-            self.set_status(self.status.cget("text"))      # make sure the strip is showing
+            self.set_status(self.status.cget("text"), getattr(self, "_status_tone", "info"))      # make sure the strip is showing
             self.progress.config(mode="indeterminate" if indeterminate else "determinate", maximum=1000, value=0)
             if indeterminate:
                 self.progress.start(12)
@@ -1886,7 +1882,7 @@ class App:
             self.progress.stop()
             self.progress.pack_forget()
             self.status_pct.config(text="")
-            self.set_status(self.status.cget("text"))      # folds away if nothing's left to say
+            self.set_status(self.status.cget("text"), getattr(self, "_status_tone", "info"))      # folds away if nothing's left to say
 
     def set_busy(self, busy, ripping=False):
         self.busy, self.ripping = busy, ripping
@@ -1986,6 +1982,15 @@ class App:
         if not t.box.get("has"):
             return ("empty", None, None)
         return ("ready", t.box.get("label"), t.box.get("serial"))
+
+    def ejected(self, path):
+        """Whether a disc drive's disc is out, asked on the Tk thread (the scan's answer about to show): a drive just
+        read answers at once, its disc spun up; a folder, or no drive, isn't one."""
+        if not path:
+            return False
+        key = os.path.normcase(path.rstrip("\\/"))
+        drives = [d for d in self._drives if os.path.normcase(d.rstrip("\\/")) == key]
+        return bool(drives) and not os.path.isdir(drives[0])
 
     def disc_gone(self, drive):
         """Whether a drive's disc has been taken out (off the Tk thread: asks it, DRIVE_WAIT at
@@ -2087,7 +2092,7 @@ class App:
         self.clear_case(self.EMPTY_TITLE, self.EMPTY_NOTE)
         self.set_case("none")
         self.show_drive()
-        self.set_status(why, "warn" if why else None)
+        self.set_status(why, "warn" if why else "info")
 
     def pick_source(self):
         d = filedialog.askdirectory(title="Choose a disc or a full-disc backup folder")
@@ -2310,7 +2315,7 @@ class App:
         self.set_busy(False)
         self.show_progress(False)
         ui.finished(res, err)
-        self.set_status("Disc data updated" if not err else "Disc data update failed: %s" % err)
+        self.set_status("Disc data updated" if not err else "Disc data update failed: %s" % err, "bad" if err else "good")
 
     def _on_progress(self, label, done, total):
         ui = getattr(self, "data_ui", None)
@@ -2578,7 +2583,7 @@ class App:
         m.delete(0, "end")
         if self.pic_path:
             m.add_command(label="Copy picture", command=lambda: copy_image(self.pic_path) or
-                          self.set_status("Couldn't copy the picture here: use Save picture…"))
+                          self.set_status("Couldn't copy the picture here: use Save picture…", "bad"))
             m.add_command(label="Save picture…", command=self.save_picture)
         if (self.rep or {}).get("disc_images"):
             m.add_separator()
@@ -2739,6 +2744,9 @@ class App:
                 self._program_seen(rep, pmap)
                 self._bd_menus_seen(drive, args, rep)
             args.library.close()
+            # (taken out once the disc's been read, a step left out for it: no answer shown for a disc that isn't in)
+            if self.disc_gone(drive):
+                raise SystemExit("the disc was removed")
             self.post(self.tell, lambda: self.scan_done(rep, None))   # once the story has been told
         except SystemExit as exc:
             msg = str(exc)               # (exc is gone once the except ends: the message is kept)
@@ -2747,9 +2755,13 @@ class App:
             (di.logger.info if gone else di.logger.warning)("scan of %s: %s", drive, exc)
             self.post(self.tell, lambda: self.scan_done(None, msg, gone))
         except Exception as exc:   # show it rather than dying silently in a thread
-            di.logger.exception("scan of %s failed", drive)
             msg = "%s: %s" % (type(exc).__name__, exc)
             gone = self.disc_gone(drive)     # (the disc taken out mid-scan: said so, plainly)
+            # (a read failing for its disc taken out, "the device is not ready": the log has it, errors.log doesn't)
+            if gone:
+                di.logger.info("scan of %s: the disc was removed (%s)", drive, msg)
+            else:
+                di.logger.exception("scan of %s failed", drive)
             self.post(self.tell, lambda: self.scan_done(None, msg, gone))
 
     def _program_map(self, drive, rep):
@@ -3062,6 +3074,8 @@ class App:
         self.show_progress(False)
         self.set_busy(False)
         self.show_update()               # (the scan may have refreshed the weekly index, and looked for a newer version)
+        if not err and rep and self.ejected(rep.get("path")):
+            err, gone = "the disc was removed", True       # (out while the story was told: nothing shown of it)
         if err and gone:                 # the disc taken out mid-scan: no error, just that
             di.logger.info("the disc was removed: scan aborted")
             self.clear_case(self.EMPTY_TITLE, self.EMPTY_NOTE)
@@ -3071,7 +3085,7 @@ class App:
         if err:
             self.clear_case("Couldn't read this disc", err)
             self.set_case("none")
-            self.set_status("Scan failed: details in the case notes")
+            self.set_status("Scan failed: details in the case notes", "bad")
             return
         old = self.rep or self._before   # (a scan clears the desk first: the case before it)
         self._before = None
@@ -3125,10 +3139,12 @@ class App:
         st = str(rep.get("status", ""))
         closed = st.startswith(("identified", "probable"))
         self.set_case("closed" if closed else "open")
+        tone = "warn"                            # (a guess, or no answer: yours to settle)
         if rep.get("more_films"):
             msg = "There's a second feature on this disc we couldn't name: " + \
                 ("Detect titles may find it, or " if self.can_detect() else "") + \
                 "add it with Not right? > Enter it myself > Multi-film"
+            tone = "info"
         elif closed:
             msg = ""
         elif st.startswith("best guess"):
@@ -3137,7 +3153,7 @@ class App:
             msg = "Still a mystery: Choose the match (an AI can read the disc's picture for you)"
         else:
             msg = "Still a mystery: Choose the match to say what it is"
-        self.set_status(msg)
+        self.set_status(msg, tone)
         if self.titles_waiting():
             di.logger.info("the menus named %d titles, waiting to be confirmed in Edit titles", len(self.titles_waiting()))
         self.show_waiting()
@@ -4034,8 +4050,11 @@ class App:
             di.logger.info("rip finished: %d of %d titles%s", len(done), len(plan) + len(missing), " (cancelled)" if self.cancelled else "")
             self.post(self.rip_done, done, len(plan) + len(missing), None)
         except Exception as exc:
-            di.logger.exception("rip failed")
             gone = self.disc_gone(drive)
+            if gone:                     # (as a scan: its disc taken out isn't a problem to report)
+                di.logger.info("rip stopped: the disc was removed (%s: %s)", type(exc).__name__, exc)
+            else:
+                di.logger.exception("rip failed")
             self.post(self.rip_done, [], len(plan), "%s: %s" % (type(exc).__name__, exc), gone)
         finally:
             if undo:
@@ -4077,7 +4096,7 @@ class App:
         if self.mkv:
             self.mkv.stop()
         self.stop_detect()
-        self.set_status("Cancelling…")
+        self.set_status("Cancelling…", "warn")
 
     def stop_detect(self):
         """Detect titles called off: its crawl stops at its next step (menus.Cancelled, through its progress

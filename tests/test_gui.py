@@ -788,7 +788,7 @@ def test_status_story_and_case_notes(gui, tmp_path, imdb_dir, monkeypatch):
         app = dd_app.App(root)
         shown = []
         real = app.set_status
-        monkeypatch.setattr(app, "set_status", lambda text: (shown.append(text), real(text)))
+        monkeypatch.setattr(app, "set_status", lambda text, tone="info": (shown.append(text), real(text, tone)))
         app.source.set(disc)
         app.source_changed()
         app.scan()
@@ -2102,9 +2102,23 @@ def test_suspect_report_and_a_breathing_light(gui, monkeypatch):
     app.set_status("Interrogating suspect 2 of 4…")
     assert app.status_dot._pulse                               # breathing
     app.show_progress(False)
-    app.set_status("The suspects named the film and 3 extras")
+    app.set_status("The suspects named the film and 3 extras", "good")
     assert not app.status_dot._pulse                           # done: a steady green
     assert app.status_dot.itemcget(1, "fill") == dd_app.th.GREEN_DOT
+    # the light is what the message is, said with it, never read from its words (a translation changes them)
+    fill = lambda: app.status_dot.itemcget(1, "fill")
+    app.set_status("Case closed: scan failed, couldn't")          # (words that once picked a colour: none now)
+    assert fill() == dd_app.th.BRASS_400
+    app.set_status("Überprüfung fehlgeschlagen", "bad")
+    assert fill() == dd_app.th.WAX
+    app.show_progress(True)                                     # (the strip shown again: its light kept)
+    assert fill() == dd_app.th.WAX
+    app.show_progress(False)
+    assert fill() == dd_app.th.WAX
+    app.story_reset()
+    app.tell("Abbruch…", "warn")                                # (queued: its tone goes with it)
+    assert app.status.cget("text") == "Abbruch…" and fill() == dd_app.th.AMBER_DOT
+    app.story_reset()
 
 
 def test_makemkv_reads_a_confirmed_disc_ahead(gui, tmp_path, monkeypatch):
@@ -3062,6 +3076,48 @@ def test_a_disc_taken_out_mid_job_is_said_plainly(gui, monkeypatch):
     app = dd_app.App(root)
     app.scan_done(None, "OSError: [WinError 21] The device is not ready", gone=True)
     assert app.rep is None and app.status.cget("text") == "The disc was removed: scan aborted"
+    # the scan itself, a read failing for the disc taken out as its files are listed (Swan Princess, 2026-11-14):
+    # in the log as that, not an error with its traceback for errors.log; a disc still in, an error as ever
+    import logging
+    logged = []
+    handler = logging.Handler(logging.DEBUG)
+    handler.emit = lambda rec: logged.append((rec.levelname, rec.getMessage()))
+    core.logger.addHandler(handler)
+    was = core.logger.level
+    core.logger.setLevel(logging.DEBUG)
+    try:
+        monkeypatch.setattr(dd_app.di, "identify", lambda drive, args: (_ for _ in ()).throw(
+            PermissionError(21, "The device is not ready", "E:\\VIDEO_TS")))
+        for out, said in ((True, "The disc was removed: scan aborted"), (False, "Scan failed")):
+            monkeypatch.setattr(app, "disc_gone", lambda drive, out=out: out)
+            del logged[:]
+            app.set_status("")
+            app._scan_worker("E:\\")
+            assert pump(lambda: said in str(app.status.cget("text")), 5)
+            levels = [lvl for lvl, msg in logged if "scan of E:\\" in msg]
+            assert levels == (["INFO"] if out else ["ERROR"]), logged
+    finally:
+        core.logger.removeHandler(handler)
+        core.logger.setLevel(was)
+    # taken out once the disc's been read (a step left out for it, the rest done): nothing shown of a disc that isn't
+    # in, the scan called off; and so for one taken out as its answer waits its turn on the desk
+    rep = {"path": "Z:\\", "format": "DVD", "content_hash": "A" * 32}
+    monkeypatch.setattr(dd_app.di, "identify", lambda drive, args: dict(rep))
+    for step in ("_menu_style", "_files_saved", "_program_seen", "_bd_menus_seen"):
+        monkeypatch.setattr(app, step, lambda *a: None)
+    monkeypatch.setattr(app, "_program_map", lambda drive, r: None)
+    monkeypatch.setattr(app, "_menus_seen", lambda drive, args, r: r)
+    monkeypatch.setattr(app, "disc_gone", lambda drive: True)
+    app.set_status("")
+    app._scan_worker("Z:\\")
+    assert pump(lambda: app.status.cget("text") == "The disc was removed: scan aborted", 5) and app.rep is None
+    app.set_status("")
+    app._drives = ["Z:\\"]                                   # (a drive with no disc in it: Z: is nowhere)
+    assert app.ejected("Z:\\") and not app.ejected("") and not app.ejected(os.getcwd())
+    app.scan_done(dict(rep), None)
+    assert app.rep is None and app.status.cget("text") == "The disc was removed: scan aborted"
+    app._drives = []
+    app.scan_done(None, "OSError: [WinError 21] The device is not ready", gone=True)
     errors = []
     monkeypatch.setattr(dd_app.messagebox, "showerror", lambda *a, **k: errors.append(a))
     app.rip_done(["a.mkv"], 3, None, gone=True)

@@ -23,6 +23,18 @@ def numbers(got):
     return {i: p["number"] for i, p in got["picks"].items()}
 
 
+def test_a_menus_own_number_comes_off_its_words_quickly():
+    """The number before an episode's name comes off, its stray words stay; a reading of nothing but digits (a long
+    run, misread) takes no time, where it once took seconds a digit more (code scanning's py/redos)."""
+    import time
+    assert core._menu_key("3Hothead") == "hothead" and core._menu_key("1-2 Pilot") == "pilot"
+    assert core._menu_key("12. Chuck vs. the Ring") == "chuckversusthering"
+    assert core._menu_key("MISSING 9. Forget Me Not") == "missing9forgetmenot"
+    start = time.monotonic()
+    assert core._menu_key("9" * 5000 + "_") == "9" * 5000
+    assert time.monotonic() - start < 1
+
+
 def test_fuzzy_names_found_in_their_season():
     got = core.menu_episodes([reading("1. Opening Night"), reading("2 The Llghthouse Keepr"), reading("3Lost and Found")],
                              ORDERS)

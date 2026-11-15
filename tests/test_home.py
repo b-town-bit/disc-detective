@@ -1,6 +1,9 @@
 """Where things live, and moving data over from the old name (disc_identify)."""
 import os
 import re
+import urllib.parse
+
+import pytest
 
 from disc_detective import core
 
@@ -114,7 +117,9 @@ def test_the_packet_checklist_helps_without_the_case():
           "labels": []}
     text = core.packet_checklist(pk, core.parse_truth(pk["truth"]))
     assert "UPC/EAN (required)" in text and "ASIN (required" in text and "amazon.com/dp/" in text
-    assert "Blu-ray.com" in text and "(2018-03)" in text
+    # (its search page: the checklist's link, its host Blu-ray.com's own)
+    link = next(line.split(": ", 1)[1] for line in text.splitlines() if line.startswith("Blu-ray.com: "))
+    assert urllib.parse.urlsplit(link).hostname == "www.blu-ray.com" and "(2018-03)" in text
     # the form's fields in its order, the edition named as TheDiscDB's are ("2011 Blu-ray", "2011-blu-ray")
     order = ["ASIN", "UPC/EAN", "Release Date", "Front Image", "Release Title", "Release Slug", "Locale", "Region Code"]
     assert [text.index("- [ ] " + f) for f in order] == sorted(text.index("- [ ] " + f) for f in order)
@@ -660,3 +665,28 @@ def test_a_packet_leaves_the_pieces_of_a_title_you_named_unlabelled(tmp_path):
     eps = {"00753.mpls": {"type": "Episode", "title": "Pilot"}}
     core.apply_labels(titles, eps)                         # (an episode: never a whole of pieces)
     assert by["00804.mpls"]["role"] == "junk"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the volume's name asked of Windows")
+def test_a_disc_just_put_in_is_waited_on_for_its_label(monkeypatch, tmp_path):
+    """Windows reads a disc's files a moment before it can name the volume: a scan keeps asking (LABEL_WAIT), each
+    "not ready" waited out, and says how long it took; asked with no wait, as before, once. A folder isn't asked."""
+    import ctypes
+    answers = []
+
+    class Kernel:
+        def GetVolumeInformationW(self, drive, buf, size, *rest):
+            answers.append(drive)
+            if len(answers) < 3:
+                ctypes.set_last_error(21)                       # (ERROR_NOT_READY)
+                return 0
+            buf.value = "SWAN_PRINCESS"
+            return 1
+    monkeypatch.setattr(ctypes, "WinDLL", lambda name, use_last_error=False: Kernel())
+    monkeypatch.setattr(core.time, "sleep", lambda s: None)
+    monkeypatch.setattr(core.os.path, "isdir", lambda p: True)
+    assert core.volume_label("E:\\", wait=5) == "SWAN_PRINCESS" and answers == ["E:\\"] * 3
+    del answers[:]
+    assert core.volume_label("E:\\") is None and len(answers) == 1
+    del answers[:]
+    assert core.volume_label(str(tmp_path), wait=5) is None and answers == []

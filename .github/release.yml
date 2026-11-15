@@ -1,0 +1,19 @@
+# How a release's generated notes (the Build workflow's `gh release create --generate-notes`) group the pull requests
+# merged since the last release: by their labels, in this order; anything unlabelled goes under Other changes.
+# About's "What's new" link opens these notes, so a PR's title is what users read: worth a plain one.
+changelog:
+  exclude:
+    labels: [duplicate, invalid, wontfix, question]
+  categories:
+    - title: New
+      labels: [enhancement]
+    - title: Fixes
+      labels: [bug]
+    - title: Accessibility
+      labels: [accessibility]
+    - title: Documentation
+      labels: [documentation]
+    - title: Dependencies and build
+      labels: [dependencies, github_actions]
+    - title: Other changes
+      labels: ["*"]
