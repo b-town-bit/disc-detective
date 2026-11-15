@@ -68,7 +68,7 @@ import xml.etree.ElementTree as ET
 
 from . import i18n
 from . import tools
-from .i18n import N_, Said, ui, ui_n
+from .i18n import N_, N_log, Said, ui, ui_n
 
 VERSION = "0.4.dev0"      # (between releases: the release's own, "0.4", set just before its tag)
 USER_AGENT = "disc-detective/" + VERSION
@@ -7039,25 +7039,25 @@ status_hook = None   # front ends show progress messages here (the app's status 
 STEPS = {
     # (the log's words, then the app's: marked to translate where they're shown, each in its own
     # area's language: i18n.log, i18n.ui)
-    "prints": (N_("fingerprint: looking the disc up in your case files and TheDiscDB"), N_("Dusting for fingerprints")),
-    "scene": (N_("reading the disc's structure (playlists / title sets)"), N_("Securing the scene")),
-    "clues": (N_("reading the volume label, disc metadata and cover art"), N_("Searching for clues")),
-    "old cases": (N_("checking discs of the same set you've confirmed"), N_("Comparing notes with old cases")),
-    "files": (N_("searching the local IMDb index"), N_("Checking the case files")),
-    "code": (N_("reading the label as a studio code / title initials"), N_("Cracking the code")),
-    "witnesses": (N_("asking TMDB (online)"), N_("Interviewing witnesses")),
-    "timeline": (N_("fetching episode lists from TVmaze"), N_("Reconstructing the timeline")),
-    "lineup": (N_("comparing the disc's cover art with the candidates' box art"), N_("Holding a line-up")),
-    "menus": (N_("reading the disc's menus (nothing else named it)"), N_("Looking through the mug book")),
-    "routes": (N_("running the disc's program: what its menus' buttons play, and what plays after what"),
+    "prints": (N_log("fingerprint: looking the disc up in your case files and TheDiscDB"), N_("Dusting for fingerprints")),
+    "scene": (N_log("reading the disc's structure (playlists / title sets)"), N_("Securing the scene")),
+    "clues": (N_log("reading the volume label, disc metadata and cover art"), N_("Searching for clues")),
+    "old cases": (N_log("checking discs of the same set you've confirmed"), N_("Comparing notes with old cases")),
+    "files": (N_log("searching the local IMDb index"), N_("Checking the case files")),
+    "code": (N_log("reading the label as a studio code / title initials"), N_("Cracking the code")),
+    "witnesses": (N_log("asking TMDB (online)"), N_("Interviewing witnesses")),
+    "timeline": (N_log("fetching episode lists from TVmaze"), N_("Reconstructing the timeline")),
+    "lineup": (N_log("comparing the disc's cover art with the candidates' box art"), N_("Holding a line-up")),
+    "menus": (N_log("reading the disc's menus (nothing else named it)"), N_("Looking through the mug book")),
+    "routes": (N_log("running the disc's program: what its menus' buttons play, and what plays after what"),
                N_("Reviewing case notes")),
     # (a DVD's played in VLC, its buttons pressed; a Blu-ray's read from its files, nothing played)
-    "stakeout": (N_("Detect titles: the disc's menus read, each button's words and what it plays"),
+    "stakeout": (N_log("Detect titles: the disc's menus read, each button's words and what it plays"),
                  N_("Staking out the suspects")),
-    "ai": (N_("asking Gemini what the disc's picture shows"), N_("Calling in an expert witness")),
-    "photos": (N_("looking up posters and box art"), N_("Pinning photos to the evidence board")),
-    "lab": (N_("running MakeMKV on the disc"), N_("Sending the disc to the lab")),
-    "footage": (N_("scanning the titles' video"), N_("Reviewing the security footage")),   # title scanning (to come)
+    "ai": (N_log("asking Gemini what the disc's picture shows"), N_("Calling in an expert witness")),
+    "photos": (N_log("looking up posters and box art"), N_("Pinning photos to the evidence board")),
+    "lab": (N_log("running MakeMKV on the disc"), N_("Sending the disc to the lab")),
+    "footage": (N_log("scanning the titles' video"), N_("Reviewing the security footage")),   # title scanning (to come)
 }
 
 

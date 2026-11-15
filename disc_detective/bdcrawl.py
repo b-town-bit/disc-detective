@@ -481,24 +481,27 @@ class Crawler:
                 break
             target = todo[0]
             i = page.index(target)
-            self.log("[%d/%d] button %s %s" % (len(done) + 1, len(page), target["number"], target["name"]))
+            self.log(i18n.log("[{k}/{n}] button {number} {name}", k=len(done) + 1, n=len(page), number=target["number"],
+                              name=target["name"]))
             self.progress("press", len(done) + 1, len(page))
             done.add(i)
             if not self.walk_to(target):
-                self.log("  its marker wasn't seen on it: not pressed")
+                self.log("  " + i18n.log("its marker wasn't seen on it: not pressed"))
                 self.v.press("popup")           # (closed: the next round opens it afresh)
                 self.sleep(0.5)
                 continue
             read = nearest(self.rows(), target["box"]) or target     # (its words, with the marker on it)
             where = self.press()
             if not where:
-                self.log("  nothing moved")
+                self.log("  " + i18n.log("nothing moved"))
                 if i not in again:
                     again.add(i)
                     done.discard(i)
                 continue
             got = self.landed(where[0], where[1], vlc_titles, play_all)
-            self.log("  title %s at %.0f s: %s" % (where[0], where[1], got[0] if got else "not one title's start"))
+            self.log("  " + i18n.log("title {title} at {at:.0f} s: {name}", title=where[0], at=where[1], name=got[0])
+                         if got else "  " + i18n.log("title {title} at {at:.0f} s: not one title's start",
+                                                     title=where[0], at=where[1]))
             if got and got[0]:
                 name = read["name"] if len(read["name"]) >= len(target["name"]) else target["name"]
                 pressed.append({"title": got[0], "number": target["number"], "name": name, "seconds": got[1],
@@ -618,7 +621,7 @@ class Crawler:
             self.lit = lines
             mark = self.lit_mark()
             if mark:
-                self.log("special features: no marker in its words, its highlight followed by its colour")
+                self.log(i18n.log("special features: no marker in its words, its highlight followed by its colour"))
                 return mark, lines
         self.lit = False
         self.v.dark(False)
@@ -771,7 +774,9 @@ class Crawler:
             return None
         where = self.press()
         got = self.landed(where[0], where[1], vlc_titles, play_all) if where else None
-        self.log("  title %s: %s" % (where[0] if where else "-", got[0] if got else "not one of the disc's titles"))
+        title = where[0] if where else "-"
+        self.log("  " + i18n.log("title {title}: {name}", title=title, name=got[0]) if got else
+                 "  " + i18n.log("title {title}: not one of the disc's titles", title=title))
         if where and where[0] != play_all:
             # (the pop-up doesn't answer while it plays: the top menu; or for a page found by its highlight,
             # the extra skipped to its end, where the disc takes it back itself. Order of the Phoenix's
@@ -803,13 +808,15 @@ class Crawler:
         real = scenes()
         if not extras_play_all(self.titles, len(real)):
             # (not what its Play All has: one may sit above where the marker came across, Chuck S2 D1's)
-            self.log("special features: %d buttons, not what the page's Play All has: every way from each" % len(real))
+            self.log(i18n.log_n("special features: {n} button, not what the page's Play All has: every way from each",
+                                "special features: {n} buttons, not what the page's Play All has: every way from "
+                                "each", len(real)))
             mark = self.marked()[0] or self.page_up()[0]
             if mark:
                 self.walk(buttons, known(mark), KEYS + ("up", "left"), enough=lambda: extras_play_all(self.titles, len(scenes())),
                           limit=EVERY_WAY_LIMIT)
                 real = scenes()
-        self.log("special features: %d buttons" % len(real))
+        self.log(i18n.log_n("special features: {n} button", "special features: {n} buttons", len(real)))
         self.extras_heading = (page_heading(lines, buttons, frame), several_headings(lines, buttons, frame))
         kind = None if self.extras_heading[1] else menus.heading_kind(self.extras_heading[0])
 
@@ -821,7 +828,7 @@ class Crawler:
 
         def hear(b):
             if id(b) not in heard:
-                self.log("[%d/%d] button %s" % (len(heard) + 1, len(real), b["text"]))
+                self.log(i18n.log("[{k}/{n}] button {name}", k=len(heard) + 1, n=len(real), name=b["text"]))
                 self.progress("press", len(heard) + 1, len(real))
                 heard[id(b)] = self.press_button(b, known, vlc_titles, play_all)
             return heard[id(b)]
@@ -831,7 +838,7 @@ class Crawler:
             ends = [(real[0], order[0]), (real[-1], order[-1])]
             if all((hear(b) or [None])[0] == want for b, want in ends):
                 lengths = {t["id"]: t.get("duration") for t in self.titles}
-                self.log("its two ends land where the page's Play All has them: its order names the rest")
+                self.log(i18n.log("its two ends land where the page's Play All has them: its order names the rest"))
                 out = []
                 first, last = heard[id(real[0])][3], heard[id(real[-1])][3]
                 # (VLC's numbers run on through them, where the two ends say so: for watching)

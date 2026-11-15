@@ -6,6 +6,8 @@ import os
 import re
 import struct
 
+import pytest
+
 from disc_detective import core, i18n
 
 REAL_LOG = core.log          # (before conftest's stand-in: the real one, for the test of it)
@@ -173,7 +175,8 @@ def test_the_command_line_puts_its_words_through_translation():
 
 def english_in_log(path):
     """Log lines written in English straight to the log, not through i18n.log: a logger call (logger.info(...),
-    di.logger.warning(...)) or a log= callback given a string with letters, or one %-formatted or joined to one."""
+    di.logger.warning(...)), a log= callback or a crawler's self.log given a string with letters, or one
+    %-formatted or joined to one."""
     import ast
     tree = ast.parse(open(path, encoding="utf-8").read())
     levels = {"info", "warning", "error", "exception", "debug", "critical"}
@@ -195,8 +198,11 @@ def english_in_log(path):
         return False
     found = []
     for n in ast.walk(tree):
-        if isinstance(n, ast.Call) and n.args and (logger_call(n.func) or (isinstance(n.func, ast.Name)
-                                                                            and n.func.id == "log")):
+        if not (isinstance(n, ast.Call) and n.args):
+            continue
+        own_log = (isinstance(n.func, ast.Name) and n.func.id == "log") or (      # (a log= callback, a crawler's own)
+            isinstance(n.func, ast.Attribute) and n.func.attr == "log" and ast.unparse(n.func.value) != "i18n")
+        if logger_call(n.func) or own_log:
             if english(n.args[0]):
                 found.append("%s:%d" % (os.path.basename(path), n.lineno))
     return found
@@ -240,3 +246,190 @@ def test_disc_words_by_the_discs_language(tmp_path, monkeypatch):
         assert i18n.disc_words("de") == {}
     finally:
         i18n.disc_words.cache_clear()
+
+
+def _messages():
+    """release/messages.py (the translations' files: Babel's keywords for each area, its commands)."""
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.dirname(APP_PY)), "release", "messages.py")
+    spec = importlib.util.spec_from_file_location("messages", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _extracted(messages):
+    """{area: {msgid}} as Babel gathers it from the code now (a counted string by its singular)."""
+    from babel.messages.extract import extract_from_dir
+    from babel.messages.frontend import parse_keywords
+    found = {}
+    for area, keywords in messages.KEYWORDS.items():
+        found[area] = {m[0] if isinstance(m, tuple) else m
+                       for _f, _ln, m, _c, _ctx in extract_from_dir(messages.PKG, keywords=parse_keywords(keywords))
+                       if messages.wanted(m)}
+    return found
+
+
+def test_babel_gathers_each_string_into_its_areas_template():
+    """Every string written in a translating call (_, ui, ui_n, N_, i18n.log, log_n, N_log, Said) is in its area's
+    template as Babel gathers it: none missed by a way of writing the call Babel doesn't see; a log line not
+    in the interface's, a Said in both. And the templates in the repository are the code's (run
+    `python release/messages.py extract` after changing a string)."""
+    import ast
+    pytest.importorskip("babel")
+    from babel.messages.pofile import read_po
+    messages = _messages()
+    found = _extracted(messages)
+    areas = {"_": ("interface",), "ui": ("interface",), "ui_n": ("interface",), "N_": ("interface",),
+             "log": ("log",), "log_n": ("log",), "N_log": ("log",), "Said": ("interface", "log")}
+    for name in sorted(os.listdir(messages.PKG)):
+        if not name.endswith(".py"):
+            continue
+        for n in ast.walk(ast.parse(open(os.path.join(messages.PKG, name), encoding="utf-8").read())):
+            if not (isinstance(n, ast.Call) and n.args and isinstance(n.args[0], ast.Constant)
+                    and isinstance(n.args[0].value, str) and messages.wanted(n.args[0].value)):
+                continue
+            fn = n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", "")
+            for area in areas.get(fn, ()):
+                assert n.args[0].value in found[area], "%s:%d not in %s" % (name, n.lineno, area)
+    assert "reading the disc's menus (nothing else named it)" in found["log"]
+    assert "reading the disc's menus (nothing else named it)" not in found["interface"]
+    assert "Looking through the mug book" in found["interface"]
+    assert "downloading IMDb dataset {name} ..." in found["interface"] & found["log"]
+    for area in messages.KEYWORDS:
+        with open(messages.template(area), "rb") as fh:
+            have = {m.id[0] if isinstance(m.id, tuple) else m.id for m in read_po(fh) if m.id}
+        assert have == found[area], "%s.pot is out of date: python release/messages.py extract" % area
+
+
+def placeholders(text):
+    import string
+    return {f for _t, f, _s, _c in string.Formatter().parse(text) if f is not None}
+
+
+def test_a_language_from_its_template_to_the_screen(tmp_path, monkeypatch):
+    """A new language started from the templates, a line translated, compiled, and shown: the commands a
+    translator runs (release/messages.py new, compile), end to end."""
+    import shutil
+    pytest.importorskip("babel")
+    from babel.messages.pofile import read_po, write_po
+    messages = _messages()
+    locale = tmp_path / "locale"
+    locale.mkdir()
+    for area in messages.KEYWORDS:
+        shutil.copy(messages.template(area), str(locale))
+    monkeypatch.setattr(messages, "LOCALE", str(locale))
+    messages.new("de")
+    po = locale / "de" / "LC_MESSAGES" / "interface.po"
+    with open(str(po), "rb") as fh:
+        cat = read_po(fh)
+    cat["Looking through the mug book"].string = "Im Verbrecheralbum blättern"
+    with open(str(po), "wb") as fh:
+        write_po(fh, cat)
+    assert catalog_problems(messages) == ["de/interface.mo is out of date: python release/messages.py compile",
+                                          "de/log.mo is out of date: python release/messages.py compile"]
+    messages.compile_all()
+    assert catalog_problems(messages) == []
+    cat["{n} episode"].string = ("{n} Folge", "")               # (a form left empty: the English, compiled)
+    cat["Saved: attach {file} in the chat"].string = "Gespeichert: {datei} anhängen"
+    with open(str(po), "wb") as fh:
+        write_po(fh, cat)
+    assert catalog_problems(messages) == ["de/interface.po: a placeholder not in 'Saved: attach {file} in the chat'",
+                                          "de/interface.mo is out of date: python release/messages.py compile"]
+    cat["Saved: attach {file} in the chat"].string = "Gespeichert: {file} anhängen"
+    with open(str(po), "wb") as fh:
+        write_po(fh, cat)
+    messages.compile_all()
+    assert catalog_problems(messages) == []
+    monkeypatch.setattr(i18n, "LOCALE_DIR", str(locale))
+    try:
+        i18n.set_language("interface", "de")
+        assert i18n.ui("Looking through the mug book") == "Im Verbrecheralbum blättern"
+    finally:
+        i18n.set_language("interface", None)
+
+
+def test_a_broken_translation_shows_the_english(tmp_path, monkeypatch):
+    """A translation naming a placeholder the English doesn't have (or a stray brace) shows the English,
+    filled in, rather than stopping a scan with an error."""
+    locale = tmp_path / "locale"
+    write_mo(str(locale / "de" / "LC_MESSAGES" / "interface.mo"),
+             {"Saved {what}": "{was} gespeichert", "{n} title": "{n} Titel {",
+              ("{n} title", "{n} titles"): ["{anzahl} Titel", "{anzahl} Titel"]})
+    monkeypatch.setattr(i18n, "LOCALE_DIR", str(locale))
+    try:
+        i18n.set_language("interface", "de")
+        assert i18n.ui("Saved {what}", what="Rush Hour") == "Saved Rush Hour"
+        assert i18n.ui_n("{n} title", "{n} titles", 3) == "3 titles"
+    finally:
+        i18n.set_language("interface", None)
+
+
+def catalog_problems(messages):
+    """What's wrong with the languages' catalogs under messages.LOCALE: a translation naming a placeholder its
+    English doesn't have (leaving one out is fine: "one title"), or a .mo not made from its .po as it is now."""
+    import gettext
+    from babel.messages.pofile import read_po
+    problems = []
+    for lang in messages.languages():
+        for area in messages.KEYWORDS:
+            po = os.path.join(messages.LOCALE, lang, "LC_MESSAGES", area + ".po")
+            if not os.path.exists(po):
+                continue
+            with open(po, "rb") as fh:
+                cat = read_po(fh)
+            want = {}
+            for m in cat:
+                if not m.id or m.fuzzy:
+                    continue
+                ids = m.id if isinstance(m.id, tuple) else (m.id,)
+                strs = m.string if isinstance(m.string, tuple) else (m.string,)
+                english = set().union(*(placeholders(i) for i in ids))
+                if any(not placeholders(t) <= english for t in strs):
+                    problems.append("%s/%s.po: a placeholder not in %r" % (lang, area, ids[0]))
+                if isinstance(m.id, tuple):     # (as Babel compiles a counted one: a form left empty, the English)
+                    want.update({(ids[0], k): t or ids[min(k, 1)] for k, t in enumerate(strs)})
+                elif strs[0]:
+                    want[ids[0]] = strs[0]
+            try:
+                with open(po[:-3] + ".mo", "rb") as fh:
+                    have = gettext.GNUTranslations(fh)._catalog
+            except OSError:
+                have = None
+            if have is not None:
+                have.pop("", None)
+            if have != want:
+                problems.append("%s/%s.mo is out of date: python release/messages.py compile" % (lang, area))
+    return problems
+
+
+def test_each_translation_keeps_its_placeholders_and_is_compiled():
+    """Every language's catalogs in the repository: placeholders kept, each .mo made from its .po as it is."""
+    pytest.importorskip("babel")
+    assert catalog_problems(_messages()) == []
+
+
+def test_the_log_english_and_the_interface_the_systems_unless_set(tmp_path, monkeypatch):
+    """With no language set: the interface in the system's (a German system, German), the log in English
+    all the same; on Windows, which says its language elsewhere, its display language (one gettext knows)."""
+    locale = tmp_path / "locale"
+    for area in i18n.DOMAINS:
+        write_mo(str(locale / "de" / "LC_MESSAGES" / ("%s.mo" % area)), {"Not right?": "Nicht richtig?"})
+    monkeypatch.setattr(i18n, "LOCALE_DIR", str(locale))
+    for v in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("LANGUAGE", "de_DE")
+    try:
+        for area in i18n.DOMAINS:
+            i18n.set_language(area, None)
+        assert i18n.ui("Not right?") == "Nicht richtig?"
+        assert i18n.log("Not right?") == "Not right?"
+        i18n.set_language("log", "de")
+        assert i18n.log("Not right?") == "Nicht richtig?"
+        assert i18n.system_languages() is None                       # (gettext's own, from the variable)
+        monkeypatch.delenv("LANGUAGE")
+        found = i18n.system_languages()
+        assert found is None or (len(found) == 1 and re.fullmatch(r"[a-z]{2,3}(_[A-Za-z0-9]+)*", found[0]))
+    finally:
+        for area in i18n.DOMAINS:
+            i18n.set_language(area, None)

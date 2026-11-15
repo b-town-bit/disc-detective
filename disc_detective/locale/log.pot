@@ -1,0 +1,1222 @@
+# Translations template for Disc Detective.
+# Copyright (C) 2026 Brady Field
+# This file is distributed under the same license as the Disc Detective
+# project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: Disc Detective 0.4.dev0\n"
+"Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
+"\n"
+"POT-Creation-Date: 2026-11-15 06:29-0600\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"the disc's menu data, as read before: {count} menu pages (set up in "
+"{seconds:.0f} s)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the disc's menu data read: {count} menu pages (set up in {seconds:.0f} s)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "couldn't keep the disc's menu data for next time ({error})"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{path}: not the disc scanned (none in the drive)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{path}: not the disc scanned (another disc)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{why} (case {disc} closed)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "the disc was removed"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "restarting to install {programs}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "disc data updated: {result}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "disc data update failed"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "refreshing IMDb's credits failed"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "saving the answer failed"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "scan of {drive}: {error}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "scan of {drive}: the disc was removed ({msg})"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "scan of {drive} failed"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "menus: {line}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the disc's program couldn't be read ({name}: {error})"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"the disc's program: {played} titles its buttons play, {chained} only a "
+"chain reaches, {first} before the menu ({time:.1f} s)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the disc's menu project couldn't be read ({name}: {error})"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"the disc's menus name {count} of its titles exactly (their buttons' "
+"words): saved"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"the disc's menu project names {count} of its titles ({entries} entries; "
+"{waiting} waiting for you)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the disc's program put these titles right: {titles}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "no menu answered on this disc ({error}): the scan goes on without one"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "reading the menus failed: the scan goes on without them"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "menus: {style}  [{disc} {label}]"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "no label"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "reading the disc's menu files failed"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the disc's menu files settle {saved} of its titles: saved"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the menus show: {phrases}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "the menus show: nothing to read"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "named by its menus: {guess}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "the menus didn't name more films: the scan's answer stands"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"its titles are {films_apart} films' worth of video, one named: another "
+"film?"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "the disc was removed: scan aborted"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the menus named {count} titles, waiting to be confirmed in Edit titles"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the films' menus put the guess in order: {name} (not saved: a guess)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "answer for {disc}: {answer} (whose film each extra is: no new scan)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "the disc was removed: stakeout aborted"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Detect titles called off"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "no menu answered on this disc ({error})"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "reading the menus failed"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "menus: setting up the stakeout on {path}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "menu style not yet supported ({style})"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "reading the HDMV menus failed: the crawl instead"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "reading the pop-up menu of {root} with VLC {vlc}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "reading the menus of {root} with VLC {vlc}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the show's credits: {count} words of names"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the film's credits: {count} words of names"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the menus say: {settles}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "searching IMDb's episodes for the menus' names failed"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"MakeMKV's reading of {disc} is saved already (from an earlier rip or "
+"reading)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "MakeMKV's saved reading of {disc} has titles short: reading it again"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "TheDiscDB has {disc}: no background reading by MakeMKV"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"MakeMKV reads {disc} in the background (saved for rips and TheDiscDB "
+"packets)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "credits of {imdb_id}: {count} in your case files"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "fetching the credits of {imdb_id} failed"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "MakeMKV's background reading stopped: not the disc scanned"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "MakeMKV's background reading stopped"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "MakeMKV's background reading found no titles"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "MakeMKV's reading of {hash} saved"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "MakeMKV's background reading failed"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"MakeMKV reads {id} {seconds} seconds short of its {length}: part of it "
+"couldn't be read (a dirty or damaged disc?)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "waiting for MakeMKV's background reading to finish with the drive"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "MakeMKV's background reading stopped ({why})"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "waiting for MakeMKV's background reading of the disc"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "using MakeMKV's saved reading of the disc"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the sting fell through: {error}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "MakeMKV doesn't list these, so they can't be ripped: {titles}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "rip {disc} from {drive} ({source}) into {folder}: {count} titles"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "MakeMKV title {number} ({title_id}, {length}) -> {dest}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "MakeMKV doesn't list {title_id} now: not ripped"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"MakeMKV numbers this disc's titles differently from its saved reading: "
+"reading it again"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "ripped {dest}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "MakeMKV title {number} did not rip (the disc was removed)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "MakeMKV title {number} did not rip ({why})"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "the disc was removed: rip aborted"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "rip finished: {ripped} of {total} titles (cancelled)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "rip finished: {ripped} of {total} titles"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "rip stopped: the disc was removed ({name}: {error})"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "rip failed"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "couldn't clean up after the sting: {error}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "copying the picture failed"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "posters for the type-ahead list"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "posters for the film list"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "newer version check: {error}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Help TheDiscDB lists"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "TMDB id of {imdb_id}: {error}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "packet for {disc}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "uncaught error ({kind})"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Disc Detective {version} started (Python {python}; text read by {readers})"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "nothing: no OCR installed"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "uncaught error in a background thread"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "error in the app"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Disc Detective closed"
+msgstr ""
+
+#: disc_detective/bdcrawl.py
+#, python-brace-format
+msgid "[{k}/{n}] button {number} {name}"
+msgstr ""
+
+#: disc_detective/bdcrawl.py
+msgid "its marker wasn't seen on it: not pressed"
+msgstr ""
+
+#: disc_detective/bdcrawl.py
+msgid "nothing moved"
+msgstr ""
+
+#: disc_detective/bdcrawl.py
+#, python-brace-format
+msgid "title {title} at {at:.0f} s: {name}"
+msgstr ""
+
+#: disc_detective/bdcrawl.py
+#, python-brace-format
+msgid "title {title} at {at:.0f} s: not one title's start"
+msgstr ""
+
+#: disc_detective/bdcrawl.py
+msgid ""
+"special features: no marker in its words, its highlight followed by its "
+"colour"
+msgstr ""
+
+#: disc_detective/bdcrawl.py
+#, python-brace-format
+msgid "title {title}: {name}"
+msgstr ""
+
+#: disc_detective/bdcrawl.py
+#, python-brace-format
+msgid "title {title}: not one of the disc's titles"
+msgstr ""
+
+#: disc_detective/bdcrawl.py
+#, python-brace-format
+msgid ""
+"special features: {n} button, not what the page's Play All has: every way"
+" from each"
+msgid_plural ""
+"special features: {n} buttons, not what the page's Play All has: every "
+"way from each"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/bdcrawl.py
+#, python-brace-format
+msgid "special features: {n} button"
+msgid_plural "special features: {n} buttons"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/bdcrawl.py
+#, python-brace-format
+msgid "[{k}/{n}] button {name}"
+msgstr ""
+
+#: disc_detective/bdcrawl.py
+msgid ""
+"its two ends land where the page's Play All has them: its order names the"
+" rest"
+msgstr ""
+
+#: disc_detective/bdcrawl.py
+#, python-brace-format
+msgid "the menu's episode {number} plays {playlist}, not among the disc's titles"
+msgstr ""
+
+#: disc_detective/bdcrawl.py
+#, python-brace-format
+msgid "the disc's menu files list {count} of its titles, nothing played"
+msgstr ""
+
+#: disc_detective/bdcrawl.py
+msgid "no page of episodes: a film's pop-up, or none answered"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid "hdmv-menus: no still of clip {clip}: {error}"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid ""
+"hdmv-menus: the first play goes on to Java (title {title}, JAR {jar}): "
+"BD-J menus"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+msgid "hdmv-menus: no menu reached from the first play"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid "hdmv-menus: menu {clip} unreadable: {error}"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid "hdmv-menus: menu {clip} ({lang}, {count} pages), {how}"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid "reached by {path}"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+msgid "not reached"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid "hdmv-menus: menu pages, not titles: {pages}"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid "hdmv-menus: menu {menu} page {page}: no words on its buttons, left out"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid "hdmv-menus: capturing {n} still"
+msgid_plural "hdmv-menus: capturing {n} stills"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid "hdmv-menus: captured {n} still in {seconds:.1f} s"
+msgid_plural "hdmv-menus: captured {n} stills in {seconds:.1f} s"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid "hdmv-menus: captured {took} of {n} still in {seconds:.1f} s"
+msgid_plural "hdmv-menus: captured {took} of {n} stills in {seconds:.1f} s"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid ""
+"hdmv-menus: captured {took} of {n} still in {seconds:.1f} s (an encrypted"
+" disc's need hdmv-menus 0.1.2 or later)"
+msgid_plural ""
+"hdmv-menus: captured {took} of {n} stills in {seconds:.1f} s (an "
+"encrypted disc's need hdmv-menus 0.1.2 or later)"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid "hdmv-menus: {scope} crawl, {count} buttons read in {seconds:.0f} s"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+msgid "hdmv-menus: no button plays one of the scan's titles"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"TheDiscDB index: {discs} discs, {sizes} large-file sizes, {posters} "
+"posters, {prints} cover prints -> {path}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "checking for a newer TheDiscDB index ..."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "downloading the TheDiscDB index ..."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "TheDiscDB index: {discs} discs, built {date}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"{drive}: its volume label after {seconds:.1f} s (Windows error {err} "
+"before)"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{drive}: no volume label (Windows error {err})"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "OpenCV couldn't read {src}: {error}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "cover art: couldn't copy {picture}: {error}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "downloading IMDb dataset {name} ..."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "indexing IMDb titles (one-time, takes a few minutes) ..."
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"note: this Python's SQLite lacks FTS5; word search falls back to prefix "
+"matching"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"note: IMDb index is from an older version; run once without --offline to "
+"rebuild it"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "IMDb index is from an older version; rebuilding ..."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"reading IMDb credits for {count} titles (title.principals: about 790 MB, "
+"not kept) ..."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"reading IMDb names for {count} people (name.basics: about 310 MB, not "
+"kept) ..."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "indexing IMDb credits ..."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "TMDB: {gone} cached file(s) over {days} days old removed"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "TMDB posters: {error}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "picture {picture}: {error}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "TMDB: no credits for {imdb_id} ({error})"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "fingerprint: looking the disc up in your case files and TheDiscDB"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "reading the disc's structure (playlists / title sets)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "reading the volume label, disc metadata and cover art"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "checking discs of the same set you've confirmed"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "searching the local IMDb index"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "reading the label as a studio code / title initials"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "asking TMDB (online)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "fetching episode lists from TVmaze"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "comparing the disc's cover art with the candidates' box art"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "reading the disc's menus (nothing else named it)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"running the disc's program: what its menus' buttons play, and what plays "
+"after what"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"Detect titles: the disc's menus read, each button's words and what it "
+"plays"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "asking Gemini what the disc's picture shows"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "looking up posters and box art"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "running MakeMKV on the disc"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "scanning the titles' video"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "step: {step}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "scan {disc}  {format}  label={label}  -> {guess}  [{source}; {status}]"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "TheDiscDB: {error}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "picture: {error}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "picture: {what} from {source} (top guess)"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "picture: {what} from {source}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "TMDB: credits of {count} film(s) over {days} days old removed"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "answer for {disc}: {truth}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "(forgotten)"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "running {exe} -r info {drive}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"running {program} -r info {drive} (MakeMKV reads the disc; this can take "
+"a minute) ..."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "cover banner: {error}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "edition of {disc}: {error}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "disc-detective {version}: {arguments}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "command failed"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{what}: {result}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "using MakeMKV's saved reading of this disc"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"MakeMKV couldn't read the disc: using an older saved reading, which "
+"leaves out its shortest titles"
+msgstr ""
+
+#: disc_detective/makemkv.py
+#, python-brace-format
+msgid "run: {command}"
+msgstr ""
+
+#: disc_detective/makemkv.py
+#, python-brace-format
+msgid "makemkv: {makemkv_message}"
+msgstr ""
+
+#: disc_detective/makemkv.py
+#, python-brace-format
+msgid "makemkvcon exited with code {code}"
+msgstr ""
+
+#: disc_detective/makemkv.py
+#, python-brace-format
+msgid "only a Play All plays {titles}: setting up a sting"
+msgstr ""
+
+#: disc_detective/makemkv.py
+msgid "MakeMKV hasn't stopped its backup yet"
+msgstr ""
+
+#: disc_detective/makemkv.py
+#, python-brace-format
+msgid "couldn't clear our playlists from {root}: {error}"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "couldn't look at the menus: {error}"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid ""
+"the disc's program: starts on {start}; {pages} pages, {buttons} buttons "
+"({time:.2f}s)"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "{where} page {pgc} program {program} button {n:2d}: {answers}"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "{where} page {pgc} button {n:2d}: {answers}"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "{error}: opening the disc in VLC to unlock the drive"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "VLC {vlc_dir}: opening {mrl}"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid ""
+"{run:<6} {label:<14} title {title} chapter {chapter} time {time_ms:.1f}s "
+"frames {frames}"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "couldn't compare the disc's titles ({error})"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "read again: button {n} of page {page}: \"{was}\" is \"{got}\" ({got2:.2f})"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "DVD Menu leads back to {start}: starting over that way"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "DVD Menu doesn't lead back to {start}: opening the disc again instead"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid ""
+"page {page} of title set {vts}: its highlight is too small to see: taking"
+" the disc's program's word for it"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid ""
+"the highlight is on button {n} of {page}, not {said} as the disc's "
+"program said"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid ""
+"the highlight isn't where the disc's program said ({page}, button {n}): "
+"looking"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "it's {page} instead"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid ""
+"the highlight moved to button {n} of {page} (from {said}: keys pressed as"
+" its buttons came on)"
+msgstr ""
+
+#: disc_detective/menus.py
+msgid "the highlight shows over the video darkened: looking for it that way"
+msgstr ""
+
+#: disc_detective/menus.py
+msgid ""
+"the highlight doesn't show over the video darkened (drawn in the video): "
+"looking as before"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "questioning page {page} of title set {vts} ({k} of {n})"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "page {page} of title set {vts}: its words are in the subpicture"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "couldn't keep the disc's menu data ({error})"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "looking only among the {count} pages the disc's program reaches"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "couldn't run the disc's program ({error}): pressing instead"
+msgstr ""
+
+#: disc_detective/menus.py
+msgid "the disc plays its film by itself: pressing Menu to reach its menus"
+msgstr ""
+
+#: disc_detective/menus.py
+msgid "opening the disc in VLC"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "VLC is playing it ({seconds:.0f} s): looking for the first menu"
+msgstr ""
+
+#: disc_detective/menus.py
+msgid "not on the page the disc's program starts on: looking around"
+msgstr ""
+
+#: disc_detective/menus.py
+msgid "VLC is playing the film instead: its DVD Menu"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "the disc opens on {where} page {page} (program {program})"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "the disc's program starts on {program}, VLC on {start}"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "the disc's program answers {answered} of {count} buttons"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid ""
+"no way to {n} page after all (a button leads elsewhere than the disc's "
+"program said): passed by"
+msgid_plural ""
+"no way to {n} pages after all (a button leads elsewhere than the disc's "
+"program said): passed by"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "on the way to {goal}: {error}, starting over"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid ""
+"the menus can't be read any more ({error}): stopping with what's been "
+"found"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "read {read} of {pages} pages ({minutes:.1f} minutes)"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "{n} round trips, darkened"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "{n} round trips, as it is"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "{n} round trips"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid ""
+"the time: highlight checks {checks:.0f} s ({trips}; of it darkening "
+"{darkening:.0f} s), pages' frames {frames:.0f} s, waiting for words "
+"{words:.0f} s; the rest, moving page to page and VLC opening {rest:.0f} s"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid ""
+"the disc's program placed the highlight right {placed} of {total} times "
+"(and {moved} moved by our keys)"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "the disc's program placed the highlight right {placed} of {total} times"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "{count} buttons to press ({known} answered by the disc itself)"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "every title has a way to it now: the last {count} left unpressed"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid ""
+"[{number}/{count}] {page} button {button}: Play again: title {played} "
+"(not pressed)"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "{page} button {button}: {error}, trying again"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "{page} button {button}: {error}"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "[{number}/{count}] {page} button {button}: {result}"
+msgstr ""
+
+#: disc_detective/menus.py
+msgid ""
+"VLC gets no picture from the drive any more: stopping with what's been "
+"found"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid ""
+"not rippable: \"{text}\" ({clock}) plays from the disc's menu, it isn't a"
+" title"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid "couldn't read the disc's titles for its Play All ({error})"
+msgstr ""
+
+#: disc_detective/tools.py
+#, python-brace-format
+msgid "installing {name}: {command}"
+msgstr ""
+
+#: disc_detective/tools.py
+#, python-brace-format
+msgid "winget: {line}"
+msgstr ""
+

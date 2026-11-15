@@ -2063,10 +2063,10 @@ def replay(where, log=print):
     for (d, pgc, prog, n), answers in sorted(found.items(), key=lambda kv: (str(kv[0][0]), kv[0][1:])):
         where = "VMG" if d == "vmgm" else "VTS %s" % d
         answers_text = "; ".join(_answer_text(a) for a in answers)
-        log("  " + (i18n.log("{where} page {pgc} program {program} button {n:2d}: {answers}", where=where, pgc=pgc, program=prog,
-                                      n=n, answers=answers_text) if prog > 1 else
-                             i18n.log("{where} page {pgc} button {n:2d}: {answers}", where=where, pgc=pgc, n=n,
-                                      answers=answers_text)))
+        log("  " + i18n.log("{where} page {pgc} program {program} button {n:2d}: {answers}", where=where, pgc=pgc,
+                            program=prog, n=n, answers=answers_text) if prog > 1 else
+            "  " + i18n.log("{where} page {pgc} button {n:2d}: {answers}", where=where, pgc=pgc, n=n,
+                            answers=answers_text))
     return start, found
 
 
@@ -3521,14 +3521,15 @@ class _Crawler:
                 pause(2)
                 found = self.find([start], timeout=MENU_BACK_WAIT + _lead_in(self.pages, start))
                 if self.menu_back is None:
-                    self.log("  DVD Menu leads back to %s: starting over that way" % (start,))
+                    self.log("  " + i18n.log("DVD Menu leads back to {start}: starting over that way", start=start))
                 self.menu_back = True
                 return found
             except Lost:
                 # (it lands elsewhere: a disc that opens on its VMG menu. Not from another title
                 # set's pages, though: there DVD Menu leads to that one's (WALL-E's Home Theater))
                 if self.menu_back is None and (where is None or where[0] == start[0]):
-                    self.log("  DVD Menu doesn't lead back to %s: opening the disc again instead" % (start,))
+                    self.log("  " + i18n.log("DVD Menu doesn't lead back to {start}: opening the disc again instead",
+                                              start=start))
                     self.menu_back = False
         self.close()
         self.open()
@@ -3564,8 +3565,8 @@ class _Crawler:
             # Back and Next 4 pixels square). A wrong word shows at the next page's arrival
             pause(wait + 1)
             if st not in self.reading:
-                self.log("  page %s of title set %s: its highlight is too small to see: taking the disc's "
-                         "program's word for it" % (st[1], st[0]))
+                self.log("  " + i18n.log("page {page} of title set {vts}: its highlight is too small to see: taking "
+                                          "the disc's program's word for it", page=st[1], vts=st[0]))
                 self._read(st, self.v.frame(), None, None)
             return st, sel
         trips = [(k, back) for k, back in self.ROUND_TRIPS if sel in by and by[sel][k] in by and
@@ -3601,8 +3602,8 @@ class _Crawler:
                     # FastPlay | Main Menu) doesn't say which: the one lit before the press does
                     if scores.get((m, sel), -1) >= SEEN and self._lit(st, a, b, m, sel):
                         self.placed[1] += 1
-                        self.log("  the highlight is on button %d of %s, not %d as the disc's program said"
-                                 % (m, st, sel))
+                        self.log("  " + i18n.log("the highlight is on button {n} of {page}, not {said} as the disc's "
+                                                  "program said", n=m, page=st, said=sel))
                         self._read(st, a, b, m)
                         return st, m
                     self.placed[0] += 1
@@ -3612,7 +3613,8 @@ class _Crawler:
         if playing and self.v.state()["title"] != 0:
             raise Lost("VLC is playing a title, not in the menus")     # (no page to look round)
         self.placed[1] += 1
-        self.log("  the highlight isn't where the disc's program said (%s, button %d): looking" % (st, sel))
+        self.log("  " + i18n.log("the highlight isn't where the disc's program said ({page}, button {n}): "
+                                  "looking", page=st, n=sel))
         try:
             return self.find([st], timeout=20)
         except Lost:
@@ -3621,7 +3623,7 @@ class _Crawler:
         # not the page the program said at all (Muppets from Space: after its outtakes' intro, the
         # disc goes elsewhere than our run of its program does): which page is it?
         found = self.find(self.states, timeout=30)
-        self.log("  it's %s instead" % (found[0],))
+        self.log("  " + i18n.log("it's {page} instead", page=found[0]))
         return found
 
     def _moved(self, st, sel, res, key, back, a, b, ours=True):
@@ -3643,11 +3645,12 @@ class _Crawler:
             return n
         if ours:
             self.placed[2] += 1
-            self.log("  the highlight moved to button %d of %s (from %d: keys pressed as its buttons came on)"
-                     % (n, st, sel))
+            self.log("  " + i18n.log("the highlight moved to button {n} of {page} (from {said}: keys pressed as "
+                                      "its buttons came on)", n=n, page=st, said=sel))
         else:
             self.placed[1] += 1
-            self.log("  the highlight is on button %d of %s, not %d as the disc's program said" % (n, st, sel))
+            self.log("  " + i18n.log("the highlight is on button {n} of {page}, not {said} as the disc's "
+                                      "program said", n=n, page=st, said=sel))
         self._read(st, a, b, n)
         return n
 
@@ -3735,7 +3738,7 @@ class _Crawler:
             res = self._darkly(self._round_trip_as_is, candidates, key, back, weak)
             if res[0] and res[0][0][0] >= SEEN:
                 if not self.dark_ok:
-                    self.log("  the highlight shows over the video darkened: looking for it that way")
+                    self.log("  " + i18n.log("the highlight shows over the video darkened: looking for it that way"))
                     self.dark_ok = True
                 self.dark_streak = 0
                 return res
@@ -3752,8 +3755,8 @@ class _Crawler:
             if res[0] and res[0][0][0] >= SEEN and not self.dark_ok:
                 self.dark_missed += 1
                 if self.dark_missed >= self.DARK_MISSES:
-                    self.log("  the highlight doesn't show over the video darkened (drawn in the video): "
-                             "looking as before")
+                    self.log("  " + i18n.log("the highlight doesn't show over the video darkened (drawn in the video): "
+                                              "looking as before"))
                     self.dark_ok = False
             return res
         self._as_is()
@@ -4096,8 +4099,8 @@ class _Crawler:
                      else self.pool.submit(_better_reading, f2, f1, b["rect"], rects) for b in btns}
         self.reading[st] = first
         self.finished[st] = self.more.submit(self._finish, st, f1, f2, was, bare, dark, first)
-        self.log("  questioning page %s of title set %s (%d of %d)" % (st[1], st[0], len(self.reading),
-                                                                         max(len(self.reading), self.expect)))
+        self.log("  " + i18n.log("questioning page {page} of title set {vts} ({k} of {n})", page=st[1], vts=st[0],
+                                  k=len(self.reading), n=max(len(self.reading), self.expect)))
         self.progress("page", len(self.reading), max(len(self.reading), self.expect))
 
     def _finish(self, st, f1, f2, was, bare, dark, first):
@@ -4122,7 +4125,8 @@ class _Crawler:
                 gone = [n for n in worded if _score(words.get(n, "")) <= 0]
                 overlay = bool(worded) and 2 * len(gone) > len(worded)
                 if overlay:
-                    self.log("  page %s of title set %s: its words are in the subpicture" % (st[1], st[0]))
+                    self.log("  " + i18n.log("page {page} of title set {vts}: its words are in the subpicture",
+                                              page=st[1], vts=st[0]))
                     words = lit
                     if dark is not None:        # (over black, no scenery behind them: the better)
                         alone = {b["n"]: self.pool.submit(button_words, dark, b["rect"], rects) for b in btns}
@@ -4597,10 +4601,11 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
                             rest=time.time() - t0 - sp.get("highlight checks", 0) - sp.get("page frames", 0)
                             - sp.get("waiting for words", 0)))
         if sum(c.placed[:2]):
-            log("  " + (i18n.log("the disc's program placed the highlight right {placed} of {total} times (and {moved} moved by "
-                                "our keys)", placed=c.placed[0], total=sum(c.placed[:2]), moved=c.placed[2]) if c.placed[2] else
-                       i18n.log("the disc's program placed the highlight right {placed} of {total} times", placed=c.placed[0],
-                                total=sum(c.placed[:2]))))
+            log("  " + i18n.log("the disc's program placed the highlight right {placed} of {total} times (and {moved} "
+                                "moved by our keys)", placed=c.placed[0], total=sum(c.placed[:2]), moved=c.placed[2])
+                if c.placed[2] else
+                "  " + i18n.log("the disc's program placed the highlight right {placed} of {total} times",
+                                placed=c.placed[0], total=sum(c.placed[:2])))
         # the presses: only what the disc doesn't say, on pages read
         known_outright()
         # the feature, when scene buttons say it: then "Play" needn't be pressed (it may well run
@@ -4654,8 +4659,8 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
                             pass
                     break
                 except Lost as e:
-                    log("  " + (i18n.log("{page} button {button}: {error}, trying again", page=s, button=n, error=e) if attempt == 1 else
-                                   i18n.log("{page} button {button}: {error}", page=s, button=n, error=e)))
+                    log("  " + i18n.log("{page} button {button}: {error}, trying again", page=s, button=n, error=e)
+                        if attempt == 1 else "  " + i18n.log("{page} button {button}: {error}", page=s, button=n, error=e))
                     if attempt == 2:
                         pressed[(s, n)] = {"error": str(e)}
                 finally:

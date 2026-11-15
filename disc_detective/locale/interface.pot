@@ -1,0 +1,3999 @@
+# Translations template for Disc Detective.
+# Copyright (C) 2026 Brady Field
+# This file is distributed under the same license as the Disc Detective
+# project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: Disc Detective 0.4.dev0\n"
+"Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
+"\n"
+"POT-Creation-Date: 2026-11-15 06:29-0600\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: disc_detective/app.py
+msgid "Disc Detective — Optical Forensics · 221B"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{title} reads {n} second short"
+msgid_plural "{title} reads {n} seconds short"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{n} title reads short"
+msgid_plural "{n} titles read short"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Lab: {what}: check the disc"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{names} and {last}"
+msgstr ""
+
+#: disc_detective/app.py disc_detective/core.py
+msgid ", "
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Feature"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Episode"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Deleted Scene"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Extra"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Featurette"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Interview"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Trailer"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Short"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Music"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Scene"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Other"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Promo"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Behind The Scenes"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"Show {count} more: extras, duplicates, play-alls, promos, pieces and "
+"short clips"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Show {count} more: duplicates, play-alls, promos, pieces and short clips"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"Show {count} more: extras, duplicates, play-alls, promos and pieces of "
+"the film"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Show {count} more: duplicates, play-alls, promos and pieces of the film"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Part {part} of {parts} of {title}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Piece of {title}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Main Menu"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{button} Menu"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Questioning suspect…"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Questioning suspect {k}…"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Questioning suspect {k} of {n}…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Interrogating suspect…"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Interrogating suspect {k}…"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Interrogating suspect {k} of {n}…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "under a minute left"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "about {minutes} min left"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "the film"
+msgstr ""
+
+#: disc_detective/app.py disc_detective/core.py
+#, python-brace-format
+msgid "{n} episode"
+msgid_plural "{n} episodes"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py disc_detective/core.py
+#, python-brace-format
+msgid "{n} extra"
+msgid_plural "{n} extras"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "The suspect named {what}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "The suspects named {what}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Play-all"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Play-all of Title {numbers}"
+msgid_plural "Play-all of Titles {numbers}"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{APP} · case notes"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Follow new lines"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Close"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Clear"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Copy all"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Scan Disc"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Rip"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Insert a disc and press Scan Disc"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Scan Disc reads the disc and opens a case file on it"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "SOURCE"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "No case open"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "About / credits"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Open logs folder"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Case notes (technical log)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Settings"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Version {version} is out"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{percent}%"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "That's right"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "In your case files"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Not right?"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Titles the disc's menus named that you haven't confirmed yet: click to "
+"check them in Edit titles"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TARGET PATH"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Change folder"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "AUDIO"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "EXTRACTION ENGINE"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{drive}   Drive not ready"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "No disc drives found"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Folder: {folder}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Choose folder…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Refresh drives"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Rip to: {folder}…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Include extras"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Choose titles…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Edit titles…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Back to default titles"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Open rip folder"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Open MakeMKV"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Open case"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Case closed"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Cancel"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "no drive selected"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "No drive selected: pick one from Source"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "A different disc is in the drive: Scan it"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Choose a disc or a full-disc backup folder"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "no drive"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Drive not ready"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Wait for the case at hand to finish, then try again."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Couldn't start {APP} again: {exc}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Disc data updated"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Disc data update failed: {err}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Downloading {label}: {done} of {total} MB"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "IMDb Reference"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TheDiscDB Entry"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Disc Volume Label"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Disc Title"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Mastering Date"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Disc Fingerprint"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Box Set"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Protection"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Episodes"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Fingerprint copied: {full}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Copy the whole fingerprint"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TheDiscDB"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Probable match"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Best guess: check it"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Not identified yet"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Choose the match"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Couldn't save the answer: {exc}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Saved to your case files"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Your answer: {answer}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Forget my answer and investigate again"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "It's one film or TV show instead…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Other matches:"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Possible matches:"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "film"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TV series"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{name} ({year}) · {kind}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Ask an AI about the disc's picture…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Enter it myself…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Copy picture"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Couldn't copy the picture here: use Save picture…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Save picture…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Save the picture"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "PNG image"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "NO PICTURE ON FILE"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Rip to"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The drive isn't ready yet: give it a moment"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "No disc in the drive"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The drive hasn't answered yet: give it a moment"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"No disc found at {drive}.\n"
+"\n"
+"Insert a disc, or pick another drive or a folder from the Source menu "
+"(top right)."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Investigating…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Arriving at the scene…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The disc was removed: scan aborted"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Couldn't read this disc"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Scan failed: details in the case notes"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "CASE FILE #{content_hash}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TV"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Movie"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Collection"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Disc"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Special Features"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{minutes} min"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Best guess"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Identified by {source}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Unidentified"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{format} {kind}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"There's a second feature on this disc we couldn't name: Detect titles may"
+" find it, or add it with Not right? > Enter it myself > Multi-film"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"There's a second feature on this disc we couldn't name: add it with Not "
+"right? > Enter it myself > Multi-film"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Best guess: confirm it, or pick another with Not right?"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Still a mystery: Choose the match (an AI can read the disc's picture for "
+"you)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Still a mystery: Choose the match to say what it is"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Lab report on file"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{count} UNCONFIRMED"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "MakeMKV linked"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "MakeMKV not found"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "VLC linked"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "VLC not found"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Nothing selected: use the arrow beside Rip > Choose titles"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "install MakeMKV to rip (or set it in Settings)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The lab waits out the stakeout…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Setting up the stakeout…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Opening the case files…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The disc's own files name none of its titles"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "The disc's own files name {n} of its titles"
+msgid_plural "The disc's own files name {n} of its titles"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+msgid "Going on stakeout…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Taking photos for evidence…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The disc was removed: stakeout aborted"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Stakeout called off"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "No menu answered: nothing to stake out on this disc"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Could not go on Stakeout"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "No stakeout: RapidOCR isn't working here, details in the case notes"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "A stakeout needs VLC: install it, or set its folder in Settings"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The stakeout couldn't go ahead: details in the case notes"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The stakeout turned up nothing: titles unchanged"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The lab is examining the disc…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Lab report filed"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The lab couldn't read the disc"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Waiting for the lab to finish with the disc…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"MakeMKV's command-line tool (makemkvcon) wasn't found.\n"
+"\n"
+"Install MakeMKV, or add its folder to PATH."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"Can't use the rip folder:\n"
+"{exc}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Sending the disc to the lab (MakeMKV)…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Waiting for the lab to finish examining the disc…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Setting up a sting…"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "The sting fell through: {error}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Bagging the evidence, {number} of {total}: {file}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The lab's numbering changed: examining the disc again…"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "MakeMKV says: {problem}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "The disc was removed: rip aborted ({ripped} of {n} title ripped)"
+msgid_plural "The disc was removed: rip aborted ({ripped} of {n} titles ripped)"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+msgid "The lab couldn't rip it: details in the logs"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"\n"
+"\n"
+"Details are in errors.log (Open logs folder, at the bottom of the window)."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Rip called off after {ripped} of {n} title"
+msgid_plural "Rip called off after {ripped} of {n} titles"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{ripped} of {n} title ripped. {problem}"
+msgid_plural "{ripped} of {n} titles ripped. {problem}"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Evidence bagged: {ripped} of {n} title ripped (details in the logs)"
+msgid_plural "Evidence bagged: {ripped} of {n} titles ripped (details in the logs)"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Evidence bagged, but {what}: compare it"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Evidence bagged, but {what}: compare them"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Evidence bagged: {ripped} of {n} title ripped"
+msgid_plural "Evidence bagged: {ripped} of {n} titles ripped"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+msgid "Cancelling…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Calling off the stakeout…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "A job is still running. Quit anyway?"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Specials"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Season {season}, Disc {disc}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Season {season}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Unidentified disc"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Disc Art"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "VERIFIED {source} ASSET {id}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "VERIFIED {source} ASSET"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "copy"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{title} ({n} CHAPTERS)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{n} TITLES"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "English"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "French"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Spanish"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "German"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Italian"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Japanese"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Portuguese"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Dutch"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Chinese"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Korean"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Russian"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Thai"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Swedish"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Danish"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Norwegian"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Finnish"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Polish"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Czech"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Hungarian"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Turkish"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Hebrew"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Arabic"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Hindi"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "lang"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{language} commentary"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "+{count} more"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{disc}, in the {release} release"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "disc {number} of {count}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{n} decoy title · the real film is {title}"
+msgid_plural "{n} decoy titles · the real film is {title}"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{n} decoy title · best guess for the real film: {title}"
+msgid_plural "{n} decoy titles · best guess for the real film: {title}"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+msgid "No titles chosen to rip"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Nothing to rip on this disc"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Will rip {n} chosen title"
+msgid_plural "Will rip {n} chosen titles"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Will rip {n} episode"
+msgid_plural "Will rip {n} episodes"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Will rip {n} editions: {editions}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Will rip {n} films"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Will rip {n} special feature"
+msgid_plural "Will rip {n} special features"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Will rip the feature ({length})"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Will rip the longest title ({length})"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Will rip {n} title"
+msgid_plural "Will rip {n} titles"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+msgid "Choose titles"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Tick the titles to rip."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "OK"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Default"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Piece of the film"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Duplicate"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Version"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Title"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Length"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Video"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Saves as"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Copy of {title}"
+msgstr ""
+
+#: disc_detective/app.py disc_detective/core.py
+msgid "role"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{kind}: {name}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Episode {first}-{last}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Episode {number}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Titles for TheDiscDB"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Edit titles"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Detect titles"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"The titles this disc's packet labels (fingerprint {h}), as TheDiscDB will"
+" have them. To put a type or name right, use its pencil. To label "
+"another, put the disc in the drive and use Edit titles."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"Change a title's type or name and it's saved to your case files with this"
+" disc (fingerprint {h}), for rips and submission packets. To clear a "
+"saved title, use its ✕. Promo is for ads."
+msgstr ""
+
+#: disc_detective/app.py
+msgid " What Detect titles finds is saved once you confirm it."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Collection name"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Save"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Detect titles is still reading this disc's menus. Stop it?"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TITLE"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "LENGTH"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TYPE"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "NAME"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "S"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "E"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "FILM"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "CONFIRM?"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "What each type is for"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Show {count} more: titles that go in blank"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The menu button that plays it"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ": “{button_title}”"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Watch it in VLC"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Watch it"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Edit it"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "needs a name"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Clear it"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{name} ({year})"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "No film yet"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Change…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Choose…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The disc is busy: watch it once the scan or rip is done"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{tid}  {name}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"ffmpeg's player (ffplay) wasn't found: install ffmpeg to watch Blu-ray "
+"titles"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"VLC's player wasn't found beside it: reinstall VLC, or set its folder in "
+"Settings"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The film itself, in any cut (theatrical, extended, director's)."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The film's"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "A TV episode. Give it its season and episode."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Its season's"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Bonus material no other type fits: making-ofs, panels, galleries."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Short behind-the-scenes pieces, gag reels."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Deleted and extended scenes."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "This film's own trailers and teasers."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Interviews with the cast and crew."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Short films."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Music videos, songs, sing-alongs, concert clips."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "A single scene or shot from the film."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Logos, warnings, disclaimers. Not ripped unless ticked."
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Ads for other releases: coming soon, sneak peeks. Not ripped unless "
+"ticked."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Title types"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"TheDiscDB's types, and the folder each is saved in when ripped. Promo is "
+"Disc Detective's own: it goes to TheDiscDB as a Trailer."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "WHAT IT'S FOR"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "SAVED IN"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"On a TV disc, an extra given its episode saves beside that episode. The "
+"rest save in their folder under the disc's season, or under the show if "
+"it has none."
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"A Play All takes the type of what it plays (Deleted Scenes: Play All is a"
+" DeletedScene). It isn't ripped unless ticked, as what it plays is ripped"
+" on its own."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Menu button"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Read as “{read}”, corrected to “{name}”"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "“{words}”"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Read as {words}."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Its button in the disc's menu, as the disc has it."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Detect titles read it as {words}."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Detect titles couldn't read its words."
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"The gold dashed box is the button on the menu; point at it, or click it, "
+"to see the words it was read from (in red)."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The gold dashed box is the button on the menu."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "It's shown selected, as a player shows it."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The menu's own highlight may be on another button."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Downloading {label}: {done} MB"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "about 4 MB"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "about 1.4 GB, then a few minutes to index"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Get disc data"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TheDiscDB (fingerprints of known discs)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "IMDb's public title and credits data"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Disc Detective recognizes discs with:\n"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{what}, {size}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"\n"
+"This is a one-time download. After that the data refreshes itself, and "
+"scans work offline."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Download now"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Later"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Starting…"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"Couldn't finish: {err}\n"
+"You can retry from Settings."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Ready. Insert a disc and press Scan Disc."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Ask an AI about the disc's picture"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Chat AIs recognise covers and title art well. Copy the picture and the "
+"question, paste both into one, then put its answer below."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Copy question"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Open:"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Ask Gemini for me"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Its answer"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Look it up"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "No pictures on this disc"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "(can't show it)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{number} of {total}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Picture copied: paste it into the chat"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Couldn't copy the picture here: use Save picture… and attach the file"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The question is filled in: paste the picture there and send"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Question copied: paste it and the picture into {name}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Asking Gemini…"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Gemini couldn't tell: {answer}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Gemini's answer is below: Look it up to check it against IMDb"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Question copied"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Save the disc's picture"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Saved: attach {file} in the chat"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TV film"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "video"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "miniseries"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TV special"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "short"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TV short"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Which film is this?"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "What's on this disc?"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Year"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Film"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TV show"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Multi-film"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Season"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Add a film…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Pick the right entry from IMDb above, or just type the title and year. "
+"Disc Detective remembers it for this disc."
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"IMDb data isn't downloaded, so type the title and year. Disc Detective "
+"remembers it for this disc."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Use this"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Pick the film from the IMDb list."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "type"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{votes} vote"
+msgid_plural "{votes} votes"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{name} ({year})  ·  {details}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Using IMDb {imdb_id}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Add each film on the disc. Each is matched to a title by its length."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "No films yet."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Film {number}: not chosen yet"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Search…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Remove"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The season should be a number."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Enter the title."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The year should look like 1998."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Pick one of the IMDb results above."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Search for each film, or remove the ones that aren't on the disc."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Add each film on the disc (at least two)."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "None of the disc's titles is long enough to be a film."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Disc identification"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Disc fingerprints, title lists and box art from TheDiscDB (MIT License). "
+"Titles from IMDb's non-commercial datasets, downloaded to your own "
+"computer for personal use under IMDb's terms."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "IMDb datasets"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TV episodes"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Episode lists and DVD orders from TVmaze, under CC BY-SA 4.0."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Pictures"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Posters and box art from the disc itself, TheDiscDB and, with a key of "
+"your own, TMDB."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "AI detection assistance"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Optional, with a Gemini key of your own: Google's Gemini looks at a "
+"disc's pictures, and IMDb checks its answer."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Ripping and naming"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Rips with MakeMKV, which you install yourself; files are named the way "
+"Plex likes. Disc Detective isn't affiliated with either."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Type and icons"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Detective Serif (a cut of Playfair Display), Courier Prime and Inter, "
+"under the SIL Open Font License 1.1. Icons from Heroicons (MIT License)."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Looking for a newer version…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "You have the newest version."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Couldn't reach GitHub to look for a newer version."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Working offline: not looking for a newer version."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Version {version} is out (you have {current})"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"Download the zip for {system} from its page, close {APP}, and put the new"
+" folder in place of this one. Your case files and settings stay where "
+"they are."
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Update your copy (git pull, or pip install --upgrade), then start it "
+"again."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "What's new, and the downloads"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "About {APP}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "VERSION {version} · POLYFORM NONCOMMERCIAL"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Credits and sources"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Full notices and licenses"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{n} subtitle"
+msgid_plural "{n} subtitles"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{n} new"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{n} fix"
+msgid_plural "{n} fixes"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{n} submitted"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Jan"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Feb"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Mar"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Apr"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "May"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Jun"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Jul"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Aug"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Sep"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Oct"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Nov"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Dec"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "submitted {month} {day}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "submitted"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ", not on TheDiscDB yet: check your suggestions there"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Title there"
+msgstr ""
+
+#: disc_detective/app.py disc_detective/core.py
+msgid "Type"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "S/E"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Edits for TheDiscDB"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Each title has its own form on TheDiscDB (signed in with GitHub). Copy "
+"its title, open its form, paste it and pick the type, then Review "
+"Suggested Changes. Once it's in, mark it submitted: it goes from this "
+"list when TheDiscDB's data has it."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Copy title"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Mark submitted"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Open Title Form"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "there: {was}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Not submitted"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Marked submitted: {title}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "No longer marked submitted: {title}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Copied: {title}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Format"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Labelled"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Needs"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TheDiscDB entry"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "To suggest"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "A scan"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "scan it again"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Film checked"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "check the film it names and confirm it"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Film confirmed"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "confirm the film, or pick another with Not right?"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Lab report"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "scan it with MakeMKV linked, and the lab reads every title"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Fresh lab report"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"scan it again with MakeMKV linked, and the lab reads every title (its "
+"last reading left out the shortest)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Clean reading"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "clean it and scan it again: the lab read titles short"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Film labelled"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "label the film in Edit titles"
+msgstr ""
+
+#: disc_detective/app.py disc_detective/core.py
+#, python-brace-format
+msgid "{n} episode labelled"
+msgstr ""
+
+#: disc_detective/app.py disc_detective/core.py
+#, python-brace-format
+msgid "{n} episodes labelled"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "label its episodes, season and number, in Edit titles"
+msgstr ""
+
+#: disc_detective/app.py disc_detective/core.py
+#, python-brace-format
+msgid "{n} extra labelled"
+msgstr ""
+
+#: disc_detective/app.py disc_detective/core.py
+#, python-brace-format
+msgid "{n} extras labelled"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "label its extras in Edit titles (a disc of nothing but extras)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{n} title labelled"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{n} titles labelled"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"label the titles TheDiscDB leaves blank in Edit titles; then they're "
+"yours to suggest there, under Ready to update"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Help TheDiscDB"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Discs from your case files that TheDiscDB is missing, or could label "
+"better. Submitting and suggesting edits need your own GitHub account on "
+"thediscdb.com."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Submit…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Label titles…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Open its TheDiscDB page"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Suggest edits…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Looking through your case files…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Checking thediscdb.com for newer entries…"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "({n} extra not)"
+msgid_plural "({n} extras not)"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "READY TO SUBMIT ({count})"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "NEEDS MORE INFO ({count})"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "READY TO UPDATE ({count})"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Couldn't read your case files: {err}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Up to date with {where}."
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Pick a disc. These are confirmed, read by the lab and labelled: ready for"
+" TheDiscDB."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{why}, mastered {date}. Their form scans the disc: have it in the drive."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{why}. Their form scans the disc: have it in the drive."
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Pick a disc to see what it needs. Once it has it all, it's ready to "
+"submit."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "To do: Put the disc in the drive and {steps}."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "; then "
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Pick a disc. These are ones TheDiscDB has, with labels of yours it lacks "
+"or has otherwise."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"Your labels for {edits} on TheDiscDB, each on its title's page there. "
+"Suggest edits lists them."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Looking for the disc…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"TheDiscDB's form scans the disc as you add it, and it isn't in a drive.\n"
+"\n"
+"Use a backup folder of the whole disc instead?"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Put the disc in the drive, then Submit again."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "The disc's backup folder"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "That folder isn't this disc: pick its backup, the folder holding {folder}."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Writing the log…"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Couldn't write the log: {err}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"Don't submit it yet: {problem}. Clean the disc, scan it again, then try "
+"again."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"Log ready: {matched} of {n} title matched. The guide walks you through "
+"their form."
+msgid_plural ""
+"Log ready: {matched} of {n} titles matched. The guide walks you through "
+"their form."
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+msgid "Submit to TheDiscDB"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Next"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Back"
+msgstr ""
+
+#: disc_detective/app.py disc_detective/core.py
+msgid "Before you start"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Step {step} of {total}"
+msgstr ""
+
+#: disc_detective/app.py disc_detective/core.py
+msgid "head"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Find its TMDB id"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Show the file"
+msgstr ""
+
+#: disc_detective/app.py disc_detective/core.py
+msgid "Playlist"
+msgstr ""
+
+#: disc_detective/app.py disc_detective/core.py
+msgid "Name"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Done"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "10 letters and numbers, or the listing's address"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "12 or 13 digits"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "a date: August 18, 2009, or 2009-08-18"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "✓ {got}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Copy"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Looking up its TMDB id on {where}…"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{where} doesn't know its TMDB id ({error}): search TMDB for it."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{where} doesn't know its TMDB id: search TMDB for it."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Copied: {value}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{APP} settings"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Ripping"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Include extras by default"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Detect titles from a DVD's menus"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Detect titles from a Blu-ray's menus (experimental)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Adds Detect titles to Edit titles (the menu beside Rip): VLC plays the "
+"menus and presses their buttons to find the film and its extras. Anything"
+" else is left out of the rip."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "During a scan (adds a few minutes):"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Don't detect titles"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Detect titles when the film isn't certain"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Detect titles on every disc whose titles aren't known yet"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Known titles: named by TheDiscDB, or by you in Edit titles."
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Read menus for copies and Play Alls too (slower: a picture for every "
+"title)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Name files in aired order (Plex's default)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Name files in DVD order (set the show to DVD order in Plex)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Episodes are matched to the disc in DVD order either way. Episode lists "
+"from TVmaze (tvmaze.com); applies to the next scan."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Data"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Disc data"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Update now"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Discs from your case files that TheDiscDB is missing, or could label "
+"better."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Show discs…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Integrations"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Programs"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Install…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Find…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Automatic"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Install all missing…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Posters"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "TMDB key"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Test"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Optional: posters TheDiscDB doesn't have, and a fallback search. Get a "
+"free key at themoviedb.org"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "AI Assistance"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Gemini key"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"Optional: when nothing identifies a disc that has pictures of its own, "
+"Gemini looks at them and IMDb checks its answer. The picture and the "
+"disc's clues go to Google (on the free tier Google may use them to "
+"improve its products). Get a free key at Google AI Studio"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{count} discs · built {date}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "not downloaded yet"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{count} people"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "no credits yet"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{count} titles · {people} · built {date}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{status} (rebuild needed)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Find VLC's folder"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "All files"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Find {name} ({exe})"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Installing… its installer's window may be behind this one."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Set by you: {path}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Not found where you set it: {path}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Not installed: {why}."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Found at {path}, but it won't run: its install may not have finished."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "for"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Download page"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{name}: {how_to_get}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "• {name}, from {publisher} ({license})"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"Install {programs}?\n"
+"\n"
+"{listed}\n"
+"\n"
+"Each installer comes from its publisher, through winget (Microsoft's "
+"package manager; where each one comes from: {WINGET_REPO}). Its own "
+"window opens, with its licence for you to agree to, and Windows may ask "
+"for permission."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{n} program"
+msgid_plural "{n} programs"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"{APP} has {programs}'s files open, so the installer couldn't replace "
+"them. Restart {APP} and install first thing?"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "installed, but not found where it's usually put"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Enter a key first."
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Testing…"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Key works."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "That key didn't work: {error}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Key works ({model})."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "Update failed: {err}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Up to date."
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"{error}: {detail}\n"
+"\n"
+"Details are in errors.log (Open logs folder, at the bottom of the window)."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"TheDiscDB index: {discs} discs, {sizes} large-file sizes, {posters} "
+"posters, {prints} cover prints -> {path}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "checking for a newer TheDiscDB index ..."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "downloading the TheDiscDB index ..."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "TheDiscDB index: {discs} discs, built {date}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "downloading IMDb dataset {name} ..."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "indexing IMDb titles (one-time, takes a few minutes) ..."
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"note: this Python's SQLite lacks FTS5; word search falls back to prefix "
+"matching"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"note: IMDb index is from an older version; run once without --offline to "
+"rebuild it"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "IMDb index is from an older version; rebuilding ..."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"reading IMDb credits for {count} titles (title.principals: about 790 MB, "
+"not kept) ..."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"reading IMDb names for {count} people (name.basics: about 310 MB, not "
+"kept) ..."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "indexing IMDb credits ..."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "a Blu-ray disc"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "a DVD"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "a disc"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"Answer with just the title and year as IMDb lists them, like: Title "
+"(Year). If you can't tell, say so."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Dusting for fingerprints"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Securing the scene"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Searching for clues"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Comparing notes with old cases"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Checking the case files"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Cracking the code"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Interviewing witnesses"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Reconstructing the timeline"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Holding a line-up"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Looking through the mug book"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Reviewing case notes"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Staking out the suspects"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Calling in an expert witness"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Pinning photos to the evidence board"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Sending the disc to the lab"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Reviewing the security footage"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{prefix} matches {n} disc in the library"
+msgid_plural "{prefix} matches {n} discs in the library"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+msgid "hash"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "format"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "label"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "truth / best guess"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "evid."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "last seen"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"{n} disc (* = confirmed truth). Set one with --set-truth HASH \"Title "
+"(Year)\""
+msgid_plural ""
+"{n} discs (* = confirmed truth). Set one with --set-truth HASH \"Title "
+"(Year)\""
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+msgid "a scan"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "the film checked"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "the film confirmed"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "a lab report"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "a fresh lab report"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "a clean reading"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "the film labelled"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "needs {what}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "confirmed by you, {n} title labelled ({extras}), lab report on file"
+msgid_plural "confirmed by you, {n} titles labelled ({extras}), lab report on file"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{n} extra not"
+msgid_plural "{n} extras not"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "confirmed by you, {n} title labelled, lab report on file"
+msgid_plural "confirmed by you, {n} titles labelled, lab report on file"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+msgid ""
+"Every identified disc in your case files is in TheDiscDB already (or "
+"nothing's identified yet)."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "title"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "status"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "ready"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"{n} disc not in TheDiscDB yet, {ready} ready to submit (confirmed, a lab "
+"report, titles labelled)."
+msgid_plural ""
+"{n} discs not in TheDiscDB yet, {ready} ready to submit (confirmed, a lab"
+" report, titles labelled)."
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+msgid ""
+"Build a submission packet with --packet HASH (needs MakeMKV, or "
+"--makemkv-log FILE). Submitting needs a GitHub account: "
+"https://thediscdb.com/contribute"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "the main movie"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{n} versions of the film"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{n} labelled by you"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{n} where your label differs"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"Nothing to improve: TheDiscDB labels every title your scans found worth "
+"labelling."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "TheDiscDB disc"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "unlabelled there"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"{n} disc TheDiscDB has, with titles worth labelling that it hasn't "
+"labelled yet."
+msgid_plural ""
+"{n} discs TheDiscDB has, with titles worth labelling that it hasn't "
+"labelled yet."
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+msgid ""
+"Watch them, then suggest the labels on the disc's page on thediscdb.com "
+"(Suggest edits; needs a GitHub account)."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "imported {n} disc from {folder}"
+msgid_plural "imported {n} discs from {folder}"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"running {program} -r info {drive} (MakeMKV reads the disc; this can take "
+"a minute) ..."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{title}, {n} second short"
+msgid_plural "{title}, {n} seconds short"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"Don't submit this reading yet: MakeMKV couldn't read all of this title "
+"({titles}). Clean the disc, scan it again so the lab reads it again, then"
+" build this again; still short, another drive or copy may do better."
+msgid_plural ""
+"Don't submit this reading yet: MakeMKV couldn't read all of these titles "
+"({titles}). Clean the disc, scan it again so the lab reads it again, then"
+" build this again; still short, another drive or copy may do better."
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+msgid ""
+"This log is an older reading of MakeMKV's, at its minimum length, so "
+"titles shorter than that aren't in it. TheDiscDB's list every title: put "
+"the disc in the drive and build this again."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Sign in with GitHub, then Contribute."
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"Have the disc in the drive, or a backup folder of the whole disc: their "
+"form scans it as you add it, its file list and AACS key file, not its "
+"video."
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"Have the disc in the drive, or a backup folder of the whole disc: their "
+"form scans it as you add it, its file list and IFO files, not its video."
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"First, find this edition's Amazon listing, and type in its ASIN, UPC and "
+"release date: the guide makes the rest of their release page from them."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"The disc calls itself the {edition} ({where}: \"{words}\"): look for that"
+" edition."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"Several editions listed? Its name or cover says {edition}. It came out on"
+" or after the disc's mastering date ({date}), and its runtime and studio "
+"match the disc."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"Several editions listed? Its name or cover says {edition}. It came out on"
+" or after the disc's mastering date, and its runtime and studio match the"
+" disc."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"Several editions listed? It came out on or after the disc's mastering "
+"date ({date}), and its runtime and studio match the disc."
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"Several editions listed? It came out on or after the disc's mastering "
+"date, and its runtime and studio match the disc."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Find the edition on Amazon"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Amazon's id for it, in the listing's address: amazon.com/dp/B002CAWNHE"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"the barcode's number: the back of the case, or the listing's picture of "
+"it; the disc never carries it. Their form can't be sent without it"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"this edition's street date, not the film's: search its UPC (Blu-ray.com, "
+"shops) (on or after {date}, the disc's mastering)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"this edition's street date, not the film's: search its UPC (Blu-ray.com, "
+"shops)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "a series: Switch to Series search first"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "IMDb {id}, to confirm the right one"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "disc {number}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Identify the release"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Their form searches TMDB for the film or series."
+msgstr ""
+
+#: disc_detective/core.py
+msgid "its release year and the edition's name, as the disc gives it"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "its release year and format"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "its street date's year and the edition's name, as the disc gives it"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"the edition's name: its street date's year and format, or what its cover "
+"calls it (\"2009 Special Edition\", \"2017 4K UHD - German\")"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"{note}; {year} is the year the disc was mastered: use the street date's "
+"if it's later"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Release details"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"Amazon's id: type it in Before you start. None? Tick \"This release "
+"doesn't have an ASIN\""
+msgstr ""
+
+#: disc_detective/core.py
+msgid "12 or 13 digits: type it in Before you start. Not found: wait to submit"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "type it in Before you start"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"this edition's cover, banners and all, not the film's poster (TheDiscDB "
+"has that from TMDB); Back Image: the back (optional)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "their form makes it from the title: check it's this"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "the edition's language and country (en-us, en-gb, de...)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"as the case says: a Blu-ray's is a letter, A, B or C, or ABC (region-"
+"free); the form's 1 is a DVD's"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"as the case says: a DVD's is a number, 1 (US and Canada) to 8, or 0 "
+"(region-free)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Add the disc"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "the drive itself, or the backup's folder, not the {folder} inside it"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "their scan picks it"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"what sets this disc apart, not the film's name, shown already (\"Disc "
+"1\", \"Special Features\" in a set; both films' names on a double "
+"feature)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "the disc title in lower case, hyphens for spaces"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Disc log"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"MakeMKV's reading of every title (disc name \"{name}\"): no need to run "
+"their PowerShell or Bash command, which reads the disc again for the same"
+" log"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"Next, optional: Scan Disc in Browser, their test of reading a disc "
+"without MakeMKV; or Skip and identify."
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"Identify each title as below, by their Playlist column; Description is "
+"optional: what a title holds when its name doesn't say (\"Trailers for "
+"...\")."
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"Fewer than half the titles matched this disc's scan: make sure the log is"
+" from this disc."
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"Episode order follows the disc's play-all; episode numbers assume the "
+"same number of episodes on every disc of the season. Check them against "
+"the case."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"Not here yet, as they have no name (their form needs one): {titles}. Name"
+" them in Edit titles and build this again."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"Leave the other {n} title blank (play-alls, copies, pieces, short clips "
+"and titles not labelled yet)."
+msgid_plural ""
+"Leave the other {n} titles blank (play-alls, copies, pieces, short clips "
+"and titles not labelled yet)."
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+msgid "Identify the titles"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Review and submit"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"Submit For Review. It's listed under My Contributions; a reviewer's "
+"questions come under its Messages."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "TheDiscDB submission: {disc}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "unconfirmed disc"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "WARNING: {warning}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "Find its {name} ({note})"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "feature"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "episode"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "version"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "extra"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "play-all"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "duplicate"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "segment"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "promo"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "decoy"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "junk"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "loop"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "longest"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "STATUS: {status}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "GUESS:  {guess}  [{source}]"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Fingerprint"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{hash}  ({n} stream file)"
+msgid_plural "{hash}  ({n} stream files)"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+msgid "Case files"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "HIT: {truth}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "HIT via {source}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "not found"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "near match: {path} ({shared} of {total} large files identical)"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "note: {error}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Disc facts"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "(unknown; pass --label)"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "query '{query}'"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "season {value}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "disc {value}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "side {value}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "year {value}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "possibly truncated, prefix search"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "provider"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "BD meta"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "title {number}: {name}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "mastered"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "looks like"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "TV: {n} episode of ~{minutes} min"
+msgid_plural "TV: {n} episodes of ~{minutes} min"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "movie: ~{minutes} min feature"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "unknown"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "commentary"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "flagged in audio track attributes"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "protection"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{n} decoy title; using {title}"
+msgid_plural "{n} decoy titles; using {title}"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{n} decoy title; guessing {title}"
+msgid_plural "{n} decoy titles; guessing {title}"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+msgid "warning"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "many feature-length playlists: possible playlist obfuscation"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "found (save it with --out DIR)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "cover art"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "picture"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{what} from {source}: {image}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "cover OCR"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "menu OCR"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "no confident text (stylized artwork); view the image"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "structure"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "could not parse: {error}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{n} short menu/logo clip hidden"
+msgid_plural "{n} short menu/logo clips hidden"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{n} menu loop hidden"
+msgid_plural "{n} menu loops hidden"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "Titles ({count} shown, {hidden})"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "audio {tracks}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "episode {number}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "ch"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Candidates"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "episode guess: {episodes}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "episodes: {note}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "Search terms: {terms}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "Plex naming"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "lookup error: {error}"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "Updated in your case files with {n} evidence file ({path})"
+msgid_plural "Updated in your case files with {n} evidence files ({path})"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "Updated in your case files ({path})"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "Recorded in your case files with {n} evidence file ({path})"
+msgid_plural "Recorded in your case files with {n} evidence files ({path})"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "Recorded in your case files ({path})"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"Once you know what it is: --set-truth {hash} \"Title (Year)\"  or  \"Show"
+" S1 D2\""
+msgstr ""
+
+#: disc_detective/core.py
+msgid "disc root(s) or full-disc backup folder(s)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "library database (default ~/.disc_detective/library.sqlite)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "don't record this scan in the library"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"dev/test: also store IFOs, playlists and cover art so --corpus can re-"
+"parse the disc"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "dev/test: re-parse every disc with stored evidence and score it"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "list the discs in the library"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"list the discs in your library that TheDiscDB doesn't have yet "
+"(submission candidates)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "list discs TheDiscDB has whose titles your scans can label better"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "confirm a disc, e.g. 3EBA9FFF \"Psych S1 D2\""
+msgstr ""
+
+#: disc_detective/core.py
+msgid "attach notes to a disc"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "import old sample folders into the library"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"where the downloaded TheDiscDB index lives (default "
+"~/.disc_detective/discdb)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "re-download the TheDiscDB index now"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "download/refresh IMDb and TheDiscDB data now and exit"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "don't query thediscdb.com; use the downloaded index only"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "publisher: build the slim index from a TheDiscDB/data checkout and exit"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "output file for --build-discdb-index"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "TheDiscDB/data commit recorded in the index (--build-discdb-index)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "build a TheDiscDB submission packet for a disc in the library"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "saved 'makemkvcon -r info disc:0' output for --packet"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"drive for MakeMKV when no log is given: a letter (E:) or MakeMKV's disc:N"
+" (default disc:0)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "where to write the packet (default thediscdb_<hash>)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"local clone of github.com/TheDiscDb/data: offline lookup and posters (or "
+"env DISC_DETECTIVE_DISCDB)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "skip online lookups"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "don't look up episode lists on TVmaze"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "where TVmaze answers are cached (default ~/.disc_detective/tvmaze)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "name episode files in aired order (Plex's default) or DVD order"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"where IMDb datasets and the local index live (default "
+"~/.disc_detective/imdb)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "re-download the IMDb datasets now"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "don't use IMDb"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"optional TMDB API key, used when IMDb isn't confident (or env "
+"TMDB_API_KEY)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"optional Gemini API key: when nothing confident is found and the disc has"
+" pictures, Gemini looks at them (or env GEMINI_API_KEY)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "override the volume label"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "save extracted cover art to this folder"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "skip cover art extraction"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "don't look up a poster / box art"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "artwork cache (default: 'art' beside the library)"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "print JSON instead of a report"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid "{what}: {result}"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "using MakeMKV's saved reading of this disc"
+msgstr ""
+
+#: disc_detective/core.py
+msgid ""
+"MakeMKV couldn't read the disc: using an older saved reading, which "
+"leaves out its shortest titles"
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"Log written to {path}: {matched} of {n} title over 2 minutes matched to "
+"the scan"
+msgid_plural ""
+"Log written to {path}: {matched} of {n} titles over 2 minutes matched to "
+"the scan"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"WARNING: {title} read {n} second short: a dirty or damaged disc? Don't "
+"submit this reading yet"
+msgid_plural ""
+"WARNING: {title} read {n} seconds short: a dirty or damaged disc? Don't "
+"submit this reading yet"
+msgstr[0] ""
+msgstr[1] ""
+
+#: disc_detective/core.py
+msgid ""
+"give a disc path, or one of --list, --to-submit, --to-improve, --corpus, "
+"--set-truth, --import-samples, --packet"
+msgstr ""
+
+#: disc_detective/tools.py
+msgid "rips discs, and unlocks Blu-ray menus for Detect titles"
+msgstr ""
+
+#: disc_detective/tools.py
+msgid "plays DVD menus for Detect titles, and previews titles"
+msgstr ""
+
+#: disc_detective/tools.py
+msgid "previews a Blu-ray's titles in Edit titles"
+msgstr ""
+
+#: disc_detective/tools.py
+msgid "reads text off cover art"
+msgstr ""
+
+#: disc_detective/tools.py
+#, python-brace-format
+msgid "winget exited with code {code}"
+msgstr ""
+
+#: disc_detective/tools.py
+#, python-brace-format
+msgid "the installer stopped before it finished (exit code {code})"
+msgstr ""
+
+#: disc_detective/tools.py
+#, python-brace-format
+msgid "Download it from {page} (or: {command})."
+msgstr ""
+
+#: disc_detective/tools.py
+#, python-brace-format
+msgid "Download it from {page} (or your package manager: {package})."
+msgstr ""
+
+#: disc_detective/tools.py
+#, python-brace-format
+msgid ""
+"Download it from {page} (Linux: its forum has the download and the build "
+"steps)."
+msgstr ""
+
+#: disc_detective/tools.py
+#, python-brace-format
+msgid "Download it from {page}."
+msgstr ""
+
