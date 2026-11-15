@@ -34,6 +34,7 @@ from tkinter import font as tkfont
 from . import core as di
 from . import i18n
 from .i18n import N_, ui as _, ui_n
+from .kinds import Role, Type
 from . import makemkv
 from . import tools
 from .makemkv import MAKEMKV_SWITCHES, makemkv_source
@@ -44,7 +45,7 @@ APP = "Disc Detective"
 WINDOW_TITLE = N_("Disc Detective — Optical Forensics · 221B")
 SETTINGS = os.path.join(di.data_home(), "settings.json")
 ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
-RIP_ROLES = ("feature", "episode")
+RIP_ROLES = (Role.FEATURE, Role.EPISODE)
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0   # keep makemkvcon from flashing a console
 
 
@@ -185,12 +186,12 @@ def save_settings(d):
 # MakeMKV
 # --------------------------------------------------------------------------
 
-EXTRA_FOLDERS = {"Featurette": "Featurettes", "DeletedScene": "Deleted Scenes", "Trailer": "Trailers",
-                 "Interview": "Interviews", "BehindTheScenes": "Behind The Scenes", "Short": "Shorts",
-                 "Scene": "Scenes"}
+EXTRA_FOLDERS = {Type.FEATURETTE: "Featurettes", Type.DELETED_SCENE: "Deleted Scenes", Type.TRAILER: "Trailers",
+                 Type.INTERVIEW: "Interviews", "BehindTheScenes": "Behind The Scenes", Type.SHORT: "Shorts",
+                 Type.SCENE: "Scenes"}
 # Plex's ending for an extra saved beside its episode ("-other" for the rest)
-EXTRA_SUFFIXES = {"Featurette": "featurette", "DeletedScene": "deleted", "Trailer": "trailer", "Interview": "interview",
-                  "BehindTheScenes": "behindthescenes", "Short": "short", "Scene": "scene"}
+EXTRA_SUFFIXES = {Type.FEATURETTE: "featurette", Type.DELETED_SCENE: "deleted", Type.TRAILER: "trailer", Type.INTERVIEW: "interview",
+                  "BehindTheScenes": "behindthescenes", Type.SHORT: "short", Type.SCENE: "scene"}
 
 
 def clean(s):
@@ -286,11 +287,11 @@ def menu_play_alls(titles, found):
         t, ids = by.get(menu_title_id(n)), [menu_title_id(p) for p in parts]
         if not t or not all(i in by for i in ids):
             continue
-        held = re.findall(r"Title \d+", t.get("note") or "") if t.get("role") == "play-all" else None
+        held = re.findall(r"Title \d+", t.get("note") or "") if t.get("role") == Role.PLAY_ALL else None
         total = sum(by[i].get("duration", 0) for i in ids)
         if held is not None and set(held) <= set(ids) and len(ids) > len(held) or \
-                t.get("role") in ("extra", None) and abs(total - t.get("duration", 0)) <= PLAY_ALL_FIT * total:
-            t["role"], t["note"] = "play-all", "plays " + ", ".join(ids)
+                t.get("role") in (Role.EXTRA, None) and abs(total - t.get("duration", 0)) <= PLAY_ALL_FIT * total:
+            t["role"], t["note"] = Role.PLAY_ALL, "plays " + ", ".join(ids)
 
 
 NOT_IN_MENUS = "not in the disc's menus"       # (menus.NOT_IN_MENUS, without importing it at the start)
@@ -423,21 +424,21 @@ def scan_names(rep):
 def found_by_menus(label):
     """Whether the menus' word on a title is worth having: the film, an ad, or an extra with its
     name read (an extra the menus couldn't name says nothing: the scan's guess stands)."""
-    return bool(label) and (label.get("type") in ("MainMovie", "Promo") or bool((label.get("title") or "").strip()))
+    return bool(label) and (label.get("type") in (Type.MAIN_MOVIE, Type.PROMO) or bool((label.get("title") or "").strip()))
 
 
 # the scan's reading in TheDiscDB's terms (a copy, a play-all or a piece of the film has none)
-ROLE_TYPES = {"feature": "MainMovie", "version": "MainMovie", "episode": "Episode", "extra": "Extra",
-              "promo": "Promo"}
+ROLE_TYPES = {Role.FEATURE: Type.MAIN_MOVIE, Role.VERSION: Type.MAIN_MOVIE, Role.EPISODE: Type.EPISODE, Role.EXTRA: Type.EXTRA,
+              Role.PROMO: Type.PROMO}
 
 
 # Edit titles' order of what the menus found: by type first
-FOUND_TYPES = ("MainMovie", "Episode", "DeletedScene", "Extra", "Featurette", "Interview", "Trailer", "Short", "Music",
-               "Scene", "Other", "Promo")
+FOUND_TYPES = (Type.MAIN_MOVIE, Type.EPISODE, Type.DELETED_SCENE, Type.EXTRA, Type.FEATURETTE, Type.INTERVIEW, Type.TRAILER, Type.SHORT, Type.MUSIC,
+               Type.SCENE, Type.OTHER, Type.PROMO)
 # a type in plain words, for sentences (the types themselves are TheDiscDB's words: kept as they are where they're picked)
-TYPE_WORDS = {"MainMovie": N_("Feature"), "Episode": N_("Episode"), "DeletedScene": N_("Deleted Scene"), "Extra": N_("Extra"),
-              "Featurette": N_("Featurette"), "Interview": N_("Interview"), "Trailer": N_("Trailer"), "Short": N_("Short"),
-              "Music": N_("Music"), "Scene": N_("Scene"), "Other": N_("Other"), "Promo": N_("Promo"),
+TYPE_WORDS = {Type.MAIN_MOVIE: N_("Feature"), Type.EPISODE: N_("Episode"), Type.DELETED_SCENE: N_("Deleted Scene"), Type.EXTRA: N_("Extra"),
+              Type.FEATURETTE: N_("Featurette"), Type.INTERVIEW: N_("Interview"), Type.TRAILER: N_("Trailer"), Type.SHORT: N_("Short"),
+              Type.MUSIC: N_("Music"), Type.SCENE: N_("Scene"), Type.OTHER: N_("Other"), Type.PROMO: N_("Promo"),
               "BehindTheScenes": N_("Behind The Scenes")}
 
 
@@ -457,7 +458,7 @@ def menus_on(settings, disc_format):
 def hidden_roles(include_extras):
     """The kinds of title the title lists keep under Show more: repeats, ads, the film's pieces, and
     extras too unless they're to be ripped (Include extras): the rest is there to browse."""
-    return TitlePicker.HIDDEN + (() if include_extras else ("extra",))
+    return TitlePicker.HIDDEN + (() if include_extras else (Role.EXTRA,))
 
 
 def under_more(role, kind, include_extras):
@@ -465,20 +466,20 @@ def under_more(role, kind, include_extras):
     counted UNCONFIRMED): by what it's down as (kind: the menus' type, TheDiscDB's, yours), the film and
     episodes always in view, an ad never, an extra unless extras are ripped (Include extras); else, a
     repeat, a play-all, a piece of the film, a logo or a menu loop, by the scan's role (hidden_roles)."""
-    if kind in ("MainMovie", "Episode"):
+    if kind in (Type.MAIN_MOVIE, Type.EPISODE):
         return False
-    if kind == "Promo":
+    if kind == Type.PROMO:
         return True
     if kind:
         return not include_extras
     # (and what the scan set aside as too short to matter, listed from MakeMKV's reading: logos, menu loops)
-    return role in hidden_roles(include_extras) or role in ("junk", "loop", "decoy")
+    return role in hidden_roles(include_extras) or role in (Role.JUNK, Role.LOOP, Role.DECOY)
 
 
 def more_text(hidden):
     """The Show more tick's words, for these rows hidden."""
-    extras = any(t["role"] == "extra" for t in hidden)
-    if any(t["role"] in ("junk", "loop", "decoy") for t in hidden):     # (from MakeMKV's reading: logos, menu loops)
+    extras = any(t["role"] == Role.EXTRA for t in hidden)
+    if any(t["role"] in (Role.JUNK, Role.LOOP, Role.DECOY) for t in hidden):     # (from MakeMKV's reading: logos, menu loops)
         if extras:
             return _("Show {count} more: extras, duplicates, play-alls, promos, pieces and short clips", count=len(hidden))
         return _("Show {count} more: duplicates, play-alls, promos, pieces and short clips", count=len(hidden))
@@ -494,12 +495,12 @@ def found_order(tid, was, detected, index=0):
     the page a button was found on is no reason to put one out of order. Without numbers, after those
     that have them, as the scan has them (index)."""
     kind = was.get("type")
-    rank = FOUND_TYPES.index(kind if kind in FOUND_TYPES else "Other")
+    rank = FOUND_TYPES.index(kind if kind in FOUND_TYPES else Type.OTHER)
     place = (detected.get(tid) or {}).get("place")
-    page = [] if kind == "Episode" or not place else list(place[:-1])
+    page = [] if kind == Type.EPISODE or not place else list(place[:-1])
     numbers = di.episode_numbers(was.get("episode"))
     numbered = (0, di._int(was.get("season")) or 0, numbers[0]) if numbers else (1, 0, 0)
-    return (rank, not place and kind != "Episode", page, numbered, index, place or [], di._natural(tid))
+    return (rank, not place and kind != Type.EPISODE, page, numbered, index, place or [], di._natural(tid))
 
 
 PIECE_RE = re.compile(r"^(?:part (\d+) of (\d+) of|a piece of) (\S+)")
@@ -508,7 +509,7 @@ PIECE_RE = re.compile(r"^(?:part (\d+) of (\d+) of|a piece of) (\S+)")
 def piece_text(t):
     """A piece of a named title, in a word ("Part 2 of 3 of 00753.mpls", "Piece of 00746.mpls"), or "":
     its note's (core.apply_labels, the menu project's pieces); not the film's own pieces."""
-    m = PIECE_RE.match(t.get("note") or "") if t.get("role") == "segment" else None
+    m = PIECE_RE.match(t.get("note") or "") if t.get("role") == Role.SEGMENT else None
     if not m or m.group(3) == "the":
         return ""
     if m.group(1):
@@ -717,7 +718,7 @@ def discdb_named(rep):
 
 def linked_episode(item):
     """The episode numbers a label ties an extra to, or None."""
-    if item.get("type") in ("Episode", "MainMovie") or not str(item.get("season")).isdigit():
+    if item.get("type") in (Type.EPISODE, Type.MAIN_MOVIE) or not str(item.get("season")).isdigit():
         return None
     return di.episode_numbers(item.get("episode")) or None
 
@@ -747,7 +748,7 @@ def episode_files(mine, known, names, base, show):
             out.setdefault((season, n), dest)
     for item in list(mine.values()) + list(known.values()):
         numbers = di.episode_numbers(item.get("episode"))
-        if item.get("type") == "Episode" and numbers and str(item.get("season")).isdigit():
+        if item.get("type") == Type.EPISODE and numbers and str(item.get("season")).isdigit():
             add(int(item["season"]), numbers, episode_dest(base, show, item["season"], item["episode"], item.get("title")))
     for dest in names.values():
         code = re.search(r"\bs(\d+)e(\d+)((?:-e\d+)*)", dest, re.I)
@@ -802,7 +803,7 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
         guess = (rep.get("best_guess") or rep.get("label") or "Disc %s" % rep["content_hash"][:8]).split(" | ")[0]
         base = show = clean(guess) or "Disc"
     # a film's special-features disc has nothing but extras: those are what to rip
-    roles = RIP_ROLES + (("extra",) if include_extras or rep.get("extras_disc") else ())
+    roles = RIP_ROLES + ((Role.EXTRA,) if include_extras or rep.get("extras_disc") else ())
     mine = all_labels(rep)                   # your labels (Edit titles): they win over TheDiscDB's
     homes = extras_homes(rep, cand)
     if cand and cand.get("kind") == "collection":
@@ -825,7 +826,7 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
             item = known.get(t["clips"].lower() + ".m2ts") or {}      # playlist of one clip
         if not item and m.get("dvd_title"):                         # TheDiscDB numbers DVD titles "01"
             item = known.get("%02d" % m["dvd_title"]) or known.get(str(m["dvd_title"])) or {}
-        role = t["role"] if t else di.LABEL_ROLES.get(item.get("type"), "extra") if item else None
+        role = t["role"] if t else di.LABEL_ROLES.get(item.get("type"), Role.EXTRA) if item else None
         my = mine.get(t["title_id"]) if t else None
         if my and (my.get("type") or my.get("title")):
             item = dict(item, **{k: v for k, v in my.items() if v not in (None, "")})        # (season 0's a season)
@@ -836,27 +837,27 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
                 continue
         elif role not in roles or (t and t.get("interactive")):    # a menu game: only if ticked
             continue
-        if role == "episode" and str(item.get("season")).isdigit() and di.episode_numbers(item.get("episode")):
+        if role == Role.EPISODE and str(item.get("season")).isdigit() and di.episode_numbers(item.get("episode")):
             dest = episode_dest(base, show, item["season"], item["episode"], item.get("title"))
-        elif role in ("play-all", "promo") and item.get("title") and item.get("type") not in (None, "", "Promo"):
+        elif role in (Role.PLAY_ALL, Role.PROMO) and item.get("title") and item.get("type") not in (None, "", Type.PROMO):
             # ticked by hand, but labelled (yours, or TheDiscDB's): saved as the label says
             dest = extra_dest(item, clean(item["title"]), episodes, base, season_level)
-        elif t and t["title_id"] in names and not (my and role == "extra"):
+        elif t and t["title_id"] in names and not (my and role == Role.EXTRA):
             dest = names[t["title_id"]]
-        elif role == "extra":
+        elif role == Role.EXTRA:
             label = clean(item.get("title")) or clean((t or {}).get("special_name")) or \
                 "%s - %s" % (show, (t["title_id"] if t else m["source"]).replace(".", "_"))
             dest = extra_dest(item, label, episodes, base, season_level)
-        elif role == "episode":
+        elif role == Role.EPISODE:
             dest = "%s/Episode %02d.mkv" % (base, (t or {}).get("episode_index") or m["index"])
-        elif role in ("feature", "version", "longest") and my and edition_label(my, base, show) and \
+        elif role in (Role.FEATURE, Role.VERSION, Role.LONGEST) and my and edition_label(my, base, show) and \
                 not (cand and cand.get("kind") == "collection"):    # (a collection's: its films' names)
             # your label's name for a cut of the film: its Plex edition (The Iron Giant's
             # "Signature Edition" and "Original Edition", one folder, a version picker in Plex)
             dest = "%s/%s {edition-%s}.mkv" % (base, show, edition_label(my, base, show))
-        elif role in ("feature", "longest"):
+        elif role in (Role.FEATURE, Role.LONGEST):
             dest = "%s/%s.mkv" % (base, show)
-        elif role == "version" and t and t.get("edition") and "{imdb-" in base:
+        elif role == Role.VERSION and t and t.get("edition") and "{imdb-" in base:
             # a ticked widescreen / full-screen / 4K copy: another Plex edition of the same film
             dest = "%s/%s {edition-%s}.mkv" % (base, show, clean(t["edition"]))
         else:   # hand-picked play-alls, alternate versions, duplicates
@@ -864,7 +865,7 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
         plan.append({"mk": m["index"], "title_id": t["title_id"] if t else m["source"], "role": role,
                      "length": m["duration_text"], "dest": dest, "full": fullscreen(t, item),
                      "picture": (t or {}).get("video_info"), "seconds": m.get("duration") or (t or {}).get("duration") or 0})
-    copies = [p for p in plan if p["role"] in ("feature", "version", "longest")]
+    copies = [p for p in plan if p["role"] in (Role.FEATURE, Role.VERSION, Role.LONGEST)]
     if selected is None and len(copies) > 1:
         # the better picture, by default: a copy of about the same length (the same film) in a
         # better one leaves this one for you to tick (Rush Hour 3's fullscreen; a 4K disc's 1080p
@@ -878,9 +879,9 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
         del p["full"], p["picture"], p["seconds"]
     if not plan and mk_titles and selected is None:   # nothing classified: the longest title (never a loop)
         real = [x for x in mk_titles if (pairs.get(x["index"], (None, None))[0] or {}).get("role")
-                not in ("loop", "junk", "duplicate", "decoy", "play-all", "segment")] or mk_titles
+                not in (Role.LOOP, Role.JUNK, Role.DUPLICATE, Role.DECOY, Role.PLAY_ALL, Role.SEGMENT)] or mk_titles
         m = max(real, key=lambda x: x["duration"] or 0)
-        plan.append({"mk": m["index"], "title_id": m["source"] or "title %d" % m["index"], "role": "longest",
+        plan.append({"mk": m["index"], "title_id": m["source"] or "title %d" % m["index"], "role": Role.LONGEST,
                      "length": m["duration_text"], "dest": "%s/%s.mkv" % (base0, show0)})
     return plan
 
@@ -889,7 +890,7 @@ def edition_label(my, base, show):
     """The edition your label names a film's title with ("Signature Edition"), or "": none for a
     label naming the film itself ("The Iron Giant"), or a film with no IMDb folder to put it in."""
     name = clean(my.get("title"))
-    if my.get("type") != "MainMovie" or not name or "{imdb-" not in base:
+    if my.get("type") != Type.MAIN_MOVIE or not name or "{imdb-" not in base:
         return ""
     plain = lambda s: re.sub(r"[^a-z0-9]", "", re.sub(r"\(\d{4}\)", "", s.lower()))
     return "" if plain(name) == plain(show) else name
@@ -954,7 +955,7 @@ def rip_path(path, item, rep):
     """Where a ripped title goes. A film whose file is already there (its other version, from
     another disc of the set) gets a Plex edition saying what this one is, so Plex shows one film
     with a version picker; anything else that's taken gets a (2)."""
-    if os.path.exists(path) and item.get("role") in ("feature", "version", "longest") and "{edition-" not in path:
+    if os.path.exists(path) and item.get("role") in (Role.FEATURE, Role.VERSION, Role.LONGEST) and "{edition-" not in path:
         t = next((x for x in rep.get("titles") or [] if x["id"] == item.get("title_id")), None)
         ed = own_edition(t, rep.get("format"))
         if ed:
@@ -2866,17 +2867,17 @@ class App:
             if all((labels.get(p) or {}).get("exact") for p in parts):
                 # (each piece a button of its own: each its own title, the whole their Play All)
                 labels.pop(whole, None)
-                by[whole]["role"], by[whole]["note"] = "play-all", "plays %s (its menu's buttons play each)" % ", ".join(parts)
+                by[whole]["role"], by[whole]["note"] = Role.PLAY_ALL, "plays %s (its menu's buttons play each)" % ", ".join(parts)
                 for p in parts:
                     del pieces[p]
         for piece, whole in pieces.items():
             # (a piece of another named title: not ripped twice, nor its label waiting for you)
             labels.pop(piece, None)
-            by[piece]["role"] = "segment"
+            by[piece]["role"] = Role.SEGMENT
             by[piece]["note"] = "a piece of %s (%s), which plays it whole" % (whole, (labels.get(whole) or {}).get("title"))
         for pid in bdmenus.project_play_alls(rep.get("titles") or [], entries):
-            if by[pid].get("role") in ("extra", "junk", None):
-                by[pid]["role"], by[pid]["note"] = "play-all", "the menus' Play All (its menu project says)"
+            if by[pid].get("role") in (Role.EXTRA, Role.JUNK, None):
+                by[pid]["role"], by[pid]["note"] = Role.PLAY_ALL, "the menus' Play All (its menu project says)"
         # (a name off its menu button, linked to its playlist through the project: known, not a
         # guess; saved as yours are, for TheDiscDB too. What rests on a judgement (an ad by its
         # frame rate, a project's own shorthand) waits for you in Edit titles)
@@ -3012,7 +3013,7 @@ class App:
         mine = dict(rep.get("labels") or {})
         saved = 0
         for tid, lab in detected_for(rep, found).items():
-            if tid not in mine and lab.get("type") and lab["type"] != "Other":
+            if tid not in mine and lab.get("type") and lab["type"] != Type.OTHER:
                 di.set_label(con, h, tid, lab["type"], lab.get("title"), lab.get("season"), lab.get("episode"))
                 mine[tid] = {"type": lab["type"], "title": lab.get("title"), "season": lab.get("season"), "episode": lab.get("episode")}
                 saved += 1
@@ -4216,8 +4217,8 @@ def picture_source(rep, art):
 def picture_format(rep):
     """(4K, HDR) for the disc's main video: whether its film (or episodes) are 2160 lines, and
     their HDR ("HDR10", "Dolby Vision") if any. A 4K disc's 1080p extras don't count."""
-    main = [t for t in (rep or {}).get("titles") or [] if t.get("role") in ("feature", "episode")] or \
-        [t for t in (rep or {}).get("titles") or [] if t.get("role") == "version"]
+    main = [t for t in (rep or {}).get("titles") or [] if t.get("role") in (Role.FEATURE, Role.EPISODE)] or \
+        [t for t in (rep or {}).get("titles") or [] if t.get("role") == Role.VERSION]
     vis = [t.get("video_info") or {} for t in main]
     uhd = any((v.get("height") or 0) >= 2160 for v in vis)
     hdr = next((v["hdr"] for v in vis if v.get("hdr")), None)
@@ -4332,8 +4333,8 @@ def describe_plan(plan, custom):
     if not plan:
         return _("No titles chosen to rip") if custom else _("Nothing to rip on this disc")
     roles = [p["role"] for p in plan]
-    eps = [p for p in plan if p["role"] == "episode"]
-    extras = sum(1 for r in roles if r == "extra")
+    eps = [p for p in plan if p["role"] == Role.EPISODE]
+    extras = sum(1 for r in roles if r == Role.EXTRA)
     if custom:
         head = ui_n("Will rip {n} chosen title", "Will rip {n} chosen titles", len(plan))
     elif eps:
@@ -4347,19 +4348,19 @@ def describe_plan(plan, custom):
         else:
             span = ""
         head = ui_n("Will rip {n} episode", "Will rip {n} episodes", len(eps)) + span
-    elif roles.count("feature") > 1:
-        eds = [(re.search(r"\{edition-([^}]*)\}", p["dest"]), p["length"]) for p in plan if p["role"] == "feature"]
+    elif roles.count(Role.FEATURE) > 1:
+        eds = [(re.search(r"\{edition-([^}]*)\}", p["dest"]), p["length"]) for p in plan if p["role"] == Role.FEATURE]
         if all(m for m, _x in eds):     # one film in several editions (theatrical + extended, say)
             head = _("Will rip {n} editions: {editions}", n=len(eds),
                      editions=", ".join("%s (%s)" % (m.group(1), n) for m, n in eds))
         else:
             head = _("Will rip {n} films", n=roles.count("feature"))
-    elif all(r == "extra" for r in roles):         # a film's special-features disc
+    elif all(r == Role.EXTRA for r in roles):         # a film's special-features disc
         head = ui_n("Will rip {n} special feature", "Will rip {n} special features", len(plan))
         return head
-    elif "feature" in roles or "longest" in roles:
-        f = next(p for p in plan if p["role"] in ("feature", "longest"))
-        head = (_("Will rip the feature ({length})", length=f["length"]) if f["role"] == "feature" else
+    elif Role.FEATURE in roles or Role.LONGEST in roles:
+        f = next(p for p in plan if p["role"] in (Role.FEATURE, Role.LONGEST))
+        head = (_("Will rip the feature ({length})", length=f["length"]) if f["role"] == Role.FEATURE else
                 _("Will rip the longest title ({length})", length=f["length"]))
     else:
         head = ui_n("Will rip {n} title", "Will rip {n} titles", len(plan))
@@ -4549,12 +4550,14 @@ class TitlePicker:
         ttk.Button(btns, text=_("Cancel"), command=top.destroy).pack(side="right", padx=6)
         ttk.Button(btns, text=_("Default"), command=self.to_default).pack(side="left")
 
-    ORDER = {"feature": 0, "episode": 1, "extra": 2, "version": 3, "play-all": 4, "duplicate": 5,
-             "promo": 6, "segment": 7}
+    ORDER = {Role.FEATURE: 0, Role.EPISODE: 1, Role.EXTRA: 2, Role.VERSION: 3, Role.PLAY_ALL: 4, Role.DUPLICATE: 5,
+             Role.PROMO: 6, Role.SEGMENT: 7}
     # repeats of other titles, ads, the film's pieces: rarely wanted, so out of the way
-    HIDDEN = ("play-all", "duplicate", "promo", "segment")
-    ROLE_TEXT = {"promo": N_("Promo"), "segment": N_("Piece of the film"), "play-all": N_("Play-all"),
-                 "duplicate": N_("Duplicate"), "feature": N_("Feature"), "version": N_("Version"), "extra": N_("Extra")}
+    HIDDEN = (Role.PLAY_ALL, Role.DUPLICATE, Role.PROMO, Role.SEGMENT)
+    ROLE_TEXT = {Role.PROMO: N_("Promo"), Role.SEGMENT: N_("Piece of the film"), Role.PLAY_ALL: N_("Play-all"),
+                 Role.DUPLICATE: N_("Duplicate"), Role.FEATURE: N_("Feature"), Role.VERSION: N_("Version"), Role.EXTRA: N_("Extra"),
+                 Role.EPISODE: N_("Episode"), Role.PART: N_("Part"), Role.LONGEST: N_("Longest"),
+                 Role.DECOY: N_("Decoy"), Role.LOOP: N_("Loop"), Role.JUNK: N_("Junk")}
 
     def load(self):
         """The rows and their ticks, from the disc as it now stands (again after Edit titles: ticks
@@ -4582,7 +4585,7 @@ class TitlePicker:
 
         def place(t):
             """Episodes by season and episode as they'll be named (then by title); the rest by title."""
-            code = re.search(r"\bs(\d+)e(\d+)", self.names.get(t["id"], ""), re.I) if t["role"] == "episode" else None
+            code = re.search(r"\bs(\d+)e(\d+)", self.names.get(t["id"], ""), re.I) if t["role"] == Role.EPISODE else None
             ep = (int(code.group(1)), int(code.group(2))) if code else (9999, t.get("episode_index") or 9999)
             return (self.ORDER[t["role"]], ep, di._natural(t["id"]))
         self.rows = sorted(rows, key=place)
@@ -4625,21 +4628,21 @@ class TitlePicker:
         ("Feature: Signature Edition", "Deleted Scene: Campfire", "Episode 2: The Spelling Bee");
         a copy or a play-all by what it repeats."""
         word = self.words.get(t["id"]) or {}
-        twin = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t["role"] == "duplicate" else None
+        twin = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t["role"] == Role.DUPLICATE else None
         if twin:
             return _("Copy of {title}", title=twin.group(1))
-        if t["role"] == "play-all" and not word.get("type"):
+        if t["role"] == Role.PLAY_ALL and not word.get("type"):
             return play_all_text(t.get("note"))
-        if word.get("type") == "Episode":
+        if word.get("type") == Type.EPISODE:
             kind = self.episode_text(t)
         elif word.get("type"):                    # in plain words: "Feature", "Deleted Scene"
             kind = type_words(word["type"])
-        elif t["role"] == "episode" and not piece_text(t):
+        elif t["role"] == Role.EPISODE and not piece_text(t):
             kind = self.episode_text(t)
         else:
             kind = piece_text(t) or (_(self.ROLE_TEXT[t["role"]]) if t["role"] in self.ROLE_TEXT else t["role"].title())
         # (a second cut the scan named by its length or credits: "Extended")
-        name = (word.get("title") or "").strip() or (t.get("edition") if t["role"] == "version" else "")
+        name = (word.get("title") or "").strip() or (t.get("edition") if t["role"] == Role.VERSION else "")
         return _("{kind}: {name}", kind=kind, name=name) if name else kind
 
     def episode_text(self, t):
@@ -4674,8 +4677,8 @@ class TitlesDialog:
     and left be otherwise. With rep (the disc on the desk) its scan's guesses and Detect from
     menus come too."""
 
-    ORDER = {"feature": 0, "version": 1, "episode": 2, "extra": 3, "play-all": 4, "duplicate": 5, "segment": 6,
-             "promo": 7}
+    ORDER = {Role.FEATURE: 0, Role.VERSION: 1, Role.EPISODE: 2, Role.EXTRA: 3, Role.PLAY_ALL: 4, Role.DUPLICATE: 5, Role.SEGMENT: 6,
+             Role.PROMO: 7}
     HIDDEN = TitlePicker.HIDDEN
     ROLE_TYPES = ROLE_TYPES
     MIN_SECONDS = 60                  # (a disc from your case files: logos and menu loops aren't listed)
@@ -4848,7 +4851,7 @@ class TitlesDialog:
             self.unnamed = {e["our_title"] for e in entries if e["our_title"] and e.get("unnamed")}
             sent = {e["our_title"] for e in entries if e["our_title"] and e["sent"]} | self.unnamed
             blank = {e["our_title"] for e in entries if e["our_title"] and not e["sent"] and
-                     e["role"] not in ("play-all", "duplicate", "segment", "loop") and
+                     e["role"] not in (Role.PLAY_ALL, Role.DUPLICATE, Role.SEGMENT, Role.LOOP) and
                      not e["note"].startswith("leave unlabeled (part ")}
             return sent, blank
         return {tid for tid, my in self.mine.items() if tid in self.stored and (my["type"] or my["title"])}, set()
@@ -4905,7 +4908,7 @@ class TitlesDialog:
             self.state[tid] = dict(row, was=dict(row), ok=False, auto=None, **{"from": source})
             # (a disc whose own files name its titles, a BD-J menu's: one they don't name isn't in its menus, and
             # probably nothing to look into: no guess on it, its row blank, after the named ones)
-            if source == "scan" and (self.rep or {}).get("bd_project") and t["role"] not in ("feature", "version", "episode"):
+            if source == "scan" and (self.rep or {}).get("bd_project") and t["role"] not in (Role.FEATURE, Role.VERSION, Role.EPISODE):
                 blank = {k: "" for k in self.FIELDS}
                 self.state[tid].update(blank, was=dict(blank))
         self.rows.sort(key=lambda t: (self.ORDER.get(t["role"], len(self.ORDER)),) + found_order(t["id"], self.state[t["id"]]["was"], detected,
@@ -4985,8 +4988,8 @@ class TitlesDialog:
         same (edit; opened=False: as it was, for the rows' order)."""
         if opened and t["id"] in self.unlocked:
             return False
-        copy = t["role"] == "duplicate" and re.match(r"same video as (.+?)\s*$", t.get("note") or "")
-        return bool(copy) or bool(piece_text(t)) or (t["role"] == "play-all" and self.state[t["id"]]["from"] == "scan")
+        copy = t["role"] == Role.DUPLICATE and re.match(r"same video as (.+?)\s*$", t.get("note") or "")
+        return bool(copy) or bool(piece_text(t)) or (t["role"] == Role.PLAY_ALL and self.state[t["id"]]["from"] == "scan")
 
     def found(self):
         """The rows Detect titles has a word on (to confirm, or not)."""
@@ -5017,7 +5020,7 @@ class TitlesDialog:
             ttk.Label(g, text="—", style="Sub.TLabel").grid(row=r, column=col["TYPE"], sticky="w", padx=(0, 6))
             return
         if self.inert(t) and not self.review:     # a copy, a piece, a Play All: nothing to say of it but what it is
-            twin = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t["role"] == "duplicate" else None
+            twin = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t["role"] == Role.DUPLICATE else None
             said = _("Copy of {title}", title=twin.group(1)) if twin else piece_text(t) or play_all_text(t.get("note"))
             ttk.Label(g, text=said, style="Sub.TLabel").grid(row=r, column=col["TYPE"], columnspan=4, sticky="w", padx=(0, 6))
             # (to put right all the same: its type and name brought in)
@@ -5026,7 +5029,7 @@ class TitlesDialog:
             th.Tooltip(pen, lambda: _("Edit it"))
             return
         if self.review and tid not in self.unlocked:     # (to look over: its pencil to put it right)
-            ttk.Label(g, text={"Promo": "Trailer"}.get(s["type"], s["type"]) or "—",
+            ttk.Label(g, text={Type.PROMO: Type.TRAILER}.get(s["type"], s["type"]) or "—",
                       style="Sub.TLabel" if not s["type"] else "TLabel").grid(
                 row=r, column=col["TYPE"], sticky="w", padx=(0, 6))
             if tid in self.unnamed and not s["title"]:   # (TheDiscDB's form needs one: its pencil to give it)
@@ -5133,7 +5136,7 @@ class TitlesDialog:
         self.confirm(tid, self.vars[tid]["ok"].get())
 
     # ---- a disc of several films: which film each title is ----
-    FILM_TYPES = ("MainMovie", "Short")
+    FILM_TYPES = (Type.MAIN_MOVIE, Type.SHORT)
 
     def films_of(self, rep):
         """The disc's films as its scan has them (rep): which title each is, whose film each
@@ -5239,12 +5242,12 @@ class TitlesDialog:
                                               for tid in sorted(self.films, key=di._natural)], extras)
 
     # season and number: for an episode (or an episode's deleted scene) only
-    NAMED = {"Episode": "%s", "DeletedScene": "%s Deleted Scene"}
+    NAMED = {Type.EPISODE: "%s", Type.DELETED_SCENE: "%s Deleted Scene"}
 
     def numbered(self, kind):
         """Whether a title of this type has a season and episode: an episode, or a TV disc's extra
         (an episode's own, if it's given one)."""
-        return kind == "Episode" or self.tv and kind not in ("", None, "MainMovie", "Promo")
+        return kind == Type.EPISODE or self.tv and kind not in ("", None, Type.MAIN_MOVIE, Type.PROMO)
 
     def show_episode(self, tid):
         se, ep = self.episode_boxes[tid]
@@ -5414,18 +5417,18 @@ class TypeGuide:
     """Edit titles' guide to the types: what each is for, and where a rip saves it."""
 
     # (type, what it's for, the folder a rip saves it in)
-    TYPES = (("MainMovie", N_("The film itself, in any cut (theatrical, extended, director's)."), N_("The film's")),
-             ("Episode", N_("A TV episode. Give it its season and episode."), N_("Its season's")),
-             ("Extra", N_("Bonus material no other type fits: making-ofs, panels, galleries."), "Other"),
-             ("Featurette", N_("Short behind-the-scenes pieces, gag reels."), "Featurettes"),
-             ("DeletedScene", N_("Deleted and extended scenes."), "Deleted Scenes"),
-             ("Trailer", N_("This film's own trailers and teasers."), "Trailers"),
-             ("Interview", N_("Interviews with the cast and crew."), "Interviews"),
-             ("Short", N_("Short films."), "Shorts"),
-             ("Music", N_("Music videos, songs, sing-alongs, concert clips."), "Other"),
-             ("Scene", N_("A single scene or shot from the film."), "Scenes"),
-             ("Other", N_("Logos, warnings, disclaimers. Not ripped unless ticked."), "Other"),
-             ("Promo", N_("Ads for other releases: coming soon, sneak peeks. Not ripped unless ticked."), "Other"))
+    TYPES = ((Type.MAIN_MOVIE, N_("The film itself, in any cut (theatrical, extended, director's)."), N_("The film's")),
+             (Type.EPISODE, N_("A TV episode. Give it its season and episode."), N_("Its season's")),
+             (Type.EXTRA, N_("Bonus material no other type fits: making-ofs, panels, galleries."), "Other"),
+             (Type.FEATURETTE, N_("Short behind-the-scenes pieces, gag reels."), "Featurettes"),
+             (Type.DELETED_SCENE, N_("Deleted and extended scenes."), "Deleted Scenes"),
+             (Type.TRAILER, N_("This film's own trailers and teasers."), "Trailers"),
+             (Type.INTERVIEW, N_("Interviews with the cast and crew."), "Interviews"),
+             (Type.SHORT, N_("Short films."), "Shorts"),
+             (Type.MUSIC, N_("Music videos, songs, sing-alongs, concert clips."), "Other"),
+             (Type.SCENE, N_("A single scene or shot from the film."), "Scenes"),
+             (Type.OTHER, N_("Logos, warnings, disclaimers. Not ripped unless ticked."), "Other"),
+             (Type.PROMO, N_("Ads for other releases: coming soon, sneak peeks. Not ripped unless ticked."), "Other"))
     PLEX_FOLDERS = {"Other", "Featurettes", "Deleted Scenes", "Trailers", "Interviews", "Shorts", "Scenes"}  # (Plex's names)
 
     def __init__(self, parent):
@@ -6308,7 +6311,7 @@ def suspected_films(rep):
     if mine:
         return films
     long_ = [t for t in rep.get("titles") or [] if t.get("duration", 0) >= di.SEVERAL_FILMS_MIN
-             and t.get("role") in ("feature", "version", "longest")]
+             and t.get("role") in (Role.FEATURE, Role.VERSION, Role.LONGEST)]
     return films + [None] * max(0, len(long_) - len(films))
 
 

@@ -12,6 +12,7 @@ import re
 import struct
 
 from . import tools
+from .kinds import Role, Type
 
 PROJECT_NAMES = ("bluray-project.bin",)
 FRAMEWORK_FILES = (("Sony", "bluray-project.bin"), ("Warner", "menu_base.prop"))
@@ -578,17 +579,17 @@ def project_labels(titles, entries, film=None, known_film=None, texts=None):
         if e["name"].startswith("TMPL") or re.search(r"\bmenu\b|\bplay all\b|\bbackground|\bbckgrnd", name, re.I):
             continue
         if e["name"].startswith("FPL_"):
-            if t.get("role") not in ("duplicate", "loop"):
-                out[t["id"]] = {"type": "MainMovie", "title": None, "note": word, "exact": True}
+            if t.get("role") not in (Role.DUPLICATE, Role.LOOP):
+                out[t["id"]] = {"type": Type.MAIN_MOVIE, "title": None, "note": word, "exact": True}
             continue
         if AD_RE.search(name) or re.fullmatch(r"SPHE|Sony.*", name):
             # (named as any disc's ads are: menus.ad_name)
-            out[t["id"]] = {"type": "Promo", "title": menus.ad_name({"said": name}), "note": word}
+            out[t["id"]] = {"type": Type.PROMO, "title": menus.ad_name({"said": name}), "note": word}
             continue
-        trailer = menus.title_kind(name)[0] == "Trailer"
+        trailer = menus.title_kind(name)[0] == Type.TRAILER
         other = known_film(name) if known_film and not trailer and usual and e["fps"] != usual else None
         if other and not (film and (plain(film) in plain(other) or plain(other) in plain(film))):
-            out[t["id"]] = {"type": "Promo", "title": menus.ad_name({"own": other}), "note": word + ": another film, an ad"}
+            out[t["id"]] = {"type": Type.PROMO, "title": menus.ad_name({"own": other}), "note": word + ": another film, an ad"}
             continue
         extras.append({"key": t["id"], "name": name, "note": word, "exact": exact,
                        **({"names_film": known_film(name)} if trailer and known_film else {})})
@@ -597,7 +598,7 @@ def project_labels(titles, entries, film=None, known_film=None, texts=None):
     said = {e["key"]: e for e in extras}
     for key, (kind, title, why) in menus.name_extras(extras, film).items():
         out[key] = {"type": kind, "title": title, "note": menus.with_why(said[key]["note"], why),
-                    **({"exact": said[key]["exact"]} if kind != "Promo" else {})}
+                    **({"exact": said[key]["exact"]} if kind != Type.PROMO else {})}
     return out
 
 

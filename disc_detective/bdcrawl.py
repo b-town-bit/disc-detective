@@ -18,6 +18,7 @@ import re
 import time
 
 from . import bdmenus, i18n, menus
+from .kinds import Type
 from .core import find_child, parse_mpls, read_file
 
 MARK = "[>»]"
@@ -920,8 +921,8 @@ def from_files(root, label, titles, log=print, read=None, out_dir=None):
             continue
         kind = menus.heading_kind(x["under"]) or menus.heading_kind(x["read"])
         if x["of_episode"] is not None:         # (an episode's own: its scissor button's)
-            kind = kind or "DeletedScene"
-            text = {"DeletedScene": "Deleted Scenes"}.get(kind) or x["read"] or x["under"]
+            kind = kind or Type.DELETED_SCENE
+            text = {Type.DELETED_SCENE: "Deleted Scenes"}.get(kind) or x["read"] or x["under"]
         else:
             text = x["read"] or x["under"]
         if text:

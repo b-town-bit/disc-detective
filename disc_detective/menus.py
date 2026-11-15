@@ -33,6 +33,7 @@ import threading
 import time
 
 from . import i18n, tools
+from .kinds import LineRole, Role, Type
 
 SECTOR = 2048
 MENU_TYPES = {2: "title", 3: "root", 4: "subpicture", 5: "audio", 6: "angle", 7: "chapter"}
@@ -2522,7 +2523,7 @@ def page_layout(lines, buttons, size, image=None):
     section: the nearest heading above it in its column; above its column's first, a main heading over the column,
     else the section its left neighbour ends in."""
     w, h = size
-    out = [{"text": t, "box": tuple(bx), "sure": sr, "column": None, "role": "other", "button": None, "section": None}
+    out = [{"text": t, "box": tuple(bx), "sure": sr, "column": None, "role": LineRole.OTHER, "button": None, "section": None}
            for t, bx, sr in lines]
     mid = lambda bx: ((bx[0] + bx[2]) / 2, (bx[1] + bx[3]) / 2)
     tall = lambda bx: bx[3] - bx[1]
@@ -2556,7 +2557,7 @@ def page_layout(lines, buttons, size, image=None):
         columns.append((min(l["box"][0] for l in st), max(l["box"][2] for l in st)))
     # each button's title and description
     for b in buttons:
-        own = sorted((l for l in out if inside(l["box"], b["box"]) and l["role"] == "other"), key=lambda l: l["box"][1])
+        own = sorted((l for l in out if inside(l["box"], b["box"]) and l["role"] == LineRole.OTHER), key=lambda l: l["box"][1])
         if not own:
             continue
         first = None
@@ -2594,40 +2595,40 @@ def page_layout(lines, buttons, size, image=None):
         # (a button across most of the page, a bar's: in no column's section, Sorcerer's Stone's PLAY MOVIE)
         wide = b["box"][2] - b["box"][0] >= LAYOUT_BAR * w
         for l in title:
-            l["role"], l["button"] = "title", b["n"]
+            l["role"], l["button"] = LineRole.TITLE, b["n"]
             if wide:
                 l["no_section"] = True
         # (the rest of its box below: its description, in its title's column, till lettering a heading's size or
         # the line after a sentence ends: Sorcerer's Stone's "... Kings Cross." and then ONLINE, in the same box)
         ended = False
         for l in own:
-            if l["role"] != "other":
+            if l["role"] != LineRole.OTHER:
                 continue
             if l["box"][1] >= first["box"][1]:
                 if ended or tall(l["box"]) >= HEADING_SIZE * size_:
                     break
                 if l["column"] is not None and l["column"] != first["column"]:
                     continue
-                l["role"], l["button"] = "description", b["n"]
+                l["role"], l["button"] = LineRole.DESCRIPTION, b["n"]
                 ended = bool(SENTENCE_END.search(l["text"]))
             elif tall(l["box"]) >= HEADING_SIZE * size_ * 0.9:
-                l["role"], l["level"] = "heading", 1    # (over its title in its own box: its section's heading)
+                l["role"], l["level"] = LineRole.HEADING, 1    # (over its title in its own box: its section's heading)
     # headings: lettering taller than its column's titles, or (none in its column: a heading centred over
     # several, Chamber of Secrets' Behind the Story) than the titles under it
-    titles = [l for l in out if l["role"] == "title"]
+    titles = [l for l in out if l["role"] == LineRole.TITLE]
     for l in out:
-        if l["role"] != "other":
+        if l["role"] != LineRole.OTHER:
             continue
         sizes = sorted(tall(t["box"]) for t in titles if t["column"] == l["column"]) or \
             sorted(tall(t["box"]) for t in titles if t["box"][1] > l["box"][1]
                    and min(t["box"][2], l["box"][2]) > max(t["box"][0], l["box"][0]))
         if sizes and tall(l["box"]) >= HEADING_SIZE * sizes[len(sizes) // 2]:
-            l["role"], l["level"] = "heading", 1
+            l["role"], l["level"] = LineRole.HEADING, 1
     # (and a line level with a main heading in another column, in its lettering: one too, its own column's titles
     # however large: Sorcerer's Stone's "FUN & GAMES", on the row of its "BEHIND THE STORY" and "ADDITIONAL FOOTAGE")
     mains = [l for l in out if l.get("level") == 1]
     for l in out:
-        if l["role"] != "other" or l["column"] is None or not re.search(r"[A-Za-z]{3}", l["text"]):
+        if l["role"] != LineRole.OTHER or l["column"] is None or not re.search(r"[A-Za-z]{3}", l["text"]):
             continue
         for m in mains:
             if m["column"] == l["column"] or not (m["box"][1] <= mid(l["box"])[1] <= m["box"][3]):
@@ -2635,7 +2636,7 @@ def page_layout(lines, buttons, size, image=None):
             ca = lettering_colour(image, l["box"]) if image is not None else None
             cb = lettering_colour(image, m["box"]) if image is not None else None
             if abs(tall(l["box"]) - tall(m["box"])) <= 0.25 * tall(m["box"]) and (ca is None or cb is None or same_lettering(ca, cb)):
-                l["role"], l["level"] = "heading", 1
+                l["role"], l["level"] = LineRole.HEADING, 1
                 break
     # descriptions outside their buttons' boxes: a line right under a title (or under its description), its left
     # edge near, its lettering no larger, till the next title (Chamber of Secrets': "Explore every part of
@@ -2644,45 +2645,45 @@ def page_layout(lines, buttons, size, image=None):
     # "... YOUR REQUIRED READING FOR THE TERM WILL BE." and then BEHIND HOGWARTS, a sub-heading)
     below = lambda l, o: 0 <= l["box"][1] - o["box"][3] + 0.6 * tall(o["box"]) and \
         l["box"][1] - o["box"][3] <= 0.8 * tall(o["box"]) and abs(l["box"][0] - o["box"][0]) <= 1.5 * tall(o["box"]) and \
-        not (o["role"] == "description" and SENTENCE_END.search(o["text"]))
+        not (o["role"] == LineRole.DESCRIPTION and SENTENCE_END.search(o["text"]))
     for l in sorted(out, key=lambda l: l["box"][1]):
-        if l["role"] != "other" or l["column"] is None:
+        if l["role"] != LineRole.OTHER or l["column"] is None:
             continue
-        over = [o for o in out if o["column"] == l["column"] and o["role"] in ("title", "description", "heading")
+        over = [o for o in out if o["column"] == l["column"] and o["role"] in (LineRole.TITLE, LineRole.DESCRIPTION, LineRole.HEADING)
                 and o is not l and below(l, o) and tall(l["box"]) <= 1.05 * tall(o["box"])]
         if over:
             o = max(over, key=lambda o: o["box"][3])
-            l["role"], l["button"] = "description", o["button"]
-            if o["role"] == "heading":          # (a heading's own: its section's description)
+            l["role"], l["button"] = LineRole.DESCRIPTION, o["button"]
+            if o["role"] == LineRole.HEADING:          # (a heading's own: its section's description)
                 l["button"], l["of_heading"] = None, out.index(o)
     # sub-headings: a line left of any title and description, with titles under it in its column before the next
     # heading (Chamber of Secrets' "LOCKHART'S CLASSROOM", "BEHIND HOGWARTS", "PROFESSORS AND MORE": as tall as titles)
     for l in sorted(out, key=lambda l: l["box"][1]):
-        if l["role"] != "other" or l["column"] is None or not re.search(r"[A-Za-z]{3}", l["text"]):
+        if l["role"] != LineRole.OTHER or l["column"] is None or not re.search(r"[A-Za-z]{3}", l["text"]):
             continue
         under = sorted((o for o in out if o["column"] == l["column"] and o["box"][1] > l["box"][1]
-                        and o["role"] in ("title", "heading")), key=lambda o: o["box"][1])
-        if under and under[0]["role"] == "title":
-            l["role"], l["level"] = "heading", 2
+                        and o["role"] in (LineRole.TITLE, LineRole.HEADING)), key=lambda o: o["box"][1])
+        if under and under[0]["role"] == LineRole.TITLE:
+            l["role"], l["level"] = LineRole.HEADING, 2
             last = l
             # (its own lines under it: its description, now)
-            for o in sorted((o for o in out if o["column"] == l["column"] and o["role"] == "other"
+            for o in sorted((o for o in out if o["column"] == l["column"] and o["role"] == LineRole.OTHER
                              and o["box"][1] > l["box"][1]), key=lambda o: o["box"][1]):
                 if below(o, last) and tall(o["box"]) <= 1.2 * tall(last["box"]):
-                    o["role"], o["of_heading"] = "description", out.index(l)
+                    o["role"], o["of_heading"] = LineRole.DESCRIPTION, out.index(l)
                     last = o
                 else:
                     break
     # (a sub-heading's own lines under it: its description, now it's a heading)
     for l in sorted(out, key=lambda l: l["box"][1]):
-        if l["role"] != "other" or l["column"] is None:
+        if l["role"] != LineRole.OTHER or l["column"] is None:
             continue
-        over = [o for o in out if o["column"] == l["column"] and o["role"] in ("heading", "description")
+        over = [o for o in out if o["column"] == l["column"] and o["role"] in (LineRole.HEADING, LineRole.DESCRIPTION)
                 and o is not l and below(l, o) and tall(l["box"]) <= 1.05 * tall(o["box"])]
         if over:
             o = max(over, key=lambda o: o["box"][3])
-            l["role"], l["button"] = "description", o.get("button")
-            l["of_heading"] = out.index(o) if o["role"] == "heading" else o.get("of_heading")
+            l["role"], l["button"] = LineRole.DESCRIPTION, o.get("button")
+            l["of_heading"] = out.index(o) if o["role"] == LineRole.HEADING else o.get("of_heading")
     # sections: the nearest heading above in its column (and the main one, a level-1 heading, over that). Over a
     # column's lines above its own first heading: a main heading above the column, across its width (Prisoner of
     # Azkaban's Behind the Story, centred over three columns), else the section its neighbour on the left ends in
@@ -2690,7 +2691,7 @@ def page_layout(lines, buttons, size, image=None):
     span = [(c0, min(l["box"][1] for l in st), c1, max(l["box"][3] for l in st)) for (c0, c1), st in zip(columns, stacks)]
 
     def place():
-        heads = [(k, x) for k, x in enumerate(out) if x["role"] == "heading"]
+        heads = [(k, x) for k, x in enumerate(out) if x["role"] == LineRole.HEADING]
         carried = {}
 
         def section_at(k, y, not_=None):
@@ -2706,7 +2707,7 @@ def page_layout(lines, buttons, size, image=None):
             top = stacks[k][0]["box"]
             # (a title or description level with its first line, on its left: its row's, Chamber of Secrets' grid
             # of questions under STUDENTS, three columns of them beside the first)
-            row = [o for o in out if o["column"] in done and o["column"] != k and o["role"] in ("title", "description")
+            row = [o for o in out if o["column"] in done and o["column"] != k and o["role"] in (LineRole.TITLE, LineRole.DESCRIPTION)
                    and o["box"][2] <= x0 and o["box"][1] <= mid(top)[1] <= o["box"][3]]
             if row:
                 o = max(row, key=lambda o: o["box"][2])
@@ -2727,20 +2728,20 @@ def page_layout(lines, buttons, size, image=None):
         for l in out:
             l["section"] = None
             l.pop("part", None)
-            if l["role"] not in ("title", "description", "heading"):
+            if l["role"] not in (LineRole.TITLE, LineRole.DESCRIPTION, LineRole.HEADING):
                 continue
             sec, part = section_at(l["column"], mid(l["box"])[1], l)
-            if l["role"] != "heading" and not l.get("no_section"):
+            if l["role"] != LineRole.HEADING and not l.get("no_section"):
                 l["section"] = sec
             if l.get("level") != 1 and part is not None and not l.get("no_section"):
                 l["part"] = part
     place()
     # (a heading no title is under: just text, a menu bar's label, ONLINE's; then the sections again without it)
-    named = {l["section"] for l in out if l["role"] == "title"} | {l.get("part") for l in out if l["role"] == "title"}
+    named = {l["section"] for l in out if l["role"] == LineRole.TITLE} | {l.get("part") for l in out if l["role"] == LineRole.TITLE}
     dropped = False
     for k, l in enumerate(out):
-        if l["role"] == "heading" and k not in named:
-            l["role"], dropped = "other", True
+        if l["role"] == LineRole.HEADING and k not in named:
+            l["role"], dropped = LineRole.OTHER, True
             l.pop("level", None)
     if dropped:
         place()
@@ -2801,7 +2802,7 @@ def layout_order(lines):
     comes after the column beside it (Scenes 4-7), both under ADDITIONAL FOOTAGE."""
     under = {}
     for i, l in enumerate(lines):
-        if l["role"] == "heading":
+        if l["role"] == LineRole.HEADING:
             parent = l.get("part") if l.get("level") != 1 else None
         else:
             parent = l["section"] if l.get("section") is not None else l.get("part")
@@ -2960,7 +2961,7 @@ def _ads_page(way, heading, buttons, line=None):
     ADVENTURES AVAILABLE FROM COLUMBIA TRISTAR HOME VIDEO", its own trailer and teaser among them)."""
     if any(_ad_text(w) for w in way):
         return True
-    if line and heading_kind(line) == "Trailer" and not _ad_text(line):
+    if line and heading_kind(line) == Type.TRAILER and not _ad_text(line):
         return False
     ours = {w for b in buttons if _ad_text(b.get("text"))
             for w in re.findall(r"[a-z]+", (b.get("text") or "").lower())}
@@ -3200,7 +3201,7 @@ def _titles_sought(scanned, length):
     """The titles worth pressing buttons for: all but the too short and what the scan already says
     isn't a title of its own (a copy, a play-all, its parts, a loop), which may well have no button."""
     from . import core
-    apart = {int(t["id"].split()[1]) for t in scanned if t.get("role") in HIDDEN_ROLES and t["role"] != "junk"}
+    apart = {int(t["id"].split()[1]) for t in scanned if t.get("role") in HIDDEN_ROLES and t["role"] != Role.JUNK}
     return {t for t, seconds in length.items() if (seconds or 0) >= core.PART_MIN and t not in apart}
 
 
@@ -3214,7 +3215,7 @@ def _copies_of(scanned, key=dvd_number):
     the crawl's: a DVD's number, dvd_number; a Blu-ray's playlist as it is), a DVD's and a Blu-ray's alike."""
     out = {}
     for t in scanned:
-        m = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t.get("role") == "duplicate" else None
+        m = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t.get("role") == Role.DUPLICATE else None
         if m:
             try:
                 out[key(t["id"])] = key(m.group(1))
@@ -3235,7 +3236,7 @@ def _with_copies(found, copies):
 def _play_alls_of(scanned, key=dvd_number):
     """The titles the scan knows for play-alls, as the crawl names them (key: _copies_of's): nothing to
     name them by, and their order comes from the disc's program, not from reading their pages."""
-    return {key(t["id"]) for t in scanned if t.get("role") == "play-all"}
+    return {key(t["id"]) for t in scanned if t.get("role") == Role.PLAY_ALL}
 
 
 def _moves(buttons, frm, to):
@@ -4843,9 +4844,9 @@ DELETED_WORDS = r"\bdeleted(?:\s+\w+){0,2}?\s*scenes?\b|\bextended\s+scenes?\b|"
                 r"\b(?:additional|unused|extended|deleted)\s+(?:scenes?|footage)\b"
 # a page of the film's songs to sing along to: Music, each named "Sing-Along: <song>" (The Swan Princess's)
 SING_RE = re.compile(r"\bsing\W{0,2}alongs?\b|\bkaraoke\b", re.I)
-HEADING_KINDS = (("Music", r"\bmusic\s*videos?\b|" + SING_RE.pattern), ("DeletedScene", DELETED_WORDS),
-                 ("Featurette", r"\bfeaturettes?\b"), ("Interview", r"\binterviews?\b"),
-                 ("Trailer", r"\btrailers?\b|\bspots\b"), ("Short", r"\bshort\s*films?\b|\bshorts\b"))
+HEADING_KINDS = ((Type.MUSIC, r"\bmusic\s*videos?\b|" + SING_RE.pattern), (Type.DELETED_SCENE, DELETED_WORDS),
+                 (Type.FEATURETTE, r"\bfeaturettes?\b"), (Type.INTERVIEW, r"\binterviews?\b"),
+                 (Type.TRAILER, r"\btrailers?\b|\bspots\b"), (Type.SHORT, r"\bshort\s*films?\b|\bshorts\b"))
 HUB_RE = re.compile(r"\b(bonus|special)\s*(features?|materials?)\b|\bextras\b", re.I)
 MAIN_MENU_RE = re.compile(r"\bmain\s*menu\b", re.I)
 # a button that only gets about: Next, Back, More, Main Menu, Page 2, an arrow (nothing read); it names no page
@@ -4917,7 +4918,7 @@ def kind_name(name, kind=None):
     Video"), or a page saying it's something else (kind, not Extra): as it is."""
     for k, rx in HEADING_KINDS:
         m = re.match(r"\s*(?:%s)\s*[:\-–—]\s*" % rx, name or "", re.I)
-        if m and re.search(r"[A-Za-z0-9]", name[m.end():]) and kind in (None, "Extra", k):
+        if m and re.search(r"[A-Za-z0-9]", name[m.end():]) and kind in (None, Type.EXTRA, k):
             return k, name[m.end():].strip()
     return kind, name
 
@@ -5081,7 +5082,7 @@ def menu_titles(out):
         name = nice_name(_unicon(LISTED_RE.sub("", text), icons)) if named and (own_scene or not _nav_only(text)) else ""
         # (or its own button says: Jurassic World's "Deleted Scenes", on a page saying nothing)
         kind = next((x["kind"] for x in xs if x.get("kind")), None) or heading_kind(name)
-        sing = kind == "Music" and any(SING_RE.search(x.get("via") or "") for x in xs) or bool(SING_RE.search(text))
+        sing = kind == Type.MUSIC and any(SING_RE.search(x.get("via") or "") for x in xs) or bool(SING_RE.search(text))
         other = all(x.get("other") for x in xs)     # (only by another route: a commentary version?)
         if other and name:
             name += " (another version)"
@@ -5512,7 +5513,7 @@ def known_films(found, known_film, film=None):
     extras = []
     for e in found.get("extras") or []:
         kind, name = title_kind(e.get("name"), e.get("kind"))
-        hit = known_film(name) if kind == "Trailer" and name and not _own_trailer(name, film) else None
+        hit = known_film(name) if kind == Type.TRAILER and name and not _own_trailer(name, film) else None
         extras.append(dict(e, names_film=hit) if hit else e)
     return dict(found, extras=extras)
 
@@ -5816,7 +5817,7 @@ def tv_titles(out):
                                # (a page of them: its buttons say only whose)
                                commentaries=bool(VIDEO_COMMENTARY_RE.search(via)), via=via,
                                # (a page of songs to sing along to: each "Sing-Along: <song>", as on a film's)
-                               sing=kind == "Music" and bool(SING_RE.search(via)) or bool(SING_RE.search(text)))
+                               sing=kind == Type.MUSIC and bool(SING_RE.search(via)) or bool(SING_RE.search(text)))
             elif x["bonus"] and not bonus:        # (its own button, over a commentary's)
                 seen[t] = dict(x, text=text, bonus=False, kind=kind, page=list(s), rect=list(b["rect"]), words=b.get("words"),
                                image=b.get("picture") or p.get("image"), lit=bool(b.get("picture")), switch=False, place=place)
@@ -5895,7 +5896,7 @@ def tv_found(tv, picks=None):
             if r.get("of_episode") is not None:
                 extras[-1]["under"] = next((p for p in picks.values() if p["number"] == r["of_episode"]), None)
             # a button saying only that it's a deleted scene: the episode it sits under's (Psych S1 D3's)
-            elif r.get("only_kind") and extras[-1]["kind"] == "DeletedScene" and r.get("rect"):
+            elif r.get("only_kind") and extras[-1]["kind"] == Type.DELETED_SCENE and r.get("rect"):
                 extras[-1]["under"] = _episode_above(r, placed)
             said = VIDEO_COMMENTARY_RE.search(r["text"])
             # whose: the words before it ("Shawn and the Real Girl Video Commentary with Writer Andy
@@ -5934,9 +5935,9 @@ def tv_found(tv, picks=None):
         if opening and not _kind_alone(opening[1]):
             e.pop("under", None)
             e.update(season=opening[0]["season"], episode=opening[0]["episode"], name=opening[1],
-                     kind=e["kind"] or ("DeletedScene" if numbered_scene(opening[1]) else None))
+                     kind=e["kind"] or (Type.DELETED_SCENE if numbered_scene(opening[1]) else None))
             continue
-        if e["kind"] == "DeletedScene":
+        if e["kind"] == Type.DELETED_SCENE:
             said = re.search(DELETED_WORDS, e["name"], re.I)
             ep = _episode_named(re.sub(DELETED_WORDS, " ", e["name"], flags=re.I), episodes)
             under = e.pop("under", None)
@@ -5973,7 +5974,7 @@ def detected_tv_labels(found, titles, keep=(), film=None):
     # kept, with the most any of their buttons said
     copy_of = {}
     for t in titles:
-        m = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t.get("role") == "duplicate" else None
+        m = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t.get("role") == Role.DUPLICATE else None
         if m:
             copy_of[t["id"]] = m.group(1)
     for tid, e in list(extras.items()):
@@ -5990,12 +5991,12 @@ def detected_tv_labels(found, titles, keep=(), film=None):
     naming = name_extras([dict(e, key=tid) for tid, e in extras.items() if e["name"]], film)
     for t in titles:
         tid = t["id"]
-        if tid in keep or t.get("role") in ("duplicate", "segment"):
+        if tid in keep or t.get("role") in (Role.DUPLICATE, Role.SEGMENT):
             continue
         if tid in episodes:
             e = episodes[tid]
             read = " (read as \"%s\")" % e["read"] if e["read"] else " (no name read)"
-            out[tid] = {"type": "Episode", "title": e["name"], "season": e["season"], "episode": e["episode"],
+            out[tid] = {"type": Type.EPISODE, "title": e["name"], "season": e["season"], "episode": e["episode"],
                         "note": "the disc's menu files" if e["by"] == "disc"
                         else "the menus: \"%s\"" % e["read"] if e["by"] == "name"
                         else "the menus: its place in the disc's Play All" + read if e["by"] == "play-all"
@@ -6020,15 +6021,15 @@ def detected_tv_labels(found, titles, keep=(), film=None):
             if e.get("episode"):
                 out[tid].update(season=e["season"], episode=e["episode"], note="the menus: this episode's")
         elif tid in promos:
-            out[tid] = {"type": "Promo", "title": names.get(tid), "note": "the menus: an ad"}
+            out[tid] = {"type": Type.PROMO, "title": names.get(tid), "note": "the menus: an ad"}
         elif tid in opening:
-            out[tid] = {"type": "Promo", "title": "Previews",
+            out[tid] = {"type": Type.PROMO, "title": "Previews",
                         "note": "plays before the menu on a player (VLC skips it): previews, as a rule"}
-        elif episodes and extras and played is not None and t.get("role") == "extra" and tid not in extras and tid not in played:
+        elif episodes and extras and played is not None and t.get("role") == Role.EXTRA and tid not in extras and tid not in played:
             # (a show's menus list what it's selling: the scan's extra they don't is a warning, a logo.
             # Out of the way, for you to look at if you like. Not its episodes: some have no button.
             # Only once its extras were found too: a page the crawl missed says nothing of them)
-            out[tid] = {"type": "Other", "title": None, "note": NOT_IN_MENUS}
+            out[tid] = {"type": Type.OTHER, "title": None, "note": NOT_IN_MENUS}
     return out
 
 
@@ -6062,7 +6063,7 @@ def found_tv_text(found):
     lines = ["Episode:  title %s  S%sE%s %s (read \"%s\"%s)" % (
         e["title"], e["season"], e["episode"], e["name"], e["read"], how.get(e["by"], ""))
         for e in found.get("episodes") or []]
-    lines += ["%-9s title %s  %s%s" % ("Deleted:" if e.get("kind") == "DeletedScene" else "Extra:", e["title"], e["name"],
+    lines += ["%-9s title %s  %s%s" % ("Deleted:" if e.get("kind") == Type.DELETED_SCENE else "Extra:", e["title"], e["name"],
                                        " (S%sE%s)" % (e["season"], e["episode"]) if e.get("episode") else "")
               for e in found.get("extras") or []]
     if found.get("promos"):
@@ -6074,10 +6075,10 @@ def found_tv_text(found):
     return "\n".join(lines)
 
 
-HIDDEN_ROLES = ("duplicate", "play-all", "segment", "promo", "loop", "junk", "decoy")
+HIDDEN_ROLES = (Role.DUPLICATE, Role.PLAY_ALL, Role.SEGMENT, Role.PROMO, Role.LOOP, Role.JUNK, Role.DECOY)
 # set aside by the scan as copies of something else: the menus naming one doesn't change that
 # (a short "junk" clip the menus offer is real content: an outtake, a teaser)
-COPY_ROLES = ("duplicate", "play-all", "segment")
+COPY_ROLES = (Role.DUPLICATE, Role.PLAY_ALL, Role.SEGMENT)
 
 
 # ---- Naming: the one place a title the menus offer gets its type and its name, for every disc (a film's or a
@@ -6129,9 +6130,9 @@ def title_kind(name, kind=None):
     words say (heading_kind; a trailer, "THEATRICAL TAAILER"), else an Extra; its kind first in its name,
     "Music Video: “Shining Star”", taken off it (kind_name)."""
     kind = kind or heading_kind(name) or \
-        ("Trailer" if any(_trailer_word(w) for w in re.findall(r"[a-z]+", (name or "").lower())) else None)
-    kind, name = kind_name(name, kind or "Extra")
-    return kind or "Extra", name
+        (Type.TRAILER if any(_trailer_word(w) for w in re.findall(r"[a-z]+", (name or "").lower())) else None)
+    kind, name = kind_name(name, kind or Type.EXTRA)
+    return kind or Type.EXTRA, name
 
 
 def _own_trailer(name, film):
@@ -6182,17 +6183,17 @@ def name_extras(items, film=None):
     out, trailers = {}, []
     for it in items:
         if re.search(r"\beaster\s*egg", it.get("name") or "", re.I):
-            out[it["key"]] = ("Extra", "Easter Egg", "")
+            out[it["key"]] = (Type.EXTRA, "Easter Egg", "")
             continue
         kind, name = title_kind(it.get("name"), it.get("kind"))
         # (its words as read: "Sing-Along: <song>" has its kind taken off by title_kind)
         if it.get("sing") or SING_RE.search(it.get("name") or ""):
-            kind, name = "Music", sing_along(name)
+            kind, name = Type.MUSIC, sing_along(name)
         out[it["key"]] = (kind, name, "")
-        if kind == "Trailer":
+        if kind == Type.TRAILER:
             trailers.append(dict(it, name=name))
     for key, other in other_films(trailers, film).items():
-        out[key] = ("Promo", ad_name({"own": other}), AD_OF_ANOTHER)
+        out[key] = (Type.PROMO, ad_name({"own": other}), AD_OF_ANOTHER)
     return out
 
 
@@ -6224,7 +6225,7 @@ def detected_labels(found, titles, keep=(), film=None):
     # what each is, and what it's called: the one namer's (name_extras), its page's trailers judged together
     roles = {t["id"]: t.get("role") for t in titles}
     naming = name_extras([dict(e, key=title_id(e["title"])) for e in found.get("extras") or []
-                          if roles.get(title_id(e["title"])) not in ("feature", "version")], film)
+                          if roles.get(title_id(e["title"])) not in (Role.FEATURE, Role.VERSION)], film)
     # (a name put right: as read, to show: correct_names)
     read_as = {title_id(e["title"]): e["read"] for e in found.get("extras") or [] if e.get("read")}
     read_as.update({title_id(t): r for t, r in (found.get("promo_read") or {}).items()})
@@ -6242,13 +6243,13 @@ def detected_labels(found, titles, keep=(), film=None):
     from .core import title_pieces
     pieces = title_pieces(titles, {t["id"] for t in titles if played(t["id"])})
     # the feature named by its button only beside another cut ("Signature Edition")
-    cuts = any(t["id"] in named and t.get("role") in ("feature", "version") for t in titles)
+    cuts = any(t["id"] in named and t.get("role") in (Role.FEATURE, Role.VERSION) for t in titles)
     # a page's Play All: the scan says what it plays (left unlabelled, never an ad)
     play_alls = {title_id(n) for n in found.get("play_alls") or []}
     # copies the menus play, of titles they don't: labelled in their twin's place
     twins = {}
     for t in titles:
-        m = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t.get("role") == "duplicate" else None
+        m = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t.get("role") == Role.DUPLICATE else None
         if m and played(t["id"]) and not played(m.group(1)):
             twins[t["id"]] = m.group(1)
     out = {}
@@ -6259,15 +6260,15 @@ def detected_labels(found, titles, keep=(), film=None):
                 (t.get("role") in HIDDEN_ROLES and not offered):
             continue
         if tid in films:
-            out[tid] = {"type": "MainMovie", "title": None,
+            out[tid] = {"type": Type.MAIN_MOVIE, "title": None,
                         "note": "the menus: a film of its own" + (" (its menu says \"%s\")" % films[tid] if films[tid] else "")}
         elif tid == feature:
-            out[tid] = {"type": "MainMovie", "title": (cuts and found.get("feature_name")) or None,
+            out[tid] = {"type": Type.MAIN_MOVIE, "title": (cuts and found.get("feature_name")) or None,
                         "note": "the menus: the feature"}
-        elif tid in named and t.get("role") in ("feature", "version"):
+        elif tid in named and t.get("role") in (Role.FEATURE, Role.VERSION):
             # another cut of the film, offered beside it (The Iron Giant's "Signature Edition" and
             # "Original Edition"): a main movie too, not an extra
-            out[tid] = {"type": "MainMovie", "title": named[tid] or None, "note": "the menus: another cut of the film"}
+            out[tid] = {"type": Type.MAIN_MOVIE, "title": named[tid] or None, "note": "the menus: another cut of the film"}
         elif tid in named:
             # (its kind and name: its page's heading's word, "MUSIC VIDEOS", its own; another film's trailer
             # an ad: name_extras. A nameless one, read nowhere: an Extra still)
@@ -6276,14 +6277,14 @@ def detected_labels(found, titles, keep=(), film=None):
                 else "the menus: an extra"
             out[tid] = {"type": kind, "title": name or None, "note": said(tid, with_why(note, why))}
         elif tid in promos:
-            out[tid] = {"type": "Promo", "title": promo_names.get(tid), "note": said(tid, "the menus: an ad")}
+            out[tid] = {"type": Type.PROMO, "title": promo_names.get(tid), "note": said(tid, "the menus: an ad")}
         elif tid in opening:
-            out[tid] = {"type": "Promo", "title": "Previews",
+            out[tid] = {"type": Type.PROMO, "title": "Previews",
                         "note": "plays before the menu on a player (VLC skips it): previews, as a rule"}
         elif tid in pieces:
             continue             # (a piece of a title the menus play, and only that: core.apply_labels sets it aside)
         else:
-            out[tid] = {"type": "Promo", "title": None, "note": "the menus: nothing plays it"}
+            out[tid] = {"type": Type.PROMO, "title": None, "note": "the menus: nothing plays it"}
     places = {title_id(n): p for n, p in (found.get("places") or {}).items()}
     for tid, label in out.items():
         if tid in places:

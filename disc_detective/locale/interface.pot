@@ -10,7 +10,7 @@ msgstr ""
 "Project-Id-Version: Disc Detective 0.4.dev0\n"
 "Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
 "\n"
-"POT-Creation-Date: 2026-11-15 06:29-0600\n"
+"POT-Creation-Date: 2026-11-15 06:58-0600\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -1179,6 +1179,26 @@ msgstr ""
 
 #: disc_detective/app.py
 msgid "Version"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Part"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Longest"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Decoy"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Loop"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Junk"
 msgstr ""
 
 #: disc_detective/app.py
@@ -3449,6 +3469,10 @@ msgstr ""
 
 #: disc_detective/core.py
 msgid "longest"
+msgstr ""
+
+#: disc_detective/core.py
+msgid "part"
 msgstr ""
 
 #: disc_detective/core.py
