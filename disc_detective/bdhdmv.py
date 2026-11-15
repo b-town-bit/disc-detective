@@ -10,7 +10,7 @@ import json
 import os
 import re
 
-from . import bdmenus, menus
+from . import bdmenus, i18n, menus
 
 SIZE = (720, 480)               # the pages' size as the rules and Edit titles have them (a DVD's)
 BACKGROUND = (0, 0, 0, 255)     # what a page and a button are drawn over, to read and to show
@@ -84,7 +84,7 @@ def video_still(disc, root, clip, log=print):
                     return None
                 data += fh.read(PHOTO_BYTES - len(data))
     except (OSError, RuntimeError, ValueError) as exc:
-        log("hdmv-menus: no still of clip %s: %s" % (clip, exc))
+        log(i18n.log("hdmv-menus: no still of clip {clip}: {error}", clip=clip, error=exc))
         return None
     if not data:
         return None
@@ -390,10 +390,9 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
         # elsewhere notwithstanding; Enchanted's, two intros then title 1, its JAR 00000)
         java = next((e for e in disc.trace() if e.get("kind") == "bdj"), None)
         if java is not None:
-            log("hdmv-menus: the first play goes on to Java (title %s, JAR %s): BD-J menus"
-                % (java.get("title"), java.get("jar")))
+            log(i18n.log("hdmv-menus: the first play goes on to Java (title {title}, JAR {jar}): BD-J menus", title=java.get("title"), jar=java.get("jar")))
             raise menus.Unsupported("BD-J (its first play goes on to Java)")
-        log("hdmv-menus: no menu reached from the first play")
+        log(i18n.log("hdmv-menus: no menu reached from the first play"))
         return None
     lengths = {t["id"]: t.get("duration") for t in titles}
     title_for = lambda playlist: "%05d.mpls" % playlist if "%05d.mpls" % playlist in lengths else None
@@ -414,10 +413,9 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
         try:
             menu = disc.menu(clip, pid)
         except (OSError, ValueError, RuntimeError) as exc:
-            log("hdmv-menus: menu %s unreadable: %s" % (clip, exc))
+            log(i18n.log("hdmv-menus: menu {clip} unreadable: {error}", clip=clip, error=exc))
             continue
-        log("hdmv-menus: menu %s (%s, %d pages), %s" % (clip, cm["stream"]["lang"], len(menu.pages),
-                                                     "reached by " + " > ".join(cm["path"]) if cm["reached"] else "not reached"))
+        log(i18n.log("hdmv-menus: menu {clip} ({lang}, {count} pages), {how}", clip=clip, lang=cm["stream"]["lang"], count=len(menu.pages), how=i18n.log("reached by {path}", path=" > ".join(cm["path"])) if cm["reached"] else i18n.log("not reached")))
         ids = [p["id"] for p in menu.pages]
         routes = _routes(set(ids), cm["links"], ids[0]) if ids else {}
         # (its depth: the presses on its way there, a menu inside menus; menus.menu_titles' nearest the root)
@@ -446,8 +444,8 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
             if (own or seconds <= MENU_PAGE_BLANK) and seconds <= MENU_PAGE_SECONDS and (info[t].get("chapters") or 1) <= 1:
                 menu_pages.setdefault(int(pl), k)
     if menu_pages:
-        log("hdmv-menus: menu pages, not titles: %s" % ", ".join(
-            "%05d (menu %s)" % (pl, k[0]) for pl, k in sorted(menu_pages.items())))
+        log(i18n.log("hdmv-menus: menu pages, not titles: {pages}", pages=", ".join(
+            "%05d (menu %s)" % (pl, k[0]) for pl, k in sorted(menu_pages.items()))))
     # and the button each such menu is brought up by, on the menu before (its way there's last press, then its
     # playlist): its pages' routes go on from there, as a DVD page's from the page before
     came_from = {}
@@ -674,7 +672,7 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
     scenes = lambda p: any((b.get("plays") or {}).get("chapter", 1) > 1 for b in p["buttons"])
     for p in [p for p in pages if p["read"] and not scenes(p) and not any(worded(b["text"]) for b in p["buttons"])
               and not any(b.get("plays", {}).get("title") in named for b in p["buttons"])]:
-        log("hdmv-menus: menu %s page %d: no words on its buttons, left out" % (p["menu"], p["page"]))
+        log(i18n.log("hdmv-menus: menu {menu} page {page}: no words on its buttons, left out", menu=p["menu"], page=p["page"]))
         pages.remove(p)
     # Taking photos for evidence: a still of the video under each kept page's menu (video_still), its drawing laid
     # over it, for Edit titles to show as a player would (menus.photo_of); the drawings over black stay as they
@@ -686,18 +684,23 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
     if under:
         tell("photos")
         t_photos = time.time()
-        log("hdmv-menus: capturing %d still%s" % (len(under), "" if len(under) == 1 else "s"))
+        log(i18n.log_n("hdmv-menus: capturing {n} still", "hdmv-menus: capturing {n} stills", len(under)))
         for k in menu_of.values():
             clip = loaded[k]["under"]
             if clip is not None and clip not in stills:
                 stills[clip] = video_still(disc, root, clip, log)
         took = sum(v is not None for v in stills.values())
-        log("hdmv-menus: captured %s still%s in %.1f s%s" % (
-            took if took == len(stills) else "%d of %d" % (took, len(stills)), "" if len(stills) == 1 else "s",
-            time.time() - t_photos,
-            # (a library from before read_clip: only a decrypted copy's clips can be read)
-            "" if took == len(stills) or hasattr(disc, "read_clip") else
-            " (an encrypted disc's need hdmv-menus 0.1.2 or later)"))
+        seconds = time.time() - t_photos
+        if took == len(stills):
+            log(i18n.log_n("hdmv-menus: captured {n} still in {seconds:.1f} s", "hdmv-menus: captured {n} stills in {seconds:.1f} s",
+                           took, seconds=seconds))
+        elif hasattr(disc, "read_clip"):
+            log(i18n.log_n("hdmv-menus: captured {took} of {n} still in {seconds:.1f} s",
+                           "hdmv-menus: captured {took} of {n} stills in {seconds:.1f} s", len(stills), took=took, seconds=seconds))
+        else:
+            log(i18n.log_n("hdmv-menus: captured {took} of {n} still in {seconds:.1f} s (an encrypted disc's need hdmv-menus "
+                           "0.1.2 or later)", "hdmv-menus: captured {took} of {n} stills in {seconds:.1f} s (an encrypted "
+                           "disc's need hdmv-menus 0.1.2 or later)", len(stills), took=took, seconds=seconds))
     for p in pages:
         k = menu_of[(p["menu"], p["program"])]
         page = p.pop("_page")
@@ -723,9 +726,9 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
         if p.pop("read"):               # (its heading: only where its buttons were read)
             lines = seen[k + (page["id"],)][1] if k + (page["id"],) in seen else None
             p["heading"], p["heading_line"], p["mixed"] = page_headings(loaded[k]["menu"], page, p["buttons"], drawn, lines)
-    log("hdmv-menus: %s crawl, %d buttons read in %.0f s" % (scope, len(got), time.time() - started))
+    log(i18n.log("hdmv-menus: {scope} crawl, {count} buttons read in {seconds:.0f} s", scope=scope, count=len(got), seconds=time.time() - started))
     if not any(b.get("plays") for p in pages for b in p["buttons"]):
-        log("hdmv-menus: no button plays one of the scan's titles")
+        log(i18n.log("hdmv-menus: no button plays one of the scan's titles"))
         return None
     # (each title's chapters, as the scan counted them: a "trailer" in several, an ad reel)
     chapters = {t["id"]: t["chapters"] for t in titles if t.get("chapters")}

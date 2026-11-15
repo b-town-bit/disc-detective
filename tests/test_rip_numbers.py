@@ -225,7 +225,7 @@ def outcome_of(monkeypatch, done, planned, problem):
 
 def test_the_outcome_shows_what_makemkv_said(monkeypatch):
     text = outcome_of(monkeypatch, [], 1, "MakeMKV says: Failed to open disc")
-    assert text == "0 of 1 titles ripped. MakeMKV says: Failed to open disc"
+    assert text == "0 of 1 title ripped. MakeMKV says: Failed to open disc"
 
 
 def test_the_outcome_without_a_message_stays_as_it_was(monkeypatch):
@@ -233,7 +233,7 @@ def test_the_outcome_without_a_message_stays_as_it_was(monkeypatch):
 
 
 def test_a_title_that_recovered_says_nothing_of_earlier_problems(monkeypatch):
-    assert outcome_of(monkeypatch, ["a/b.mkv"], 1, "Failed to open disc") == "Evidence bagged: 1 of 1 titles ripped"
+    assert outcome_of(monkeypatch, ["a/b.mkv"], 1, "Failed to open disc") == "Evidence bagged: 1 of 1 title ripped"
 
 
 def test_added_titles_of_a_blu_ray_ignore_message_order():

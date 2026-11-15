@@ -32,7 +32,7 @@ import sys
 import threading
 import time
 
-from . import tools
+from . import i18n, tools
 
 SECTOR = 2048
 MENU_TYPES = {2: "title", 3: "root", 4: "subpicture", 5: "audio", 6: "angle", 7: "chapter"}
@@ -1726,7 +1726,7 @@ def _first_menu_frames(drive, vlc_dir, out_dir, log=None):
         return paths
     except Exception as e:
         if log:
-            log("couldn't look at the menus: %s" % e)
+            log(i18n.log("couldn't look at the menus: {error}", error=e))
         return []
     finally:
         if v is not None:
@@ -2059,12 +2059,14 @@ def replay(where, log=print):
         structure = json.load(fh)
     t0 = time.time()
     start, found, reached = dvdvm.explore(dvdvm.Engine(dvdvm.Disc(keep, structure)))
-    log("the disc's program: starts on %s; %d pages, %d buttons (%.2fs)" % (
-        start.get("goes_to") or start, len(reached), len(found), time.time() - t0))
+    log(i18n.log("the disc's program: starts on {start}; {pages} pages, {buttons} buttons ({time:.2f}s)", start=start.get("goes_to") or start, pages=len(reached), buttons=len(found), time=time.time() - t0))
     for (d, pgc, prog, n), answers in sorted(found.items(), key=lambda kv: (str(kv[0][0]), kv[0][1:])):
-        log("  %s page %d%s button %2d: %s" % ("VMG" if d == "vmgm" else "VTS %s" % d, pgc,
-                                               " program %d" % prog if prog > 1 else "", n,
-                                               "; ".join(_answer_text(a) for a in answers)))
+        where = "VMG" if d == "vmgm" else "VTS %s" % d
+        answers_text = "; ".join(_answer_text(a) for a in answers)
+        log("  " + (i18n.log("{where} page {pgc} program {program} button {n:2d}: {answers}", where=where, pgc=pgc, program=prog,
+                                      n=n, answers=answers_text) if prog > 1 else
+                             i18n.log("{where} page {pgc} button {n:2d}: {answers}", where=where, pgc=pgc, n=n,
+                                      answers=answers_text)))
     return start, found
 
 
@@ -2094,7 +2096,7 @@ def read_structure(root, vlc_dir=None, log=print):
     except Refused as e:
         if not vlc_dir:
             raise
-        log("%s: opening the disc in VLC to unlock the drive" % e)
+        log(i18n.log("{error}: opening the disc in VLC to unlock the drive", error=e))
     unlock(root, vlc_dir)
     return dvd_structure(root)
 
@@ -2137,7 +2139,7 @@ def probe(drive, vlc_dir, out_dir, log=print, runs=PROBE_RUNS, menu_wait=15):
     for f in glob.glob(os.path.join(out_dir, "*.png")):
         os.remove(f)
     mrl = dvd_mrl(drive)
-    log("VLC %s: opening %s" % (vlc_dir, mrl))
+    log(i18n.log("VLC {vlc_dir}: opening {mrl}", vlc_dir=vlc_dir, mrl=mrl))
     titles, out = [], []
     for run, keys in runs:
         v = Vlc(vlc_dir, highlight=True)
@@ -2151,8 +2153,7 @@ def probe(drive, vlc_dir, out_dir, log=print, runs=PROBE_RUNS, menu_wait=15):
                 v.frame().save(os.path.join(out_dir, name))
             st.update(step=label, image=name if v.frames else None)
             steps.append(st)
-            log("  %-6s %-14s title %s chapter %s time %.1fs frames %d" % (
-                run, label, st["title"], st["chapter"], st["time_ms"] / 1000, st["frames"]))
+            log("  " + i18n.log("{run:<6} {label:<14} title {title} chapter {chapter} time {time_ms:.1f}s frames {frames}", run=run, label=label, title=st["title"], chapter=st["chapter"], time_ms=st["time_ms"] / 1000, frames=st["frames"]))
         try:
             v.open(mrl)
             t0 = time.time()
@@ -3191,7 +3192,7 @@ def _scan_titles(drive, log=print):
         core.classify(scanned, "DVD")
         return scanned
     except (OSError, ValueError, IndexError, struct.error) as e:
-        log("  couldn't compare the disc's titles (%s)" % e)
+        log("  " + i18n.log("couldn't compare the disc's titles ({error})", error=e))
         return []
 
 
@@ -3419,7 +3420,7 @@ def read_again(pages, out_dir, log=print, sure=None):
             got = _read_second(pic, box, _heading_boxes(pic, b["rect"], rects, (720, 480)))
             was = b.get("text") or ""
             if got and got[0] != was and got[1] > how_sure(b) and _letters(got[0]) >= _letters(was):
-                log("read again: button %d of page %s: \"%s\" is \"%s\" (%.2f)" % (b["n"], page["page"], was, got[0], got[1]))
+                log(i18n.log("read again: button {n} of page {page}: \"{was}\" is \"{got}\" ({got2:.2f})", n=b["n"], page=page["page"], was=was, got=got[0], got2=got[1]))
                 changed.append((page, b, was, got[0], got[1]))
                 b["text"] = got[0]
                 b["words"] = [max(0, r[0] - pad), max(0, r[1] - pad), min(720, r[2] + pad), min(480, r[3] + pad)]
@@ -4334,7 +4335,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
         try:
             keep_disc_data(drive, structure, out_dir)
         except OSError as e:
-            log("  couldn't keep the disc's menu data (%s)" % e)
+            log("  " + i18n.log("couldn't keep the disc's menu data ({error})", error=e))
     pages = _pages(structure)
     states = [(d, pgc, k) for (d, pgc), p in pages.items()
               for k, btns in enumerate(p.get("program_buttons") or [p["buttons"]], 1) if len(btns) >= 2]
@@ -4355,16 +4356,16 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
         near = _reachable(states, began, engine, reached)
         if near is not None:
             states = c.states = near
-            log("  looking only among the %d pages the disc's program reaches" % len(states))
+            log("  " + i18n.log("looking only among the {count} pages the disc's program reaches", count=len(states)))
     except Exception as e:                      # (a disc it can't read: VLC presses everything)
-        log("  couldn't run the disc's program (%s): pressing instead" % e)
+        log("  " + i18n.log("couldn't run the disc's program ({error}): pressing instead", error=e))
     c.menu_key = bool(began.get("menu_key"))
     if c.menu_key:
-        log("  the disc plays its film by itself: pressing Menu to reach its menus")
+        log("  " + i18n.log("the disc plays its film by itself: pressing Menu to reach its menus"))
     try:
-        log("  opening the disc in VLC")
+        log("  " + i18n.log("opening the disc in VLC"))
         c.open()
-        log("  VLC is playing it (%.0f s): looking for the first menu" % (time.time() - t0))
+        log("  " + i18n.log("VLC is playing it ({seconds:.0f} s): looking for the first menu", seconds=time.time() - t0))
         titles = c.v.titles()
         hint, start = tuple(began.get("goes_to") or ()), None
         if hint in states:
@@ -4378,12 +4379,12 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
             try:
                 start, sel = c.at_start(hint)
             except Lost:
-                log("  not on the page the disc's program starts on: looking around")
+                log("  " + i18n.log("not on the page the disc's program starts on: looking around"))
         back = tuple(began.get("menu_goes_to") or ())
         if start is None and not c.menu_key and back in states and c.v.state()["title"] != 0:
             # VLC plays the film where the disc's program waits in a menu (WALL-E: libdvdnav's way
             # past its protection skips the menu): VLC's DVD Menu, to the page Menu leads to
-            log("  VLC is playing the film instead: its DVD Menu")
+            log("  " + i18n.log("VLC is playing the film instead: its DVD Menu"))
             c.to_menus()
             c.film_first, c.menu_skip, c.start_select = True, False, began.get("menu_select")
             try:
@@ -4397,14 +4398,14 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
     except Exception:
         c.close()
         raise
-    log("the disc opens on %s page %s (program %s)" % start)
+    log(i18n.log("the disc opens on {where} page {page} (program {program})", where=start[0], page=start[1], program=start[2]))
     length = {t["index"]: t["seconds"] for t in titles}
     routes, tries, known, pressed = {start: []}, {}, {}, {}
     # buttons staying in the menus, on a page depending on the way they were reached (known_outright)
     menus_by_route = {}
     if engine:
         if began.get("goes_to") and tuple(began["goes_to"]) != start:
-            log("  the disc's program starts on %s, VLC on %s" % (began.get("goes_to"), start))
+            log("  " + i18n.log("the disc's program starts on {program}, VLC on {start}", program=began.get("goes_to"), start=start))
         # (a clip first or not: the same; so is the button highlighted on arrival, kept apart)
         same = lambda a: {k: v for k, v in a.items() if k not in ("before", "select", "intro", "after", "into", "run")}
         for (d, pgc, prog, n), answers in engine.items():
@@ -4446,7 +4447,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
             else:
                 known[(s, n)] = {"menus": True, "engine": True}
         answered = sum(1 for k in engine if (k[:3], k[3]) in known or (k[:3], k[3]) in c.learned)
-        log("the disc's program answers %d of %d buttons" % (answered, len(engine)))
+        log(i18n.log("the disc's program answers {answered} of {count} buttons", answered=answered, count=len(engine)))
 
     def scene_page(s):
         # (a TV disc's, program by program: Smallville's Episodes page and its episodes' scene
@@ -4546,8 +4547,10 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
                         # leads to them leads elsewhere, as pressing it showed): left unread
                         for s in todo:
                             tries[s] = 2
-                        log("  no way to %d page%s after all (a button leads elsewhere than the disc's "
-                            "program said): passed by" % (len(todo), "" if len(todo) == 1 else "s"))
+                        log("  " + i18n.log_n("no way to {n} page after all (a button leads elsewhere than the disc's "
+                                              "program said): passed by",
+                                              "no way to {n} pages after all (a button leads elsewhere than the disc's "
+                                              "program said): passed by", len(todo)))
                         continue
                     if not reach:               # a dead end: start over
                         st, sel = c.restart(start)
@@ -4556,7 +4559,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
                     tries[goal] = tries.get(goal, 0) + 1
                     st, sel = c.follow(st, sel, here[goal])
                 except Lost as e:
-                    log("  on the way to %s: %s, starting over" % (goal, e))
+                    log("  " + i18n.log("on the way to {goal}: {error}, starting over", goal=goal, error=e))
                     st, sel = c.restart(start, where=goal)
         finally:
             c.close()
@@ -4577,22 +4580,27 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
             tour(*session)
         except Lost as e:                       # (a stalled drive: keep what's been found)
             c.close()
-            log("  the menus can't be read any more (%s): stopping with what's been found" % e)
+            log("  " + i18n.log("the menus can't be read any more ({error}): stopping with what's been found", error=e))
             break
         session = None
         routes = _routes(pages, start, c.learned, known)
-        log("read %d of %d pages (%.1f minutes)" % (len(c.reading), len(routes), (time.time() - t0) / 60))
+        log(i18n.log("read {read} of {pages} pages ({minutes:.1f} minutes)", read=len(c.reading), pages=len(routes), minutes=(time.time() - t0) / 60))
         sp = c.spent
-        log("  the time: highlight checks %.0f s (%d round trips%s; of it darkening %.0f s), pages' frames %.0f s, "
-            "waiting for words %.0f s; the rest, moving page to page and VLC opening %.0f s" % (
-                sp.get("highlight checks", 0), sp.get("round trips", 0),
-                ", darkened" if c.dark_ok else ", as it is" if c.dark_ok is False else "",
-                sp.get("darkening", 0), sp.get("page frames", 0),
-                sp.get("waiting for words", 0), time.time() - t0 - sp.get("highlight checks", 0)
-                - sp.get("page frames", 0) - sp.get("waiting for words", 0)))
+        trips = (i18n.log("{n} round trips, darkened", n=sp.get("round trips", 0)) if c.dark_ok else
+                 i18n.log("{n} round trips, as it is", n=sp.get("round trips", 0)) if c.dark_ok is False else
+                 i18n.log("{n} round trips", n=sp.get("round trips", 0)))
+        log("  " + i18n.log("the time: highlight checks {checks:.0f} s ({trips}; of it darkening {darkening:.0f} s), pages' "
+                            "frames {frames:.0f} s, waiting for words {words:.0f} s; the rest, moving page to page and VLC "
+                            "opening {rest:.0f} s", checks=sp.get("highlight checks", 0), trips=trips,
+                            darkening=sp.get("darkening", 0), frames=sp.get("page frames", 0),
+                            words=sp.get("waiting for words", 0),
+                            rest=time.time() - t0 - sp.get("highlight checks", 0) - sp.get("page frames", 0)
+                            - sp.get("waiting for words", 0)))
         if sum(c.placed[:2]):
-            log("  the disc's program placed the highlight right %d of %d times%s" % (
-                c.placed[0], sum(c.placed[:2]), " (and %d moved by our keys)" % c.placed[2] if c.placed[2] else ""))
+            log("  " + (i18n.log("the disc's program placed the highlight right {placed} of {total} times (and {moved} moved by "
+                                "our keys)", placed=c.placed[0], total=sum(c.placed[:2]), moved=c.placed[2]) if c.placed[2] else
+                       i18n.log("the disc's program placed the highlight right {placed} of {total} times", placed=c.placed[0],
+                                total=sum(c.placed[:2]))))
         # the presses: only what the disc doesn't say, on pages read
         known_outright()
         # the feature, when scene buttons say it: then "Play" needn't be pressed (it may well run
@@ -4618,15 +4626,15 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
         tasks.sort(key=lambda t: _skip_text(c.words(t[0]).get(t[1], "")))
         if not tasks or not (everything or no_way()):
             break
-        log("%d buttons to press (%d answered by the disc itself)" % (len(tasks), len(known)))
+        log(i18n.log("{count} buttons to press ({known} answered by the disc itself)", count=len(tasks), known=len(known)))
         for i, (s, n) in enumerate(tasks, 1):
             if not (everything or no_way()):
-                log("  every title has a way to it now: the last %d left unpressed" % (len(tasks) - i + 1))
+                log("  " + i18n.log("every title has a way to it now: the last {count} left unpressed", count=len(tasks) - i + 1))
                 break
             text = c.words(s).get(n, "")
             if played and not everything and _play_text(text):     # every page's Play Movie: the same film
                 known[(s, n)] = {"plays": {"title": played, "chapter": 1}, "assumed": "play"}
-                log("  [%d/%d] %s button %d: Play again: title %d (not pressed)" % (i, len(tasks), s, n, played))
+                log("  " + i18n.log("[{number}/{count}] {page} button {button}: Play again: title {played} (not pressed)", number=i, count=len(tasks), page=s, button=n, played=played))
                 progress("press", i, len(tasks))
                 continue
             for attempt in (1, 2):
@@ -4646,7 +4654,8 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
                             pass
                     break
                 except Lost as e:
-                    log("  %s button %s: %s%s" % (s, n, e, ", trying again" if attempt == 1 else ""))
+                    log("  " + (i18n.log("{page} button {button}: {error}, trying again", page=s, button=n, error=e) if attempt == 1 else
+                                   i18n.log("{page} button {button}: {error}", page=s, button=n, error=e)))
                     if attempt == 2:
                         pressed[(s, n)] = {"error": str(e)}
                 finally:
@@ -4655,7 +4664,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
             land = c.learned.get((s, n))
             progress("press", i, len(tasks))
             tell_titles(named() | _given_up(pages, c.reading, known, named(), c.read))
-            log("  [%d/%d] %s button %d: %s" % (i, len(tasks), s, n, r.get("error") or (
+            log("  " + i18n.log("[{number}/{count}] {page} button {button}: {result}", number=i, count=len(tasks), page=s, button=n, result=r.get("error") or (
                 "goes to page %s (program %s)" % land[1:] if land else " -> ".join(
                     "menus" if e["title"] <= 0 else "title %d ch %s" % (e["title"], e["chapter"]) for e in r["chain"]))))
             plays = [x for x in r.get("chain", []) if x["title"] > 0]
@@ -4663,7 +4672,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
                 played = plays[-1]["title"]
             stalled = stalled + 1 if "no picture" in (r.get("error") or "") else 0
             if stalled >= 2:
-                log("  VLC gets no picture from the drive any more: stopping with what's been found")
+                log("  " + i18n.log("VLC gets no picture from the drive any more: stopping with what's been found"))
                 stop = True
                 break
     progress("finish")                          # (the search for titles over: the pages written up)
@@ -4717,7 +4726,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
     if _rapid:
         read_again(result, out_dir, log)
     for b, seconds in menu_only(result, structure):
-        log("not rippable: \"%s\" (%s) plays from the disc's menu, it isn't a title" % (b["text"], _clock(seconds)))
+        log(i18n.log("not rippable: \"{text}\" ({clock}) plays from the disc's menu, it isn't a title", text=b["text"], clock=_clock(seconds)))
     out = {"drive": drive, "titles": titles, "start": list(start), "minutes": round((time.time() - t0) / 60, 1),
            "pages": result, "chapters": {t["title"]: t["chapters"] for t in structure.get("titles", [])},
            "opening": opening, "also": also, "scan_play_alls": sorted(_play_alls_of(scanned))}
@@ -4736,7 +4745,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
             fmt, base = core.detect_format(drive)
             out["tv"]["play_order"] = core.play_all_order(core.parse_dvd(base)["titles"], runs)
         except (OSError, ValueError, IndexError, struct.error) as e:
-            log("  couldn't read the disc's titles for its Play All (%s)" % e)
+            log("  " + i18n.log("couldn't read the disc's titles for its Play All ({error})", error=e))
     if _rapid:
         out["found"]["reader"] = "rapidocr"
     return finish_crawl(out, out_dir)

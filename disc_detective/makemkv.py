@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import time
 
+from . import i18n
 from .core import find_child, logger, parse_makemkv_log, parse_mpls, read_file, u16, u32
 
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0   # keep makemkvcon from flashing a console
@@ -68,7 +69,7 @@ class Rip:
         idx would be some other title, and says so in numbers_changed. MakeMKV's last word on
         anything going wrong stays in problem."""
         cmd = [self.exe, *MAKEMKV_SWITCHES, "--progress=-same", "mkv", source, str(idx), work]
-        logger.info("  run: %s", subprocess.list2cmdline(cmd))
+        logger.info("  " + i18n.log("run: {command}", command=subprocess.list2cmdline(cmd)))
         self.numbers_changed, self.problem, self.exit_code = False, None, None
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                      encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
@@ -89,7 +90,7 @@ class Rip:
                     pass
             elif line.startswith("MSG:"):
                 # MakeMKV's own messages, for the record: its words, not its robot-mode line ("5005,128,1,...,"%1 titles saved"")
-                logger.info("  makemkv: %s", makemkv_message(line) or line.strip()[4:])
+                logger.info("  " + i18n.log("makemkv: {makemkv_message}", makemkv_message=makemkv_message(line) or line.strip()[4:]))
                 count = makemkv_saved(line)
                 saved = saved if count is None else count
                 self.problem = makemkv_problem(line) or self.problem
@@ -99,7 +100,7 @@ class Rip:
         if self.numbers_changed:
             return False
         if rc and not saved:             # (the rip says whether it's a problem: not for a disc taken out)
-            logger.info("makemkvcon exited with code %s", rc)
+            logger.info(i18n.log("makemkvcon exited with code {code}", code=rc))
         return saved > 0 if saved is not None else rc == 0   # (no count, as in another language: its exit code)
 
     def sting(self, drive, ids, starting=lambda: None):
@@ -110,7 +111,7 @@ class Rip:
         found = inside_play_alls(root, ids) if root else {}
         if not found:
             return None
-        logger.info("only a Play All plays %s: setting up a sting", ", ".join(sorted(found)))
+        logger.info(i18n.log("only a Play All plays {titles}: setting up a sting", titles=", ".join(sorted(found))))
         starting()
         if makemkv_source(drive).startswith("file:"):
             undo = lambda: clear_own_playlists(root)
@@ -141,7 +142,7 @@ class Rip:
         os.makedirs(folder)
         path = os.path.join(folder, "discatt.dat")
         cmd = [self.exe, *MAKEMKV_SWITCHES, "backup", "disc:%d" % number, folder]
-        logger.info("  run: %s", subprocess.list2cmdline(cmd))
+        logger.info("  " + i18n.log("run: {command}", command=subprocess.list2cmdline(cmd)))
         self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
         started, last, steady = time.time(), -1, 0
         try:
@@ -157,7 +158,7 @@ class Rip:
                 try:
                     self.proc.wait(30)
                 except subprocess.TimeoutExpired:
-                    logger.warning("MakeMKV hasn't stopped its backup yet")
+                    logger.warning(i18n.log("MakeMKV hasn't stopped its backup yet"))
             self.proc = None
         if self.cancelled():
             raise RuntimeError("called off")
@@ -345,7 +346,7 @@ def clear_own_playlists(root):
                 os.remove(os.path.join(pl_dir, name))
         os.remove(note)
     except OSError as exc:
-        logger.warning("couldn't clear our playlists from %s: %s", root, exc)
+        logger.warning(i18n.log("couldn't clear our playlists from {root}: {error}", root=root, error=exc))
 
 
 def sting_folder():

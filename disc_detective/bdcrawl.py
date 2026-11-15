@@ -17,7 +17,7 @@ import os
 import re
 import time
 
-from . import bdmenus, menus
+from . import bdmenus, i18n, menus
 from .core import find_child, parse_mpls, read_file
 
 MARK = "[>»]"
@@ -902,7 +902,7 @@ def from_files(root, label, titles, log=print, read=None, out_dir=None):
         return reading
     for e in menu["episodes"]:
         if e["playlist"] not in lengths:
-            log("the menu's episode %d plays %s, not among the disc's titles" % (e["number"], e["playlist"]))
+            log(i18n.log("the menu's episode {number} plays {playlist}, not among the disc's titles", number=e["number"], playlist=e["playlist"]))
             continue
         readings.append(button_picture(dict(plain, title=e["playlist"], text=("%d) %s" % (e["number"], e["read"])).strip(), number=e["number"],
                                             seconds=lengths[e["playlist"]], bonus=False, kind=None, only_kind=False, place=[e["number"]]), e))
@@ -920,7 +920,7 @@ def from_files(root, label, titles, log=print, read=None, out_dir=None):
         if text:
             readings.append(button_picture(dict(plain, title=x["playlist"], text=text, seconds=lengths[x["playlist"]], bonus=True, kind=kind,
                                                 only_kind=x["of_episode"] is not None, of_episode=x["of_episode"], place=[100 + i]), x))
-    log("the disc's menu files list %d of its titles, nothing played" % len(readings))
+    log(i18n.log("the disc's menu files list {count} of its titles, nothing played", count=len(readings)))
     return {"tv": {"readings": readings, "exact": True, "season": menu["season"], "disc": menu["disc"], "played": [r["title"] for r in readings],
                    "promos": [], "promo_said": {}, "play_alls": [],
                    "opening": [], "commentary_versions": []}, "pages": [], "found": {}, "suspects": len(readings), "watch": {}}
@@ -948,7 +948,7 @@ def crawl(root, vlc_dir, titles, out_dir, log=print, progress=menus.no_progress)
         vlc_titles = [t for t in v.titles() if not t.get("menu")]
         pressed = c.crawl(vlc_titles, playing)
         if not pressed:
-            log("no page of episodes: a film's pop-up, or none answered")
+            log(i18n.log("no page of episodes: a film's pop-up, or none answered"))
         extras = c.extras(vlc_titles, playing)
         if not pressed and not extras:
             raise menus.Lost("no page of episodes or special features answered")

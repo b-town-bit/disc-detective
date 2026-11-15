@@ -53,7 +53,7 @@ def isolated(tmp_path, monkeypatch):
         monkeypatch.setattr(app, "optical_drives", lambda: [])      # (its drives aren't watched)
     except ImportError:                   # (no Tk here: no app tests either)
         pass
-    monkeypatch.setattr(core, "log", lambda msg: None)
+    monkeypatch.setattr(core, "log", lambda msg, tone="info": None)
     monkeypatch.setattr(core, "status_hook", None)
     monkeypatch.setattr(core, "progress", None)
     return home

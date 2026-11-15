@@ -42,25 +42,57 @@ def _fill(text, kw):
     return text.format(**kw) if kw else text
 
 
-def ui(msg, **kw):
+def ui(msg, /, **kw):
     """msg as the interface shows it: translated, {placeholders} filled from kw."""
     return _fill(_catalog("interface").gettext(msg), kw)
 
 
-def ui_n(singular, plural, n, **kw):
+def ui_n(singular, plural, n, /, **kw):
     """One or several ("1 title" / "{n} titles"), as the interface's language counts; n is a
     placeholder too."""
     return _fill(_catalog("interface").ngettext(singular, plural, n), dict(kw, n=n))
 
 
-def log(msg, **kw):
+def log(msg, /, **kw):
     """msg as the log says it: translated, {placeholders} filled from kw."""
     return _fill(_catalog("log").gettext(msg), kw)
+
+
+def log_n(singular, plural, n, /, **kw):
+    """One or several, as the log's language counts; n is a placeholder too."""
+    return _fill(_catalog("log").ngettext(singular, plural, n), dict(kw, n=n))
 
 
 def N_(msg):
     """A string to translate where it's shown, not where it's written (marked for extraction)."""
     return msg
+
+
+class Said(str):
+    """A message bound for both the screen and the log, each in its own area's language: as a str, the
+    English (filled in); .ui() as the interface says it, .log() as the log does. For messages handed to a
+    callback that may print them, log them, or both (core's progress messages)."""
+
+    def __new__(cls, msg, /, **kw):
+        self = str.__new__(cls, _fill(msg, kw))
+        self.msg, self.kw = msg, kw
+        return self
+
+    def ui(self):
+        return ui(self.msg, **self.kw)
+
+    def log(self):
+        return log(self.msg, **self.kw)
+
+
+def for_ui(text):
+    """text as the interface shows it: a Said translated, anything else as it is."""
+    return text.ui() if isinstance(text, Said) else text
+
+
+def for_log(text):
+    """text as the log says it: a Said translated, anything else as it is."""
+    return text.log() if isinstance(text, Said) else text
 
 
 @functools.lru_cache(maxsize=None)

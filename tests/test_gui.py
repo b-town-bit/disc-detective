@@ -1,5 +1,6 @@
 """The app, driven headlessly: first-run download, Settings, a scan, the rip plan."""
 import os
+import re
 import time
 from types import SimpleNamespace
 
@@ -2088,9 +2089,9 @@ def test_suspect_report_and_a_breathing_light(gui, monkeypatch):
     """Detect titles' answer counts every extra (a film's own trailer too) and its suspects;
     the status light breathes while something's under way, and stops when it's done."""
     line = dd_app.suspect_line
-    assert line("Questioning", 1, 1) == "Questioning suspect…"
-    assert line("Questioning", 3, 3) == "Questioning suspect 3…"                # caught up: no "of 3"
-    assert line("Interrogating", 2, 5) == "Interrogating suspect 2 of 5…"
+    assert line("questioning", 1, 1) == "Questioning suspect…"
+    assert line("questioning", 3, 3) == "Questioning suspect 3…"                # caught up: no "of 3"
+    assert line("interrogating", 2, 5) == "Interrogating suspect 2 of 5…"
     report = dd_app.suspect_report
     assert report({"feature": 1, "extras": [{}, {}, {}], "suspects": 4}) == "The suspects named the film and 3 extras"
     assert report({"feature": 1, "extras": [], "suspects": 1}) == "The suspect named the film"
@@ -3164,8 +3165,8 @@ def test_every_crawls_progress_reads_the_same_on_the_status_line(monkeypatch):
     progress = appmod.App._crawl_progress(fake)
     for stage in [("setup",), ("start",), ("page", 1, 3), ("press", 1, 2), ("press", 2, 2), ("press", 1, 1), ("nothing",)]:
         progress(*stage)
-    assert told[:3] == ["Opening the case files…", "Going on stakeout…", appmod.suspect_line("Questioning", 1, 3)]
-    assert told[3:] == [appmod.suspect_line("Interrogating", k, n) for k, n in ((1, 2), (2, 2), (3, 3))]
+    assert told[:3] == ["Opening the case files…", "Going on stakeout…", appmod.suspect_line("questioning", 1, 3)]
+    assert told[3:] == [appmod.suspect_line("interrogating", k, n) for k, n in ((1, 2), (2, 2), (3, 3))]
 
 
 def test_a_long_stakeouts_time_left_shows_beside_its_busy_bar(gui, monkeypatch):
@@ -3284,6 +3285,101 @@ def test_screenshots(gui, tmp_path, imdb_dir, monkeypatch):
     shot(about.top, "6-about")
     about.top.destroy()
     assert len(os.listdir(SHOTS)) >= 6
+
+
+class Marked:
+    """A pretend translation: every string the interface translates comes back ‹marked›, so English that
+    wasn't put through _() stands out."""
+    def gettext(self, msg):
+        return "‹%s›" % msg
+
+    def ngettext(self, one, many, n):
+        return self.gettext(one if n == 1 else many)
+
+
+def test_every_window_speaks_the_interfaces_language(gui, monkeypatch):
+    """The main window, Settings, About, Get disc data, Title types and Help TheDiscDB, in a pretend
+    language: every word on them translated, save names that stay as they are (the app's, programs',
+    sites', and the source's own credit lines, which their terms ask for word for word)."""
+    from disc_detective import i18n
+    root, made, pump = gui
+    fake = lambda domain: Marked()
+    fake.cache_clear = lambda: None
+    monkeypatch.setattr(i18n, "_catalog", fake)
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    keep = {dd_app.APP, "TheDiscDB", "IMDb", "MakeMKV", "VLC", "FFmpeg", "Tesseract", "thediscdb.com", "tvmaze.com",
+            "themoviedb.org", "makemkv.com", "|", core.IMDB_CREDIT, core.TMDB_CREDIT}
+    # (TheDiscDB's types and Plex's folders: the words those two go by)
+    keep |= {kind for kind, what, folder in dd_app.TypeGuide.TYPES} | dd_app.TypeGuide.PLEX_FOLDERS
+
+    def untranslated(top):
+        texts = [str(w.cget("text")) for w in [top] + list(made_widgets(top))
+                 if "text" in w.keys() and w.winfo_class() not in ("Text", "Entry", "TEntry")]
+        texts += [w.tab(t, "text") for w in made_widgets(top) if w.winfo_class() == "TNotebook" for t in w.tabs()]
+        texts += [top.title()] if top.winfo_class() in ("Tk", "Toplevel") else []
+        out = []
+        for text in texts:
+            for c in (core.IMDB_CREDIT, core.TMDB_CREDIT):
+                text = text.replace(c, "")
+            text = re.sub(r"‹[^›]*›", "", text).strip()
+            if re.search(r"[A-Za-z]{2,}", text) and text not in keep and not text.startswith("✓ "):   # (a path)
+                out.append(text)
+        return out
+
+    assert untranslated(root) == []
+    windows = [dd_app.SettingsDialog(root, app).top, dd_app.AboutDialog(root).top,
+               dd_app.FirstRunDialog(root, app, ["discdb", "imdb"]).top, dd_app.TypeGuide(root).top]
+    help_ = dd_app.HelpDiscDBDialog(root, app)
+    assert pump(lambda: "‹" in help_.status.cget("text") and "Looking" not in help_.status.cget("text"), 20)
+    for top in windows + [help_.top]:
+        assert untranslated(top) == [], top.title()
+        top.destroy()
+
+
+def test_a_case_speaks_the_interfaces_language(gui, tmp_path, imdb_dir, monkeypatch):
+    """A scanned TV Blu-ray, in a pretend language: the case card, its details and rip card, Choose titles
+    and Edit titles say everything in it but the disc's own words (its show, titles, label, tracks)."""
+    import json
+    from disc_detective import i18n
+    root, made, pump = gui
+    monkeypatch.setenv("DISC_DETECTIVE_IMDB", imdb_dir)
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    orig = core.default_args
+    monkeypatch.setattr(core, "default_args", lambda **kw: orig(**dict(kw, offline=True)))
+    fake = lambda domain: Marked()
+    fake.cache_clear = lambda: None
+    monkeypatch.setattr(i18n, "_catalog", fake)
+    app = dd_app.App(root)
+    app.source.set(fixtures.make_tv_bluray(str(tmp_path / "JUSTIFIED")))
+    app.source_changed()
+    app.outdir.set(str(tmp_path / "Rips"))
+    app.scan()
+    assert pump(lambda: app.rep is not None and not app.busy, 60), app.status.cget("text")
+    data = json.dumps(app.rep, ensure_ascii=False)
+    assert app.case_lbl.cget("text").startswith("‹CASE FILE #")       # (the pretend language, in use)
+
+    def untranslated(top):
+        texts = [str(w.cget("text")) for w in [top] + list(made_widgets(top))
+                 if "text" in w.keys() and w.winfo_class() not in ("Text", "Entry", "TEntry")]
+        texts += [top.title()] if top.winfo_class() == "Toplevel" else []
+        out = []
+        for text in texts:
+            while re.search("‹[^‹›]*›", text):      # (innermost first: a translated word in another)
+                text = re.sub("‹[^‹›]*›", " ", text)
+            text = text.strip(" ·••:()")
+            words = [w for w in re.split(r"\s*[·••]\s*|\s{2,}", text) if re.search(r"[A-Za-z]{2,}", w)]
+            out += [w for w in words if w not in data and w not in (dd_app.APP, "TheDiscDB", "MakeMKV", "VLC", "|")
+                    and not re.search(r"[\\/]", w)]          # (a folder: yours)
+        return " / ".join(out)
+
+    assert untranslated(root) == ""
+    picker = dd_app.TitlePicker(root, app)
+    assert untranslated(picker.top) == ""
+    picker.top.destroy()
+    t = dd_app.TitlesDialog(root, app, app.rep["content_hash"], shown_title(app), rep=app.rep)
+    assert untranslated(t.top) == ""
+    t.close(ask=False)
 
 
 def test_about_gives_the_notices_the_data_sources_ask_for(gui, monkeypatch):

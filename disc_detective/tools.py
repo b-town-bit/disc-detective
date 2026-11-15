@@ -8,20 +8,23 @@ import shutil
 import subprocess
 import sys
 
+from . import i18n
+from .i18n import N_, ui as _
+
 # each tool: what it's for (a few words, after its name), its winget package (checked 2026-11-11: each one's
 # installer from its publisher's own site or releases), its publisher and licence as winget lists them, and
 # its download page (no winget, or another system)
 TOOLS = (
-    {"key": "makemkv", "name": "MakeMKV", "for": "rips discs, and unlocks Blu-ray menus for Detect titles",
+    {"key": "makemkv", "name": "MakeMKV", "for": N_("rips discs, and unlocks Blu-ray menus for Detect titles"),
      "winget": "GuinpinSoft.MakeMKV", "publisher": "GuinpinSoft", "license": "Shareware (free while in beta; it asks for its beta key)",
      "page": "https://www.makemkv.com/download/"},
-    {"key": "vlc", "name": "VLC", "for": "plays DVD menus for Detect titles, and previews titles",
+    {"key": "vlc", "name": "VLC", "for": N_("plays DVD menus for Detect titles, and previews titles"),
      "winget": "VideoLAN.VLC", "publisher": "VideoLAN", "license": "GPL-2.0",
      "page": "https://www.videolan.org/vlc/"},
-    {"key": "ffmpeg", "name": "FFmpeg", "for": "previews a Blu-ray's titles in Edit titles",
+    {"key": "ffmpeg", "name": "FFmpeg", "for": N_("previews a Blu-ray's titles in Edit titles"),
      "winget": "Gyan.FFmpeg", "publisher": "Gyan (gyan.dev builds)", "license": "GPL-3.0",
      "page": "https://ffmpeg.org/download.html"},
-    {"key": "tesseract", "name": "Tesseract", "for": "reads text off cover art",
+    {"key": "tesseract", "name": "Tesseract", "for": N_("reads text off cover art"),
      "winget": "UB-Mannheim.TesseractOCR", "publisher": "Tesseract-OCR community (UB Mannheim builds)", "license": "Apache-2.0",
      "page": "https://tesseract-ocr.github.io/tessdoc/Installation.html"},
 )
@@ -159,7 +162,7 @@ def folders_of(key, settings=None):
         b = found_broken(key)
         out += [os.path.dirname(b)] if b else []
     for base in _program_files():
-        out += [os.path.join(base, folder) for folder, _ in _USUAL.get(key, [])]
+        out += [os.path.join(base, folder) for folder, _x in _USUAL.get(key, [])]
     return list(dict.fromkeys(os.path.normcase(x) for x in out if x))
 
 
@@ -278,7 +281,7 @@ def install(key, log=lambda line: None):
     """Install a tool through winget (off the Tk thread: it waits for the installer). Returns (ok, its last
     words). The installer's own window shows; Windows asks for permission where it installs for everyone."""
     cmd = install_command(key)
-    log("installing %s: %s" % (BY_KEY[key]["name"], subprocess.list2cmdline(cmd)))
+    log(i18n.log("installing {name}: {command}", name=BY_KEY[key]["name"], command=subprocess.list2cmdline(cmd)))
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                            creationflags=0x08000000 if os.name == "nt" else 0)     # (CREATE_NO_WINDOW: winget's console)
@@ -286,26 +289,25 @@ def install(key, log=lambda line: None):
         return False, str(e)
     lines = [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip() and not set(ln.strip()) <= set("-\\|/ █▒")]
     for ln in lines:
-        log("  winget: %s" % ln)
+        log("  " + i18n.log("winget: {line}", line=ln))
     # (0: installed; a tool already there, or newer: winget says so and that's as good)
     ok = r.returncode == 0 or any("already installed" in ln.lower() for ln in lines)
-    last = lines[-1] if lines else "winget exited with code %s" % r.returncode
+    last = lines[-1] if lines else _("winget exited with code {code}", code=r.returncode)
     if not ok and "installer failed with exit code" in last.lower():
         # (its installer stopped: closed, cancelled, or it failed partway; NSIS's 2 for any of those)
-        last = "the installer stopped before it finished (exit code %s)" % last.rsplit(":", 1)[-1].strip()
+        last = _("the installer stopped before it finished (exit code {code})", code=last.rsplit(":", 1)[-1].strip())
     return ok, last
 
 
 def how_to_get(key):
     """For a system with no winget: where to get a tool, in a sentence."""
     t = BY_KEY[key]
-    if sys.platform == "darwin":
-        extra = {"ffmpeg": " (or: brew install ffmpeg)", "tesseract": " (or: brew install tesseract)",
-                 "vlc": " (or: brew install --cask vlc)"}.get(key, "")
-    elif os.name != "nt":
-        extra = {"ffmpeg": " (or your package manager: ffmpeg)", "tesseract": " (or your package manager: tesseract-ocr)",
-                 "vlc": " (or your package manager: vlc)",
-                 "makemkv": " (Linux: its forum has the download and the build steps)"}.get(key, "")
-    else:
-        extra = ""
-    return "Download it from %s%s." % (t["page"], extra)
+    brew = {"ffmpeg": "brew install ffmpeg", "tesseract": "brew install tesseract", "vlc": "brew install --cask vlc"}
+    package = {"ffmpeg": "ffmpeg", "tesseract": "tesseract-ocr", "vlc": "vlc"}
+    if sys.platform == "darwin" and key in brew:
+        return _("Download it from {page} (or: {command}).", page=t["page"], command=brew[key])
+    if os.name != "nt" and sys.platform != "darwin" and key in package:
+        return _("Download it from {page} (or your package manager: {package}).", page=t["page"], package=package[key])
+    if os.name != "nt" and sys.platform != "darwin" and key == "makemkv":
+        return _("Download it from {page} (Linux: its forum has the download and the build steps).", page=t["page"])
+    return _("Download it from {page}.", page=t["page"])
