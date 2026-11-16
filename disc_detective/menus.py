@@ -1076,14 +1076,43 @@ def _row_cut(line, box, boxes):
     return " ".join(w for w, _, _ in kept), (kept[0][1], b[1], kept[-1][2], b[3]), s
 
 
+TEXT_BLOCKS = True                  # buttons' name lines by the page's text grouping (textblocks); off: by their boxes
+_groupings = {}                     # {(id, size, rects): textblocks.page_names}: each page grouped once
+_groupings_lock = threading.Lock()
+
+
+def _grouped_names(image, rects, frame_size, lines, corners, acting=None):
+    """textblocks.page_names for a page, worked out once for all its buttons (their threads waiting for it):
+    {index in rects: [(text, box, sure)]}, boxes in the picture's pixels. acting: the rects of the buttons that do
+    something, where that's known (else all of them)."""
+    from . import textblocks
+    keys = [tuple(r) for r in rects]
+    doing = None if acting is None else {tuple(r) for r in acting}
+    key = (id(image), image.size, tuple(keys), None if doing is None else tuple(sorted(doing)))
+    with _groupings_lock:
+        if key not in _groupings:
+            if len(_groupings) > 8:         # (a stakeout's last few pictures)
+                _groupings.clear()
+            sx, sy = image.width / frame_size[0], image.height / frame_size[1]
+            boxes = {i: (r[0] * sx, r[1] * sy, r[2] * sx, r[3] * sy) for i, r in enumerate(rects)}
+            names = {i: b for i, b in boxes.items() if doing is None or keys[i] in doing}
+            _groupings[key] = (image, textblocks.page_names(image, lines, names, corners, boxes))  # (kept: its id
+        return _groupings[key][1]                                                                   # isn't reused)
+
+
 def name_button(image, rect, rects, frame_size=(720, 480), lines=None, lit=None, alone=None, beside=None,
-                is_word=None):
+                is_word=None, corners=None, acting=None):
     """A button's name off its page's picture, the one way for a DVD's (VLC's frame) and a Blu-ray's (the
     page drawn from its files, bdhdmv): (Words, how sure, the other readings' words, surest first).
     rect, rects: the button's and its page's buttons' boxes in the frame's coordinates (frame_size); the
     picture any size. Its name is, in turn (temp/bench_naming.py, 181 labelled DVD buttons: the DVD's
     way 163 right, the Blu-ray's 164, this 166, every one either got):
-      the page's lines (read whole once: lines, the picture's pixels) whose middle is in its box, its
+      the lines the page's text grouping gives it (textblocks.page_names: blocks by spacing and alignment, roles
+      by style; corners: the lines' four corners, for their slopes, as _page_corners has them for a page read
+      here; acting: the rects of the buttons that do something, where known), one name, before its highlight's
+      say (Goblet of Fire's "HARRY VS. THE HORNTAIL: THE FIRST TASK", not the "BEHIND THE STORY" its highlight's
+      box holds too) -- read alone again if unsure, but only a reading of mostly its words replaces it;
+      else the page's lines (read whole once: lines, the picture's pixels) whose middle is in its box, its
       name's (name_lines: what its highlight changes, lit = (mask, its place in the picture), else its
       tallest lettering: Galavant's "PILOT" over a sliver, The Sorcerer's Apprentice's "The Making Of");
       none in a button too narrow for words (TINY: a pointer, a lamp), the name beside it (_tiny_names,
@@ -1101,7 +1130,10 @@ def name_button(image, rect, rects, frame_size=(720, 480), lines=None, lit=None,
     if box[2] <= box[0] or box[3] <= box[1]:
         return Words(""), None, []
     frame = lambda w: (w[0] / sx, w[1] / sy, w[2] / sx, w[3] / sy)
-    lines = (_page_lines(image) if lines is None else lines) or []
+    if lines is None:
+        lines = _page_lines(image) or []
+        corners = _page_corners(image) if corners is None else corners
+    lines = lines or []
     mask, off = lit if lit else (None, (0, 0))
     tried = []                          # [(Words, sure)]
     # (a reading's words of four letters or more that aren't words, by is_word: "The Mmirror Explosion")
@@ -1157,12 +1189,23 @@ def name_button(image, rect, rects, frame_size=(720, 480), lines=None, lit=None,
     # (a line across a row of buttons, their names read as one: its words over this one's box, The Swan
     # Princess's "SCENE SELECTIONS SPECIAL FEATURES TRAILERS", its Special Features button's "SPECIAL FEATURES")
     boxes = [(r[0] * sx, r[1] * sy, r[2] * sx, r[3] * sy) for r in rects]
+    grouped = None
+    if TEXT_BLOCKS and lines and tuple(rect) in [tuple(r) for r in rects]:
+        got = _grouped_names(image, rects, frame_size, lines, corners, acting).get(
+            [tuple(r) for r in rects].index(tuple(rect)))
+        if got:                         # (its name's lines as one: their words in reading order, the least sure's)
+            grouped = (" ".join(t for t, _, _ in got), (min(b[0] for _, b, _ in got), min(b[1] for _, b, _ in got),
+                       max(b[2] for _, b, _ in got), max(b[3] for _, b, _ in got)), min(s for _, _, s in got))
+    if grouped and take([grouped], False):
+        return done(*tried[-1])
     mine = [cut for l in lines if mid_in(l[1]) for cut in [_row_cut(l, box, boxes)] if cut]
-    if len(mine) >= 2:                  # (a page heading's line dipping into its box: the page's, as on a DVD it
+    if grouped:                         # (unsure of it: read alone too, as below, the surest kept)
+        mine = [grouped]
+    elif len(mine) >= 2:                # (a page heading's line dipping into its box: the page's, as on a DVD it
         heads = _heading_boxes(image, rect, rects, frame_size)          # always was: Enchanted's "Comes To
         over = lambda b, h: min(b[2], h[2]) > max(b[0], h[0]) and             min(b[3], h[3]) - max(b[1], h[1]) > 0.5 * (b[3] - b[1])    # Life" over "Happy Working Song")
         mine = [l for l in mine if not any(over(l[1], h) for h in heads)] or mine
-    if mine and take(mine, True):
+    if mine and not grouped and take(mine, True):
         return done(*tried[-1])
     if not mine and x1 - x0 < TINY:     # (a pointer, a lamp: the name beside it, or its plate's)
         hit = near()
@@ -1190,6 +1233,9 @@ def name_button(image, rect, rects, frame_size=(720, 480), lines=None, lit=None,
         # (what it holds more being words: three letters or more, or a number; a stray mark read off the button's
         # edge isn't: Order of the Phoenix's "H The Centaurs of the Forbidden Forest", "... Decrees m")
         words = lambda t: re.findall(r"[a-z0-9]+", str(t).lower())
+        if grouped:                     # (a reading of another line in its box -- a heading, its highlight's -- isn't
+            ours = set(words(grouped[0]))   # its name read again: half its words at least)
+            good = [x for x in good if len(ours & set(words(x[0]))) >= max(1, len(ours) / 2)] or good
         more = lambda x, y: set(words(x[0])) - set(words(y[0]))
         holds = lambda x: sum(1 for y in good if y is not x and set(words(y[0])) < set(words(x[0]))
                               and all(len(w) >= 3 or w.isdigit() for w in more(x, y)))

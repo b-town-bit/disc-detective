@@ -486,7 +486,8 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
         if key not in seen:
             page = pages_of[key[:2]][key[2]]
             img = _rgb(loaded[key[:2]]["menu"].draw(page, background=BACKGROUND))
-            seen[key] = (img, (menus.rapid_lines(img) or []) if read_words is None else None)
+            corners = []                # (the lines' four corners: their slopes, for the text grouping)
+            seen[key] = (img, (menus.rapid_lines(img, corners=corners) or []) if read_words is None else None, corners)
         return seen[key]
 
     def look(key):
@@ -500,7 +501,7 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
                 k = len(count["pages"])
                 n = max(count["total"], k)
                 tell("page", k, n)
-            drawn, lines = questioned(key[:3])
+            drawn, lines, corners = questioned(key[:3])
             menu = m["menu"]
             pic, sel = menu.button_image(page, b), menu.button_image(page, b, "selected")
 
@@ -523,13 +524,18 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
                 img, lit = _lit(own, sel if pic is not None else None)
                 sx, sy = drawn.width / SIZE[0], drawn.height / SIZE[1]
                 if key[:3] not in boxes:
-                    boxes[key[:3]] = [r for x in menu.buttons(page) for r in [_box(menu, page, x)] if r]
+                    # (and those of the buttons that do something: the page's text grouping goes by them, its
+                    # decorations' boxes only joining lines -- Chamber of Secrets', 25 of 54)
+                    doing = {bid for (pid, bid), o in m["outcome"].items() if pid == key[2] and o["kind"] in ("play", "page")}
+                    boxes[key[:3]] = ([r for x in menu.buttons(page) for r in [_box(menu, page, x)] if r],
+                                      [r for x in menu.buttons(page) if x["id"] in doing for r in [_box(menu, page, x)] if r])
                 rect = _box(menu, page, b)
+                every, acting = boxes[key[:3]]
                 got[key] = menus.name_button(
-                    drawn, rect, boxes[key[:3]], SIZE, lines=lines,
+                    drawn, rect, every, SIZE, lines=lines,
                     lit=(lit, (own.x, own.y)) if lit is not None else None,
                     alone=lambda: menus.read_alone(img, lit, (own.x, own.y), (sx, sy)),
-                    beside=near_it, is_word=is_word)
+                    beside=near_it, is_word=is_word, corners=corners, acting=acting + [rect] if rect not in acting else acting)
             # (where it was read, on the 720x480 page: what its picture outlines)
             where = menus.where_read(got[key][0])
             if where:
@@ -736,7 +742,7 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
            "scope": scope, "sure": menus.readings_sure(), "also": also, "opening": opening,
            "scan_play_alls": sorted(menus._play_alls_of(titles, str)), "under_menu": under_menu,
            # (every line of the pages read whole, and how sure: the disc's own words, menus.disc_words)
-           "page_lines": {t: round(c, 3) for _, lines in seen.values() for t, _, c in lines or []},
+           "page_lines": {t: round(c, 3) for _, lines, _ in seen.values() for t, _, c in lines or []},
            "suspects": sum(1 for p in pages for b in p["buttons"] if b.get("plays")), "watch": {}}
     # (a show's: its readings as a DVD's are (menus.tv_titles), Play Alls, ads, kinds and all: Chuck's
     # PLAY ALL plays its first episode's own playlist, which its own row names)
