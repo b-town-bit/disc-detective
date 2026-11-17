@@ -1,6 +1,7 @@
 # PyInstaller spec for Disc Detective: one folder (not one file: it starts fast, and fewer antivirus
 # false alarms), the app's windowed program in it. Built by release/build.py, which also gathers the
 # licences. Run from the repository's root: pyinstaller release/disc_detective.spec
+import glob
 import os
 import sys
 
@@ -13,6 +14,9 @@ PKG = os.path.join(ROOT, "disc_detective")
 datas = [(os.path.join(PKG, "icon.png"), "disc_detective")]
 for sub in ("fonts", "icons", "art"):
     datas.append((os.path.join(PKG, sub), os.path.join("disc_detective", sub)))
+# the translations, compiled (release/messages.py compile): only the .mo files the app reads
+for mo in sorted(glob.glob(os.path.join(PKG, "locale", "*", "LC_MESSAGES", "*.mo"))):
+    datas.append((mo, os.path.relpath(os.path.dirname(mo), ROOT)))
 
 # RapidOCR: its settings, and only the models the app reads with (menus.rapid_lines: PP-OCRv6 small to find
 # text, PP-OCRv5 English mobile to read it, and the small direction model it loads at start); the rest it

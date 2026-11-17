@@ -126,8 +126,10 @@ def test_a_discs_hdmv_menus_named_by_their_buttons_and_what_they_play(library, t
     counts = [t[1:] for t in told if t[0] == "titles"]
     assert counts and counts[-1][0] == counts[-1][1] and all(0 <= k <= n for k, n in counts)
     assert told.index(("finish",)) > max(i for i, t in enumerate(told) if t[0] == "titles")
-    # (a quick crawl: one button for each title, the film's first scene for want of a Play Movie; not the bar)
-    assert sorted(seen) == ["1", "Play All", "The Explosion of Decrees"]
+    # (a quick crawl: each title's best button, then, the user's, every other button on a page read whose title no
+    # button's read surely yet -- the second scene too, the film's only reading a scene number; and the buttons on the
+    # way to those pages, the bar's, for the way there in the menus' words -- not Languages)
+    assert sorted(seen) == ["1", "2", "Play All", "SCENE SELECTIONS", "SPECIAL FEATURES", "The Explosion of Decrees"]
     found = got["found"]
     assert found["feature"] == "00060.mpls"                     # (the film the scene buttons point into)
     assert [(e["title"], e["name"]) for e in found["extras"]] == [("00083.mpls", "The Explosion of Decrees")]
@@ -139,8 +141,11 @@ def test_a_discs_hdmv_menus_named_by_their_buttons_and_what_they_play(library, t
     assert played["plays"] == {"title": "00083.mpls", "chapter": 1, "seconds": 117.4, "engine": True}
     assert played["rect"] == [276, 133, 276 + round(WIDTHS[(2, 25)] * 0.375), 151]   # (on the 720x480 page)
     scenes = next(p for p in got["pages"] if p["page"] == 3)
-    assert [(b["plays"]["chapter"], b["text"]) for b in scenes["buttons"]] == [(1, "1"), (2, "")]   # (kept, not read)
-    assert 0 not in [p["page"] for p in got["pages"]]          # (the bar: nothing read on it, no scenes)
+    assert [(b["plays"]["chapter"], b["text"]) for b in scenes["buttons"]] == [(1, "1"), (2, "2")]
+    bar = next(p for p in got["pages"] if p["page"] == 0)       # (the bar: kept for the way to the pages it leads to)
+    assert sorted(b["text"] for b in bar["buttons"]) == ["SCENE SELECTIONS", "SPECIAL FEATURES"]
+    pics = menus.title_pictures(got, str(tmp_path))
+    assert pics["00083.mpls"]["page_trail"] == ["SPECIAL FEATURES"]          # (the way there, as a DVD's says it)
     assert (tmp_path / "crawl.json").exists() and (tmp_path / extras["image"]).exists()
 
 
@@ -274,11 +279,14 @@ def test_a_buttons_name_lines_on_its_page_are_what_its_highlight_changes():
     assert bdhdmv.name_boxes(pic, None, lines) == [(100, 200, 400, 245)]
 
 
-def test_a_play_all_the_scan_knows_isnt_read_and_stays_one(library, tmp_path):
+def test_a_play_all_the_scan_knows_stays_one(library, tmp_path):
+    """A Play All whose clips have buttons of their own (00083, by its own button): read with its page all the same
+    (the user's: every button on a page read, then filtered), it stays a Play All -- the menus name its clips."""
     seen = []
-    titles = [dict(t, role="play-all") if t["id"] == "00089.mpls" else t for t in TITLES]
+    clips = {"00060.mpls": "00060", "00083.mpls": "00083", "00089.mpls": "00083,00084,00085"}
+    titles = [dict(t, role="play-all" if t["id"] == "00089.mpls" else t.get("role"), clip_list=clips[t["id"]]) for t in TITLES]
     got = bdhdmv.read("E:/", titles, str(tmp_path), log=lambda m: None, aacs="libaacs.dll", read_words=counting(seen))
-    assert "Play All" not in seen
+    assert "Play All" in seen
     assert got["found"]["play_alls"] == ["00089.mpls"] and [e["title"] for e in got["found"]["extras"]] == ["00083.mpls"]
 
 
@@ -566,3 +574,39 @@ def test_a_longer_title_ending_in_a_menu_is_still_a_title(library, tmp_path, mon
     got = bdhdmv.read("E:/", TITLES, str(tmp_path), log=lambda m: None, aacs="libaacs.dll", read_words=read_name,
                       scope="language")
     assert any((b.get("plays") or {}).get("title") == "00089.mpls" for p in got["pages"] for b in p["buttons"])
+
+
+def test_a_jump_into_the_playing_play_all_at_an_episodes_clip_plays_that_episode(monkeypatch):
+    """Chuck Season 2's pop-up episode buttons: each jumps to a mark in the Play All playing under it (00001), at its
+    episode clip's first chapter; the scan lists each clip as a title of its own ("00016.m2ts"). A jump into a clip
+    (a scene's mark), or a clip the scan doesn't list, stays as it was."""
+    items = ["00016", "00007", "00008"]
+    marks = [(1, 0)] * 7 + [(1, 1)] * 7 + [(1, 2)] * 7
+    monkeypatch.setattr(bdhdmv, "_playlist_marks", lambda root, pl: (items, marks) if pl == 1 else None)
+    titles = [{"id": "00001.mpls", "clip_list": "00016,00007,00008"}, {"id": "00016.m2ts"}, {"id": "00007.m2ts"}]
+    jumps = {(4, 13): {"kind": "link", "mark": 0}, (4, 14): {"kind": "link", "mark": 7},
+             (4, 15): {"kind": "link", "mark": 14}, (4, 16): {"kind": "link", "mark": 3}}
+    got = bdhdmv.own_titles("E:/", jumps, titles, playing=1)
+    assert (got[(4, 13)]["kind"], got[(4, 13)]["clip_title"]) == ("play", "00016.m2ts")
+    assert got[(4, 14)]["clip_title"] == "00007.m2ts" and got[(4, 14)]["from_mark"] == {"kind": "link", "mark": 7}
+    assert got[(4, 15)] == {"kind": "link", "mark": 14}         # (00008: no title of its own)
+    assert got[(4, 16)] == {"kind": "link", "mark": 3}          # (a scene inside the first episode)
+    assert bdhdmv.own_titles("E:/", jumps, titles) == jumps     # (nothing known to be playing: as they were)
+
+
+def test_a_pages_other_buttons_are_read_unless_their_title_has_been_already(library, tmp_path):
+    """Every button that does something on a page read is read too, the user's -- but not one whose title another
+    button has already named surely: a second button for the same extra."""
+    class Twice(Menu):
+        pages = [BAR, {"id": 2, "groups": [{"default": 25, "buttons": [button(25, 735, 300), button(26, 735, 360)]},
+                                           {"default": 4, "buttons": [button(40, 0, 340)]}]}, SCENES]
+    NAMES[(2, 26)] = "The Explosion of Decrees, again"
+    WIDTHS[(2, 26)] = 900
+    try:
+        links = LINKS + [{"page": 2, "button": 26, "outcome": {"kind": "play", "playlist": 83, "mark": None, "title": 25}}]
+        library.shown = [("00072", Twice(), links, ["first play", "plays 00060"])]
+        seen = []
+        bdhdmv.read("E:/", TITLES, str(tmp_path), log=lambda m: None, aacs="libaacs.dll", read_words=counting(seen))
+        assert "The Explosion of Decrees" in seen and "The Explosion of Decrees, again" not in seen
+    finally:
+        del NAMES[(2, 26)], WIDTHS[(2, 26)]

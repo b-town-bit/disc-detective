@@ -1,5 +1,6 @@
 """The app, driven headlessly: first-run download, Settings, a scan, the rip plan."""
 import os
+import re
 import time
 from types import SimpleNamespace
 
@@ -788,7 +789,7 @@ def test_status_story_and_case_notes(gui, tmp_path, imdb_dir, monkeypatch):
         app = dd_app.App(root)
         shown = []
         real = app.set_status
-        monkeypatch.setattr(app, "set_status", lambda text: (shown.append(text), real(text)))
+        monkeypatch.setattr(app, "set_status", lambda text, tone="info": (shown.append(text), real(text, tone)))
         app.source.set(disc)
         app.source_changed()
         app.scan()
@@ -2088,9 +2089,9 @@ def test_suspect_report_and_a_breathing_light(gui, monkeypatch):
     """Detect titles' answer counts every extra (a film's own trailer too) and its suspects;
     the status light breathes while something's under way, and stops when it's done."""
     line = dd_app.suspect_line
-    assert line("Questioning", 1, 1) == "Questioning suspect…"
-    assert line("Questioning", 3, 3) == "Questioning suspect 3…"                # caught up: no "of 3"
-    assert line("Interrogating", 2, 5) == "Interrogating suspect 2 of 5…"
+    assert line("questioning", 1, 1) == "Questioning suspect…"
+    assert line("questioning", 3, 3) == "Questioning suspect 3…"                # caught up: no "of 3"
+    assert line("interrogating", 2, 5) == "Interrogating suspect 2 of 5…"
     report = dd_app.suspect_report
     assert report({"feature": 1, "extras": [{}, {}, {}], "suspects": 4}) == "The suspects named the film and 3 extras"
     assert report({"feature": 1, "extras": [], "suspects": 1}) == "The suspect named the film"
@@ -2102,9 +2103,23 @@ def test_suspect_report_and_a_breathing_light(gui, monkeypatch):
     app.set_status("Interrogating suspect 2 of 4…")
     assert app.status_dot._pulse                               # breathing
     app.show_progress(False)
-    app.set_status("The suspects named the film and 3 extras")
+    app.set_status("The suspects named the film and 3 extras", "good")
     assert not app.status_dot._pulse                           # done: a steady green
     assert app.status_dot.itemcget(1, "fill") == dd_app.th.GREEN_DOT
+    # the light is what the message is, said with it, never read from its words (a translation changes them)
+    fill = lambda: app.status_dot.itemcget(1, "fill")
+    app.set_status("Case closed: scan failed, couldn't")          # (words that once picked a colour: none now)
+    assert fill() == dd_app.th.BRASS_400
+    app.set_status("Überprüfung fehlgeschlagen", "bad")
+    assert fill() == dd_app.th.WAX
+    app.show_progress(True)                                     # (the strip shown again: its light kept)
+    assert fill() == dd_app.th.WAX
+    app.show_progress(False)
+    assert fill() == dd_app.th.WAX
+    app.story_reset()
+    app.tell("Abbruch…", "warn")                                # (queued: its tone goes with it)
+    assert app.status.cget("text") == "Abbruch…" and fill() == dd_app.th.AMBER_DOT
+    app.story_reset()
 
 
 def test_makemkv_reads_a_confirmed_disc_ahead(gui, tmp_path, monkeypatch):
@@ -3062,6 +3077,48 @@ def test_a_disc_taken_out_mid_job_is_said_plainly(gui, monkeypatch):
     app = dd_app.App(root)
     app.scan_done(None, "OSError: [WinError 21] The device is not ready", gone=True)
     assert app.rep is None and app.status.cget("text") == "The disc was removed: scan aborted"
+    # the scan itself, a read failing for the disc taken out as its files are listed (Swan Princess, 2026-11-14):
+    # in the log as that, not an error with its traceback for errors.log; a disc still in, an error as ever
+    import logging
+    logged = []
+    handler = logging.Handler(logging.DEBUG)
+    handler.emit = lambda rec: logged.append((rec.levelname, rec.getMessage()))
+    core.logger.addHandler(handler)
+    was = core.logger.level
+    core.logger.setLevel(logging.DEBUG)
+    try:
+        monkeypatch.setattr(dd_app.di, "identify", lambda drive, args: (_ for _ in ()).throw(
+            PermissionError(21, "The device is not ready", "E:\\VIDEO_TS")))
+        for out, said in ((True, "The disc was removed: scan aborted"), (False, "Scan failed")):
+            monkeypatch.setattr(app, "disc_gone", lambda drive, out=out: out)
+            del logged[:]
+            app.set_status("")
+            app._scan_worker("E:\\")
+            assert pump(lambda: said in str(app.status.cget("text")), 5)
+            levels = [lvl for lvl, msg in logged if "scan of E:\\" in msg]
+            assert levels == (["INFO"] if out else ["ERROR"]), logged
+    finally:
+        core.logger.removeHandler(handler)
+        core.logger.setLevel(was)
+    # taken out once the disc's been read (a step left out for it, the rest done): nothing shown of a disc that isn't
+    # in, the scan called off; and so for one taken out as its answer waits its turn on the desk
+    rep = {"path": "Z:\\", "format": "DVD", "content_hash": "A" * 32}
+    monkeypatch.setattr(dd_app.di, "identify", lambda drive, args: dict(rep))
+    for step in ("_menu_style", "_files_saved", "_program_seen", "_bd_menus_seen"):
+        monkeypatch.setattr(app, step, lambda *a: None)
+    monkeypatch.setattr(app, "_program_map", lambda drive, r: None)
+    monkeypatch.setattr(app, "_menus_seen", lambda drive, args, r: r)
+    monkeypatch.setattr(app, "disc_gone", lambda drive: True)
+    app.set_status("")
+    app._scan_worker("Z:\\")
+    assert pump(lambda: app.status.cget("text") == "The disc was removed: scan aborted", 5) and app.rep is None
+    app.set_status("")
+    app._drives = ["Z:\\"]                                   # (a drive with no disc in it: Z: is nowhere)
+    assert app.ejected("Z:\\") and not app.ejected("") and not app.ejected(os.getcwd())
+    app.scan_done(dict(rep), None)
+    assert app.rep is None and app.status.cget("text") == "The disc was removed: scan aborted"
+    app._drives = []
+    app.scan_done(None, "OSError: [WinError 21] The device is not ready", gone=True)
     errors = []
     monkeypatch.setattr(dd_app.messagebox, "showerror", lambda *a, **k: errors.append(a))
     app.rip_done(["a.mkv"], 3, None, gone=True)
@@ -3108,8 +3165,8 @@ def test_every_crawls_progress_reads_the_same_on_the_status_line(monkeypatch):
     progress = appmod.App._crawl_progress(fake)
     for stage in [("setup",), ("start",), ("page", 1, 3), ("press", 1, 2), ("press", 2, 2), ("press", 1, 1), ("nothing",)]:
         progress(*stage)
-    assert told[:3] == ["Opening the case files…", "Going on stakeout…", appmod.suspect_line("Questioning", 1, 3)]
-    assert told[3:] == [appmod.suspect_line("Interrogating", k, n) for k, n in ((1, 2), (2, 2), (3, 3))]
+    assert told[:3] == ["Opening the case files…", "Going on stakeout…", appmod.suspect_line("questioning", 1, 3)]
+    assert told[3:] == [appmod.suspect_line("interrogating", k, n) for k, n in ((1, 2), (2, 2), (3, 3))]
 
 
 def test_a_long_stakeouts_time_left_shows_beside_its_busy_bar(gui, monkeypatch):
@@ -3228,6 +3285,101 @@ def test_screenshots(gui, tmp_path, imdb_dir, monkeypatch):
     shot(about.top, "6-about")
     about.top.destroy()
     assert len(os.listdir(SHOTS)) >= 6
+
+
+class Marked:
+    """A pretend translation: every string the interface translates comes back ‹marked›, so English that
+    wasn't put through _() stands out."""
+    def gettext(self, msg):
+        return "‹%s›" % msg
+
+    def ngettext(self, one, many, n):
+        return self.gettext(one if n == 1 else many)
+
+
+def test_every_window_speaks_the_interfaces_language(gui, monkeypatch):
+    """The main window, Settings, About, Get disc data, Title types and Help TheDiscDB, in a pretend
+    language: every word on them translated, save names that stay as they are (the app's, programs',
+    sites', and the source's own credit lines, which their terms ask for word for word)."""
+    from disc_detective import i18n
+    root, made, pump = gui
+    fake = lambda domain: Marked()
+    fake.cache_clear = lambda: None
+    monkeypatch.setattr(i18n, "_catalog", fake)
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    app = dd_app.App(root)
+    keep = {dd_app.APP, "TheDiscDB", "IMDb", "MakeMKV", "VLC", "FFmpeg", "Tesseract", "thediscdb.com", "tvmaze.com",
+            "themoviedb.org", "makemkv.com", "|", core.IMDB_CREDIT, core.TMDB_CREDIT}
+    # (TheDiscDB's types and Plex's folders: the words those two go by)
+    keep |= {kind for kind, what, folder in dd_app.TypeGuide.TYPES} | dd_app.TypeGuide.PLEX_FOLDERS
+
+    def untranslated(top):
+        texts = [str(w.cget("text")) for w in [top] + list(made_widgets(top))
+                 if "text" in w.keys() and w.winfo_class() not in ("Text", "Entry", "TEntry")]
+        texts += [w.tab(t, "text") for w in made_widgets(top) if w.winfo_class() == "TNotebook" for t in w.tabs()]
+        texts += [top.title()] if top.winfo_class() in ("Tk", "Toplevel") else []
+        out = []
+        for text in texts:
+            for c in (core.IMDB_CREDIT, core.TMDB_CREDIT):
+                text = text.replace(c, "")
+            text = re.sub(r"‹[^›]*›", "", text).strip()
+            if re.search(r"[A-Za-z]{2,}", text) and text not in keep and not text.startswith("✓ "):   # (a path)
+                out.append(text)
+        return out
+
+    assert untranslated(root) == []
+    windows = [dd_app.SettingsDialog(root, app).top, dd_app.AboutDialog(root).top,
+               dd_app.FirstRunDialog(root, app, ["discdb", "imdb"]).top, dd_app.TypeGuide(root).top]
+    help_ = dd_app.HelpDiscDBDialog(root, app)
+    assert pump(lambda: "‹" in help_.status.cget("text") and "Looking" not in help_.status.cget("text"), 20)
+    for top in windows + [help_.top]:
+        assert untranslated(top) == [], top.title()
+        top.destroy()
+
+
+def test_a_case_speaks_the_interfaces_language(gui, tmp_path, imdb_dir, monkeypatch):
+    """A scanned TV Blu-ray, in a pretend language: the case card, its details and rip card, Choose titles
+    and Edit titles say everything in it but the disc's own words (its show, titles, label, tracks)."""
+    import json
+    from disc_detective import i18n
+    root, made, pump = gui
+    monkeypatch.setenv("DISC_DETECTIVE_IMDB", imdb_dir)
+    monkeypatch.setattr(dd_app.App, "maybe_first_run", lambda self: None)
+    orig = core.default_args
+    monkeypatch.setattr(core, "default_args", lambda **kw: orig(**dict(kw, offline=True)))
+    fake = lambda domain: Marked()
+    fake.cache_clear = lambda: None
+    monkeypatch.setattr(i18n, "_catalog", fake)
+    app = dd_app.App(root)
+    app.source.set(fixtures.make_tv_bluray(str(tmp_path / "JUSTIFIED")))
+    app.source_changed()
+    app.outdir.set(str(tmp_path / "Rips"))
+    app.scan()
+    assert pump(lambda: app.rep is not None and not app.busy, 60), app.status.cget("text")
+    data = json.dumps(app.rep, ensure_ascii=False)
+    assert app.case_lbl.cget("text").startswith("‹CASE FILE #")       # (the pretend language, in use)
+
+    def untranslated(top):
+        texts = [str(w.cget("text")) for w in [top] + list(made_widgets(top))
+                 if "text" in w.keys() and w.winfo_class() not in ("Text", "Entry", "TEntry")]
+        texts += [top.title()] if top.winfo_class() == "Toplevel" else []
+        out = []
+        for text in texts:
+            while re.search("‹[^‹›]*›", text):      # (innermost first: a translated word in another)
+                text = re.sub("‹[^‹›]*›", " ", text)
+            text = text.strip(" ·••:()")
+            words = [w for w in re.split(r"\s*[·••]\s*|\s{2,}", text) if re.search(r"[A-Za-z]{2,}", w)]
+            out += [w for w in words if w not in data and w not in (dd_app.APP, "TheDiscDB", "MakeMKV", "VLC", "|")
+                    and not re.search(r"[\\/]", w)]          # (a folder: yours)
+        return " / ".join(out)
+
+    assert untranslated(root) == ""
+    picker = dd_app.TitlePicker(root, app)
+    assert untranslated(picker.top) == ""
+    picker.top.destroy()
+    t = dd_app.TitlesDialog(root, app, app.rep["content_hash"], shown_title(app), rep=app.rep)
+    assert untranslated(t.top) == ""
+    t.close(ask=False)
 
 
 def test_about_gives_the_notices_the_data_sources_ask_for(gui, monkeypatch):

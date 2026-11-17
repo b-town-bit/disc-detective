@@ -115,6 +115,7 @@ class FakeCrawler:
         self.menu_key = self.menu_skip = self.film_first = False
         self.start_select = None
         self.visited, self.presses, self.pressing = [], [], None
+        self.overlay, self.shots = {}, {}           # (no subpicture pages: none pictured selected)
         self.v = type("V", (), {"titles": staticmethod(lambda: [{"index": t, "seconds": 600} for t in (1, 5, 7, 9)])})()
         self.pool = self.more = type("P", (), {"shutdown": staticmethod(lambda wait=False: None)})()
         FakeCrawler.made.append(self)
