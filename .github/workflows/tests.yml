@@ -66,7 +66,7 @@ jobs:
         # 2026-11-11) shouldn't hold up or fail a job whose tests passed.
         continue-on-error: true
         timeout-minutes: 3
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: screenshots-${{ runner.os }}
           path: screenshots/
