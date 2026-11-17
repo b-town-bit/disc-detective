@@ -298,3 +298,148 @@ def test_a_warner_film_disc_names_its_titles_from_its_menu_files(tmp_path):
     assert (labels["00205.mpls"]["title"], labels["00205.mpls"]["exact"]) == ("Wool's Orphanage", True)
     assert (labels["00200.mpls"]["title"], labels["00200.mpls"]["exact"]) == ("The Millennium Bridge", False)
     assert bdmenus.wb_film(str(tmp_path / "none")) == ([], {})
+
+
+def test_a_run_the_menus_offer_names_it_and_its_titles_are_its_pieces():
+    """The rule on any disc: what the menus offer names it. Muppets from Space's previews, Smurfs and Zoo, a title
+    each, but its menu offers only the run of them ("Previews"): that's labelled, the two its pieces, not labelled;
+    with no button words known (nothing says what's offered), each as the project names it."""
+    entries = [{"name": "FPL_MainFeature", "playlist": "00004.mpls", "seconds": 5292.0, "fps": "23.976"},
+               {"name": "SF_Previews", "playlist": "00800.mpls", "seconds": 116.0, "fps": "23.976"},
+               {"name": "SF_Smurfs", "playlist": "00801.mpls", "seconds": 60.0, "fps": "23.976"},
+               {"name": "SF_Zoo", "playlist": "00802.mpls", "seconds": 56.0, "fps": "23.976"}]
+    titles = [{"id": "00004.mpls", "role": "feature", "duration": 5292.0, "clip_list": "00004"},
+              {"id": "00800.mpls", "role": "play-all", "duration": 116.0, "clip_list": "00801,00802"},
+              {"id": "00801.mpls", "role": "junk", "duration": 60.0, "clip_list": "00801"},
+              {"id": "00802.mpls", "role": "junk", "duration": 56.0, "clip_list": "00802"}]
+    labels = bdmenus.project_labels(titles, entries, texts={"00800.mpls": "Previews", "00004.mpls": "Play Movie"})
+    assert labels["00800.mpls"]["type"] == "Promo"
+    assert "00801.mpls" not in labels and "00802.mpls" not in labels
+    labels = bdmenus.project_labels(titles, entries)
+    assert "00801.mpls" in labels and "00802.mpls" in labels
+
+
+# ---- an episode only a Play All plays: its clip played whole, decrypted as it's read ----
+
+def clip_disc(tmp_path, units):
+    """A disc folder with one clip, 00016.m2ts, of the given aligned units ([bytes of UNIT])."""
+    stream = tmp_path / "BDMV" / "STREAM"
+    stream.mkdir(parents=True)
+    (stream / "00016.m2ts").write_bytes(b"".join(units))
+    return str(tmp_path)
+
+
+def unit(first, fill):
+    return bytes([first]) + bytes([fill]) * (bdmenus.UNIT - 1)
+
+
+class FakeAacs:
+    """MakeMKV's library stood in for: "decrypts" a unit by clearing its copy bits and flipping its body."""
+    opened, closed = [], []
+
+    def __init__(self, library, root):
+        FakeAacs.opened.append((library, root))
+
+    def decrypt(self, u):
+        return bytes([u[0] & ~bdmenus.ENCRYPTED & 0xFF]) + bytes(b ^ 0xFF for b in u[1:])
+
+    def close(self):
+        FakeAacs.closed.append(True)
+
+
+class FakePlayer:
+    """ffplay stood in for: keeps what it's fed; its window open till killed (or, with ends_after, till that many
+    bytes)."""
+
+    def __init__(self, ends_after=None):
+        self.fed, self.code, self.ends_after, self.command = bytearray(), None, ends_after, None
+        outer = self
+
+        class In:
+            def write(self, b):
+                outer.fed += b
+                if outer.ends_after is not None and len(outer.fed) >= outer.ends_after:
+                    outer.code = 0
+
+            def close(self):
+                pass
+        self.stdin = In()
+
+    def __call__(self, command, **kw):
+        self.command = command
+        return self
+
+    def poll(self):
+        return self.code
+
+    def kill(self):
+        self.code = -9
+
+
+def test_a_clips_units_are_decrypted_in_order_into_the_player_and_the_disc_closed(tmp_path):
+    FakeAacs.opened, FakeAacs.closed = [], []
+    units = [unit(0xC0, 1), unit(0x00, 2), unit(0xC0, 3)]
+    root = clip_disc(tmp_path, units)
+    player = FakePlayer()
+    w = bdmenus.ClipWatch(["ffplay", "-i", "pipe:0"], bdmenus.clip_path(root, "00016.m2ts"), root, "libmmbd64.dll",
+                          opener=FakeAacs, popen=player).start()
+    w._thread.join(timeout=5)
+    assert bytes(player.fed) == FakeAacs.decrypt(None, units[0]) + units[1] + FakeAacs.decrypt(None, units[2])
+    assert FakeAacs.opened == [("libmmbd64.dll", root)] and FakeAacs.closed == [True]
+    assert w.failed is None
+
+
+def test_a_clip_stops_being_read_when_its_window_closes(tmp_path):
+    FakeAacs.closed = []
+    root = clip_disc(tmp_path, [unit(0xC0, k) for k in range(20)])
+    player = FakePlayer(ends_after=3 * bdmenus.UNIT)
+    w = bdmenus.ClipWatch(["ffplay"], bdmenus.clip_path(root, "00016"), root, "lib", opener=FakeAacs, popen=player).start()
+    w._thread.join(timeout=5)
+    assert len(player.fed) == 3 * bdmenus.UNIT and FakeAacs.closed == [True]
+
+
+def test_killing_a_clips_watch_stops_its_player_and_closes_the_disc(tmp_path):
+    import threading
+    FakeAacs.closed = []
+    gate = threading.Event()
+
+    class Slow(FakeAacs):
+        def decrypt(self, u):
+            gate.wait(5)
+            return super().decrypt(u)
+    root = clip_disc(tmp_path, [unit(0xC0, k) for k in range(50)])
+    player = FakePlayer()
+    w = bdmenus.ClipWatch(["ffplay"], bdmenus.clip_path(root, "00016"), root, "lib", opener=Slow, popen=player).start()
+    assert w.poll() is None
+    gate.set()
+    w.kill()
+    assert player.code == -9 and FakeAacs.closed == [True] and w.poll() is not None
+
+
+def test_a_disc_the_library_cant_open_says_why(tmp_path):
+    root = clip_disc(tmp_path, [unit(0xC0, 1)])
+    told = []
+
+    def refuses(library, root):
+        raise OSError("MakeMKV's library couldn't open the disc (error 7)")
+    player = FakePlayer()
+    w = bdmenus.ClipWatch(["ffplay"], bdmenus.clip_path(root, "00016"), root, "lib", opener=refuses, popen=player,
+                          on_fail=told.append).start()
+    w._thread.join(timeout=5)
+    assert told == ["MakeMKV's library couldn't open the disc (error 7)"] and player.command is None
+
+
+def test_watch_clip_plays_a_decrypted_folders_clip_as_it_is_and_says_what_it_lacks(tmp_path, monkeypatch):
+    import subprocess
+    from disc_detective import menus
+    started = []
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: started.append(cmd) or FakePlayer())
+    monkeypatch.setattr(menus, "_watching", None)
+    root = clip_disc(tmp_path, [unit(0x00, 1), unit(0x00, 2)])
+    assert bdmenus.watch_clip(root, "00016.m2ts", None) == "ffplay"
+    assert bdmenus.watch_clip(root, "00099.m2ts", "ffplay.exe") == "file"
+    assert bdmenus.watch_clip(root, "00016.m2ts", "ffplay.exe", title="S02E02") == "playing"
+    assert started[-1][-2:] == ["-i", bdmenus.clip_path(root, "00016.m2ts")] and "S02E02" in started[-1]
+    (tmp_path / "BDMV" / "STREAM" / "00016.m2ts").write_bytes(unit(0xC0, 1))
+    monkeypatch.setattr(bdmenus, "mmbd_library", lambda: None)
+    assert bdmenus.watch_clip(root, "00016.m2ts", "ffplay.exe") == "library"

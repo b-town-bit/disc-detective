@@ -19,118 +19,10 @@ TITLES = [{"id": "00001.mpls", "clip_list": ",".join(CLIPS), "duration": 6 * LEN
 BAR_LINES = [("LANGUAGES", (190, 405, 300, 430), 0.9), ("EPISODES", (345, 405, 445, 430), 0.9), ("SPECIAL", (495, 395, 580, 415), 0.9)]
 
 
-def line(text, x, y, width=260):
-    return (text, (x, y, x + width, y + 21), 0.95)
-
-
-def test_a_page_of_numbered_buttons():
-    rows = bdcrawl.page_rows([line(">>7) Chuck Versus the Fat Lady", 72, 282), line("8) Chuck Versus the Gravitron", 383, 282),
-                              line("9) Chuck Versus the Sensei", 85, 305)] + BAR_LINES)
-    assert [(r["number"], r["name"], r["marked"]) for r in rows] == [
-        (7, "Chuck Versus the Fat Lady", True), (8, "Chuck Versus the Gravitron", False), (9, "Chuck Versus the Sensei", False)]
-
-
-def test_columns_read_as_one_line_are_two_buttons_and_the_marker_stays_on_its_own():
-    rows = bdcrawl.page_rows([("Chuck Versus the Gravitron >> 1o) Chuck Versus the DeLorean", (80, 305, 640, 326), 0.9),
-                              ("8) Chuck Versus Santa Claus 9) Chuck Versus the Sensei", (80, 330, 640, 350), 0.9)])
-    numbered = {r["number"]: r for r in rows}
-    assert numbered[10]["marked"] and numbered[10]["name"] == "Chuck Versus the DeLorean" and numbered[10]["box"][0] > 300
-    assert numbered[8]["name"] == "Chuck Versus Santa Claus" and numbered[9]["box"][0] > numbered[8]["box"][0]
-    assert not numbered[8]["marked"]
-
-
-def test_a_wrapped_name_joins_its_row_and_the_bar_doesnt():
-    rows = bdcrawl.page_rows([line("12) Chuck Versus the Third", 378, 330), line("Dimension", 410, 352, 90)] + BAR_LINES)
-    assert [r["name"] for r in rows] == ["Chuck Versus the Third Dimension"]
-
-
-def test_no_numbers_takes_the_lines_around_a_marker_and_no_marker_says_no_page():
-    rows = bdcrawl.page_rows([line(">> Pilot", 72, 282), line("Helicopter", 72, 305)] + BAR_LINES)
-    assert [(r["number"], r["name"], r["marked"]) for r in rows] == [(None, "Pilot", True), (None, "Helicopter", False)]
-    assert bdcrawl.page_rows([line("EMERGENCY EXIT ONLY", 300, 200)] + BAR_LINES) == []
-
-
-def test_a_bars_items_touching_side_by_side_are_two_and_a_pages_lines_above_it_none():
-    """Order of the Phoenix's ribbons: Languages and Scene Selections overlap by a few pixels; the
-    Languages page's last lines sit just above the bar."""
-    bar = [("SPECIAL FEATURES", (415, 407, 558, 466), 0.9), ("LANGUAGES", (202, 416, 286, 452), 0.9),
-           ("SCENE SELECTIONS", (281, 424, 412, 458), 0.9)]
-    assert bdcrawl.bar_places(bar) == (None, 2)
-    assert bdcrawl.bar_places(bar + [("Portugues", (455, 391, 535, 411), 0.9), ("Nederlands", (326, 393, 412, 410), 0.9)]) == (None, 2)
-    assert bdcrawl.bar_places(BAR_LINES) == (1, 2)                       # (Chuck's, as it was)
-
-
-def lit_page(lit, rows):
-    """A page of rows of words over grey, row `lit` (or rows) drawn yellow, the rest cream."""
-    from PIL import Image, ImageDraw
-    img = Image.new("RGB", (720, 480), (128, 128, 128))
-    d = ImageDraw.Draw(img)
-    for i, (_, box) in enumerate(rows):
-        d.rectangle([box[0] + 2, box[1] + 3, box[2] - 2, box[3] - 3], fill=(230, 200, 40) if i in lit else (200, 190, 150))
-    return img
-
-
 # Order of the Phoenix's list: rows 13 pixels apart, and a button of two lines
 PHOENIX = [("Play All", (85, 177, 136, 194)), ("Dementors at Little Whinging", (85, 190, 248, 207)),
            ("Grimmauld Place", (87, 206, 180, 220)), ("Harry Potter:", (492, 108, 582, 128)), ("The Magic of Editing", (494, 123, 625, 140))]
 PHOENIX_LINES = [(t, b, 0.9) for t, b in PHOENIX]
-
-
-def test_a_highlight_with_no_marker_is_told_by_which_way_each_line_changed():
-    before, after = lit_page({0}, PHOENIX), lit_page({1}, PHOENIX)
-    groups = bdcrawl.lit_groups(bdcrawl.changed_lines(PHOENIX_LINES, before, after))
-    assert sorted(g[0] for g in groups) == ["Dementors at Little Whinging", "Play All"]      # (13 pixels apart: two buttons)
-    groups = bdcrawl.lit_groups(bdcrawl.changed_lines(PHOENIX_LINES, lit_page({2}, PHOENIX), lit_page({3, 4}, PHOENIX)))
-    assert sorted(g[0] for g in groups) == ["Grimmauld Place", "Harry Potter: The Magic of Editing"]
-
-
-class LitVlc:
-    """A pop-up page with no marker in its words: its highlight a colour, moving down and up its list."""
-    def __init__(self):
-        self.at, self.pressed = 0, []
-
-    def press(self, key):
-        self.pressed.append(key)
-        self.at = max(0, min(2, self.at + {"down": 1, "up": -1}.get(key, 0)))
-
-    def frame(self):
-        return lit_page({self.at}, PHOENIX[:3])
-
-
-def test_where_a_highlight_is_is_found_by_an_arrow_there_and_back():
-    v = LitVlc()
-    v.at = 1
-    c = bdcrawl.Crawler(v, [], [], ".", log=lambda s: None, sleep=lambda s: None, clock=iter(range(0, 10 ** 6)).__next__)
-    c.lit = PHOENIX_LINES[:3]
-    assert c.lit_mark()[0] == "Dementors at Little Whinging" and v.at == 1 and v.pressed == ["down", "up"]
-    assert c.step("down", PHOENIX[1][1])[0] == "Grimmauld Place"
-    assert c.step("down", PHOENIX[2][1]) is None                         # (at the end: it stays)
-
-
-def test_arrows_go_along_a_row_or_between_rows():
-    assert bdcrawl.key_towards((72, 282, 0, 0), (376, 285, 0, 0)) == "right"
-    assert bdcrawl.key_towards((376, 282, 0, 0), (72, 282, 0, 0)) == "left"
-    assert bdcrawl.key_towards((376, 282, 0, 0), (72, 305, 0, 0)) == "down"
-    assert bdcrawl.key_towards((72, 328, 0, 0), (376, 305, 0, 0)) == "up"
-
-
-def test_a_landing_names_a_clip_only_near_its_start():
-    assert bdcrawl.clip_at(ITEMS, 2503) == ("00007", LENGTH, LENGTH)
-    assert bdcrawl.clip_at(ITEMS, 3000) is None
-
-
-def test_a_title_by_its_clip_or_its_one_length():
-    assert bdcrawl.title_of(TITLES, clip="00018") == "00018.m2ts"
-    assert bdcrawl.title_of(TITLES, clip="00099") is None
-    assert bdcrawl.title_of(TITLES, seconds=6 * LENGTH) == "00001.mpls"
-    assert bdcrawl.title_of(TITLES, seconds=LENGTH) is None              # (six of that length: can't say)
-
-
-def test_the_play_all_found_in_the_discs_own_playlists(tmp_path):
-    from tests.test_sting import make_disc, mpls
-    root = make_disc(tmp_path, {"00001.mpls": mpls(["00016", "00007"], seconds=100), "00002.mpls": mpls(["00900"], seconds=200)})
-    assert bdcrawl.play_alls(root, 200) == [("00016", 0.0, 100.0), ("00007", 100.0, 100.0)]
-    assert bdcrawl.play_alls(root, 999) == []
 
 
 # the special features page: a Play All, then two columns of scenes with a line under each
@@ -147,185 +39,26 @@ LOW_TITLES = [{"id": "00010.mpls", "clip_list": "00022", "duration": 64.564}, {"
               {"id": "00040.mpls", "clip_list": "00022,00025,00027,00028", "duration": 218.9}]
 
 
-class FakeVlc:
-    """Chuck's pop-up: opens on its first item, Episodes a press right and activate away, the marker
-    on the last button pressed, left up after a press in the Play All; the top menu after a scene."""
-    frames = 10
 
-    def __init__(self, landing=None, lose_marker=(), lag=0, stuck_up=False, slow_bar=0, low_page=False):
-        # low_page: Chuck S2 D1's, laid out lower: across from the Play All is the right column's second,
-        # its first above that and as high as the heading, reached only going up
-        self.low_page, self.scenes = low_page, SCENES + (LOW_SCENE if low_page else [])
-        self.title, self.time, self.pressed, self.saved = 1, 10.0, [], []
-        self.bar, self.bar_at, self.page, self.at, self.extra_at = False, 0, None, 0, 0
-        self.landing = landing or (lambda i: i * LENGTH)
-        self.lose_marker, self.lag, self.lagging, self.before = lose_marker, lag, 0, 0
-        self.stuck_up, self.slow_bar, self.waiting = stuck_up, slow_bar, 0
-        self.length = 6 * LENGTH
-        self.scenes_pressed = []
-
-    def state(self):
-        return {"title": self.title, "time_ms": int(self.time * 1000), "chapter": 0}
-
-    def titles(self):
-        return [{"index": 0, "menu": True, "seconds": 0}, {"index": 1, "seconds": 6 * LENGTH}]
-
-    def length_ms(self):
-        return self.length * 1000
-
-    def menu(self):
-        """The page again by itself, no bar; the marker back on its Play All."""
-        self.title, self.time, self.bar, self.page, self.extra_at = 0, 0.0, True, "extras", 0
-
-    def press(self, key):
-        self.time += 0.1
-        if key == "popup":
-            self.bar, self.bar_at, self.page = not self.bar, 0, None
-            self.waiting = self.slow_bar if self.bar else 0
-        elif key == "activate" and self.page == "episodes":
-            self.pressed.append(self.at)
-            self.title, self.time, self.page, self.bar = 1, self.landing(self.at), None, self.stuck_up
-        elif key == "activate" and self.page == "extras":
-            if self.extra_at:
-                name = self.scenes[self.extra_at - 1]
-                self.scenes_pressed.append(name[0])
-                self.title, self.time, self.length, self.page, self.bar = 20 + self.extra_at, 0.0, name[4], None, False
-        elif key == "activate" and self.bar:
-            self.page = {1: "episodes", 2: "extras"}.get(self.bar_at)
-        elif self.page == "episodes":
-            move = {"right": 1, "left": -1, "down": 2, "up": -2}[key]
-            self.before = self.at
-            if 0 <= self.at + move < len(NAMES):
-                self.at += move
-            self.lagging = self.lag
-        elif self.page == "extras":
-            # Play All, down its column; right across to the other column's first; off the page below
-            moves = {(0, "down"): 1, (1, "up"): 0, (1, "down"): 2, (2, "up"): 1, (0, "right"): 3, (1, "right"): 3, (2, "right"): 3, (3, "left"): 0}
-            if self.low_page:
-                moves = {(0, "down"): 1, (1, "up"): 0, (1, "down"): 2, (2, "up"): 1, (0, "right"): 4, (1, "right"): 4, (2, "right"): 4,
-                         (4, "left"): 0, (4, "up"): 3, (3, "down"): 4, (3, "left"): 0}
-            self.extra_at = moves.get((self.extra_at, key), self.extra_at)
-        elif self.bar and key == "right":
-            self.bar_at += 1
-
-    def frame(self):
-        return self
-
-    def save(self, path):
-        self.saved.append(path)
-
-    def lines(self):
-        if not self.bar:
-            return []
-        if self.waiting:
-            self.waiting -= 1
-            return []
-        if self.page == "extras":
-            out = [line("DECLASSIFIED SCENES", 125, 55 if self.low_page else 45, 190), line("%sPLAY ALL" % (">>" if not self.extra_at else ""), 169, 74, 84)]
-            for i, (name, under, x, y, _) in enumerate(self.scenes):
-                out += [line("%s%s" % (">>" if self.extra_at == i + 1 else "", name), x, y, 280), line(under, x, y + 17, 280)]
-            return out + [line("ONLINE", 480, 295, 60), line("Visit us at warnerblu.com", 400, 330, 240)] + BAR_LINES
-        if self.page != "episodes":
-            return BAR_LINES
-        shown = self.at
-        if self.lagging:                    # (the marker a frame behind the press)
-            self.lagging -= 1
-            shown = self.before
-        out = []
-        for i, name in enumerate(NAMES):
-            mark = ">>" if i == shown and i not in self.lose_marker else ""
-            out.append(line("%s%d) %s" % (mark, 7 + i, name), W[i][0], W[i][1]))
-        return out + BAR_LINES
+def line(text, x, y, width=260):
+    return (text, (x, y, x + width, y + 21), 0.95)
 
 
-def crawl(monkeypatch, v, tmp_path):
-    clock = {"t": 0.0}
-    if v.low_page:
-        monkeypatch.setattr(sys.modules[__name__], "SCENE_TITLES", LOW_TITLES)
-
-    def sleep(s):
-        clock["t"] += s
-        v.time += s
-
-    monkeypatch.setattr(menus, "rapid_lines", lambda frame, least=None: frame.lines())
-    scene_titles = sys.modules[__name__].SCENE_TITLES
-    c = bdcrawl.Crawler(v, TITLES + scene_titles, ITEMS, str(tmp_path), log=lambda s: None, sleep=sleep, clock=lambda: clock["t"])
-    got = c.crawl(v.titles()[1:], 1)
-    v.extras = c.extras(v.titles()[1:], 1)
-    return got
-
-
-def test_every_button_is_pressed_and_named_for_the_clip_it_lands_on(monkeypatch, tmp_path):
-    v = FakeVlc()
-    pressed = crawl(monkeypatch, v, tmp_path)
-    assert [(p["number"], p["name"], p["title"]) for p in pressed] == [
-        (7 + i, NAMES[i], "%s.m2ts" % CLIPS[i]) for i in range(6)]
-    assert v.pressed == list(range(6))
-
-
-def test_buttons_out_of_the_discs_order_go_by_where_they_land(monkeypatch, tmp_path):
-    """The whole point: the third button plays the fourth clip."""
-    order = [5, 2, 3, 0, 1, 4]
-    pressed = crawl(monkeypatch, FakeVlc(lambda i: order[i] * LENGTH), tmp_path)
-    assert {p["number"]: p["title"] for p in pressed} == {7 + i: "%s.m2ts" % CLIPS[order[i]] for i in range(6)}
-
-
-def test_a_pop_up_left_up_after_a_press_is_closed_first_and_one_slow_to_come_is_waited_for(monkeypatch, tmp_path):
-    for v in (FakeVlc(stuck_up=True), FakeVlc(slow_bar=2)):
-        assert len(crawl(monkeypatch, v, tmp_path)) == 6 and v.pressed == list(range(6))
-
-
-def test_a_button_above_where_the_marker_came_across_is_found_and_the_page_keeps_its_kind(monkeypatch, tmp_path):
-    """Chuck S2 D1's: up from the right column's second is the only way to its first, which sits
-    higher than the heading. Three found against a Play All of four: every way from each, then."""
-    v = FakeVlc(low_page=True)
-    crawl(monkeypatch, v, tmp_path)
-    assert {p["title"] for p in v.extras} == {"00010.mpls", "00014.mpls", "00017.mpls", "00018.mpls"}
-    assert v.scenes_pressed == [SCENES[0][0], LOW_SCENE[0][0]]                 # (the two ends again, not all)
-
-
-def test_a_found_page_tries_no_more_ways_than_it_needs(monkeypatch, tmp_path):
-    v = FakeVlc()
-    keys = []
-    press = v.press
-    v.press = lambda k: (keys.append((v.page, v.extra_at, k)), press(k))
-    crawl(monkeypatch, v, tmp_path)
-    assert not [k for k in keys if k[0] == "extras" and k[1] == 3 and k[2] == "up"]
-
+def readings_of(pressed):
+    """Episode and extra readings as menus.tv_titles gives them, for the namer's tests: each title's number and name,
+    its length, an extra's own kind (what VLC's Blu-ray crawl handed on, till it was removed)."""
+    out = []
+    for p in pressed:
+        number = "%d) " % p["number"] if p.get("number") is not None else ""
+        out.append({"title": p["title"], "text": number + p["name"], "seconds": p["seconds"], "bonus": False, "kind": None,
+                    "page": ["bd", 0, 0], "rect": [round(x) for x in p["box"]], "place": [p["order"]], "image": p.get("image"),
+                    "switch": False, "only_kind": False, "only_cut": False, "commentaries": False})
+        if p.get("extra"):
+            out[-1].update(bonus=True, kind=p.get("kind"), own_name=True)
+    return out
 
 def tall(text, x, y, width=190):
     return (text, (x, y, x + width, y + 28), 0.95)
-
-
-def test_a_scenes_own_words_arent_the_pages_heading():
-    """Chuck S2 D1's "Emmett interviews Chuck" made every scene on its page an interview."""
-    sawyer = {"text": "Chuck Versus Tom Sawyer", "box": (400, 140, 620, 156)}
-    lines = [tall("DECLASSIFIED SCENES", 123, 73), line("Chuck Versus Tom Sawyer", 400, 140), line("Sc. B 29-30", 450, 156),
-             line("Emmett interviews Chuck", 400, 172)]
-    assert bdcrawl.page_heading(lines, [sawyer]) == "DECLASSIFIED SCENES"
-    assert menus.heading_kind(bdcrawl.page_heading(lines, [sawyer])) is None
-    assert bdcrawl.page_heading(lines[1:], [sawyer]) is None           # (the heading unread: still no interview)
-
-
-def test_a_real_heading_gives_the_page_its_kind():
-    assert menus.heading_kind(bdcrawl.page_heading([tall("DELETED SCENES", 123, 41), line("First Date", 84, 100), line("Morgan and Herd", 84, 120)], [])) == "DeletedScene"
-
-
-def test_a_heading_takes_two_signs_and_a_button_not_found_has_only_one():
-    missed = line("Chuck Versus the Break-Up Sc. 27", 375, 72)
-    heading = tall("DELETED SCENES", 123, 73, 190)
-    rest = [line("Morgan and Lester ponder their end", 375, 95), line("Play All", 169, 110), line("Chuck Versus the First Date", 84, 140)]
-    assert bdcrawl.page_heading([missed, heading] + rest, []) == "DELETED SCENES"
-    assert bdcrawl.page_heading([missed] + rest, []) is None             # (the heading unread: nothing's taken for it)
-
-
-def test_a_line_as_tall_as_the_rest_is_a_heading_by_its_colour_and_place():
-    from PIL import Image, ImageDraw
-    page = Image.new("RGB", (720, 480), (150, 30, 30))
-    ImageDraw.Draw(page).rectangle((123, 41, 313, 62), fill=(255, 255, 255))
-    lines = [line("OUTTAKES", 123, 41, 190), line("First Date", 84, 100), line("Morgan and Herd", 84, 120)]
-    assert bdcrawl.page_heading(lines, []) is None                       # (no picture: only its place says so)
-    assert bdcrawl.page_heading(lines, [], page) == "OUTTAKES"
 
 
 def dvd_page(monkeypatch, lines):
@@ -353,11 +86,6 @@ def test_a_pages_type_goes_by_its_heading_line_then_all_its_other_words():
     assert menus.page_kind({"heading": "Theatrical Trailers", "heading_line": None}) == "Trailer"
     assert menus.page_kind({"heading": "Theatrical Trailers"}) == "Trailer"          # (a crawl saved before)
     assert menus.page_kind({"heading": "Bonus Features", "heading_line": "Bonus Features"}) is None
-
-
-def test_the_bar_and_a_link_are_no_heading_however_they_stand_out():
-    lines = [tall("LANGUAGES", 190, 405, 110), tall("ONLINE", 480, 295, 60), line("Morgan and Herd", 84, 120), line("First Date", 84, 100)]
-    assert bdcrawl.page_heading(lines, []) is None
 
 
 PLAIN = [line("First Date", 84, 100), line("Morgan and Herd", 84, 130), line("Tyler arrives", 84, 240), line("The Long Goodbye", 400, 100)]
@@ -658,15 +386,6 @@ def test_art_read_as_text_is_no_heading():
     assert menus.best_heading([art, head], [art, head] + PLAIN) == "BONUS TRAILERS"
 
 
-def test_a_page_of_several_headings_gives_its_titles_no_type():
-    """Which title goes under which is the user's to say, whatever the buttons on the way said."""
-    for second in ("FEATURETTES", "ONLINE"):
-        lines = [tall("DELETED SCENES", 84, 60, 240), tall(second, 84, 200, 240)]
-        assert menus.several_headings(lines, lines + PLAIN)
-        assert bdcrawl.several_headings(lines + PLAIN, [{"text": l[0], "box": l[1]} for l in PLAIN])
-    assert menus.page_kind({"heading_line": "Deleted Scenes", "heading": "Deleted Scenes", "mixed": True}) is None
-
-
 def test_one_heading_or_none_naming_a_type_is_not_several():
     assert not menus.several_headings([tall("DELETED SCENES", 84, 60, 240)], [tall("DELETED SCENES", 84, 60, 240)] + PLAIN)
     lines = [tall("DECLASSIFIED SCENES", 84, 60, 240), tall("ONLINE", 400, 200, 100)]
@@ -680,38 +399,11 @@ def test_menu_options_beside_their_markers_are_no_headings():
     assert not menus.several_headings(lines, lines + PLAIN, names=["TRAILERS", "TRAILERS MUSIC VIDEOS TV SPOTS", "TV SPOTS"])
 
 
-def test_a_button_already_where_it_leads_is_pressed_again_after_the_others(monkeypatch, tmp_path):
-    """Chuck S2 D1: the ad reel over, the Play All just begun, so its first button seemed to do nothing."""
-    v = FakeVlc()
-    v.landing = lambda i: v.time if len(v.pressed) == 1 else i * LENGTH
-    pressed = crawl(monkeypatch, v, tmp_path)
-    assert sorted(p["number"] for p in pressed) == [7 + i for i in range(6)]
-    assert v.pressed == [0, 1, 2, 3, 4, 5, 0]
-
-
-def test_a_button_that_never_moves_is_tried_only_twice(monkeypatch, tmp_path):
-    v = FakeVlc()
-    v.landing = lambda i: v.time if i == 0 else i * LENGTH
-    pressed = crawl(monkeypatch, v, tmp_path)
-    assert v.pressed.count(0) == 2 and sorted(p["number"] for p in pressed) == [8, 9, 10, 11, 12]
-
-
-def test_looking_every_way_stops_once_the_page_adds_up(monkeypatch, tmp_path):
-    v = FakeVlc(low_page=True)
-    keys = []
-    press = v.press
-    v.press = lambda k: (keys.append((v.page, v.extra_at, k)), press(k))
-    crawl(monkeypatch, v, tmp_path)
-    tried = {k for k in keys if k[0] == "extras" and k[2] != "activate"}
-    assert ("extras", 4, "up") in tried and len(v.extras) == 4
-    assert len(tried) < 5 * 4                                           # (five buttons, four ways: not all of them)
-
-
 def test_scenes_on_a_page_of_no_known_kind_still_go_with_their_episodes():
     made = {"title": "00018.mpls", "number": None, "name": "Chuck Versus The Ex Sc. 51 - Sexual Harassment Seminar", "seconds": 90, "box": (0, 0, 1, 1),
             "order": 100, "image": None, "extra": True, "kind": None}
     ep = {"title": "00020.m2ts", "number": 6, "name": "Chuck Versus the Ex", "seconds": LENGTH, "box": (0, 0, 1, 1), "order": 4, "image": None}
-    tv = {"readings": bdcrawl.readings_of([ep, made]), "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
+    tv = {"readings": readings_of([ep, made]), "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     extra = menus.tv_found(tv, {0: {"season": 2, "number": 6, "name": "Chuck Versus the Ex", "score": 1.0, "by": "name"}})["extras"][0]
     assert (extra["season"], extra["episode"], extra["name"]) == (2, 6, "Sc. 51 - Sexual Harassment Seminar")
     assert extra["kind"] == "DeletedScene"
@@ -721,7 +413,7 @@ def found_for(name, kind=None):
     made = {"title": "00018.mpls", "number": None, "name": name, "seconds": 90, "box": (0, 0, 1, 1),
             "order": 100, "image": None, "extra": True, "kind": kind}
     ep = {"title": "00020.m2ts", "number": 6, "name": "Chuck Versus the Ex", "seconds": LENGTH, "box": (0, 0, 1, 1), "order": 4, "image": None}
-    tv = {"readings": bdcrawl.readings_of([ep, made]), "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
+    tv = {"readings": readings_of([ep, made]), "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     return menus.tv_found(tv, {0: {"season": 2, "number": 6, "name": "Chuck Versus the Ex", "score": 1.0, "by": "name"}})["extras"][0]
 
 
@@ -756,84 +448,16 @@ def test_a_pages_word_for_its_titles_stands_over_the_scene_number():
     assert found_for("Chuck Versus the Ex Sc. 51", "Featurette")["kind"] == "Featurette"
 
 
-def test_text_pointing_off_the_disc_is_no_name():
-    for text in ("Visit us at warnerblu.com for", "www.example.co.uk", "WARNERBLU.COM", "see sonypictures.net", "ONLINE", "Online Features",
-                 "DVD-ROM/ONLINE FEATURES", "BD-ROM Features"):
-        assert bdcrawl.NOT_A_NAME.search(text), text
-    for text in ("Morgan goes online.", "Chuck Versus the Online Date Sc. 4", "Sc.9-3", "Dr. Com Sc. 4", "Tyler arrives."):
-        assert not bdcrawl.NOT_A_NAME.search(text), text
-
-
-def test_a_button_pointing_off_the_disc_isnt_counted_or_pressed():
-    assert bdcrawl.LINK.search("warnerblu.com")
-    assert not bdcrawl.LINK.search("Chuck Versus the Online Date Sc. 4")
-
-
 def test_an_address_goes_to_the_back_of_a_dvds_search():
     assert menus.SKIP_RE.search("Visit www.example.com") and menus.SKIP_RE.search("example.net")
     assert not menus.SKIP_RE.search("Dr. Com")
-
-
-def test_a_series_own_word_for_its_scenes_means_nothing_to_the_page():
-    lines = [line("DECLASSIFIED SCENES", 123, 41), line(">> PLAY ALL", 169, 74)]
-    assert menus.heading_kind(bdcrawl.page_heading(lines, [])) is None
-
-
-def test_special_features_are_found_by_their_marker_and_named_by_their_lengths(monkeypatch, tmp_path):
-    v = FakeVlc()
-    crawl(monkeypatch, v, tmp_path)
-    got = {p["title"]: p for p in v.extras}
-    assert set(got) == {"00010.mpls", "00014.mpls", "00017.mpls"}          # never the Play All's
-    assert v.scenes_pressed == [SCENES[0][0], SCENES[-1][0]]               # the two ends: the Play All names the rest
-    assert got["00010.mpls"]["name"] == "Chuck Versus the Fat Lady Sc. 8-10 - Chuck with Jill, Sarah and Casey"
-    assert got["00017.mpls"]["name"] == "Chuck Versus Santa Claus Sc. 13 - Casey and Sarah running toward Buy More"
-    assert not any(p["kind"] for p in v.extras)                           # ("Declassified" says nothing by itself)
-    readings = bdcrawl.readings_of(v.extras)
-    assert all(r["bonus"] and r["own_name"] for r in readings)
-
-
-def test_ends_that_dont_fit_the_play_all_mean_pressing_every_button(monkeypatch, tmp_path):
-    monkeypatch.setitem(SCENE_TITLES[3], "clip_list", "00027,00025,00022")
-    v = FakeVlc()
-    crawl(monkeypatch, v, tmp_path)
-    assert sorted(v.scenes_pressed) == sorted(s[0] for s in SCENES)
-    assert {p["title"]: p["name"].split(" - ")[0] for p in v.extras} == {
-        "00010.mpls": SCENES[0][0], "00014.mpls": SCENES[1][0], "00017.mpls": SCENES[2][0]}
-
-
-def test_no_play_all_means_pressing_every_button(monkeypatch, tmp_path):
-    monkeypatch.setitem(SCENE_TITLES[3], "clip_list", "00022,00025")
-    v = FakeVlc()
-    crawl(monkeypatch, v, tmp_path)
-    assert len(v.scenes_pressed) == 3 and len(v.extras) == 3
-
-
-def test_a_pages_reading_order_goes_down_each_column():
-    b = lambda x, y: {"box": (x, y, x + 280, y + 17)}
-    made = [b(376, 54), b(72, 174), b(72, 97), b(376, 100)]
-    assert [x["box"][:2] for x in bdcrawl.page_order(made)] == [(72, 97), (72, 174), (376, 54), (376, 100)]
-
-
-def test_small_capitals_read_oddly_come_out_plain():
-    assert bdcrawl.plain_caps("Tyler ARRIVES - Extended EmmeTt scene Sc. 8") == "Tyler Arrives - Extended Emmett scene Sc. 8"
-
-
-def test_a_name_stops_at_the_next_buttons_line_even_read_a_little_higher():
-    one = {"text": "Gravitron Sc. 58", "box": (72, 251, 350, 268)}
-    two = {"text": "DeLorean Sc. 59", "box": (72, 290, 350, 306)}
-    lines = [line("Big Mike comes back to Buy More.", 72, 268), line("DeLorean Sc. 59", 80, 287)]
-    assert bdcrawl.button_words(one, [one, two], lines) == "Gravitron Sc. 58 - Big Mike comes back to Buy More"
-
-
-def test_two_of_one_length_name_neither(monkeypatch, tmp_path):
-    assert bdcrawl.title_of([{"id": "a", "duration": 64.5}, {"id": "b", "duration": 64.55}], seconds=64.5) is None
 
 
 def test_scenes_keep_their_own_names_under_their_episode(monkeypatch, tmp_path):
     made = {"title": "00017.mpls", "number": None, "name": "Chuck Versus Santa Claus Sc. 13 - Casey and Sarah", "seconds": 11.3, "box": (0, 0, 1, 1),
             "order": 100, "image": None, "extra": True, "kind": "DeletedScene"}
     ep = {"title": "00001.m2ts", "number": 11, "name": "Chuck Versus Santa Claus", "seconds": LENGTH, "box": (0, 0, 1, 1), "order": 4, "image": None}
-    tv = {"readings": bdcrawl.readings_of([ep, made]), "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
+    tv = {"readings": readings_of([ep, made]), "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     found = menus.tv_found(tv, {0: {"season": 2, "number": 11, "name": "Chuck Versus Santa Claus", "score": 1.0, "by": "name"}})
     assert [e["episode"] for e in found["episodes"]] == [11]
     extra = found["extras"][0]
@@ -987,32 +611,10 @@ def test_a_film_has_no_season_to_go_under():
     assert plan["Title 2"] == "Film (2001) {imdb-tt0000001}/Featurettes/Making Of.mkv"
 
 
-def test_a_marker_that_lags_a_press_is_waited_for(monkeypatch, tmp_path):
-    v = FakeVlc(lag=2)
-    assert len(crawl(monkeypatch, v, tmp_path)) == 6 and v.pressed == list(range(6))
-
-
-def test_a_button_whose_marker_cant_be_read_isnt_pressed(monkeypatch, tmp_path):
-    v = FakeVlc(lose_marker={2})
-    pressed = crawl(monkeypatch, v, tmp_path)
-    assert 2 not in v.pressed and 9 not in [p["number"] for p in pressed]
-
-
-def test_a_landing_inside_a_clip_names_nothing(monkeypatch, tmp_path):
-    pressed = crawl(monkeypatch, FakeVlc(lambda i: i * LENGTH + (500 if i == 1 else 0)), tmp_path)
-    assert 8 not in [p["number"] for p in pressed] and len(pressed) == 5
-
-
-def test_a_title_two_buttons_land_on_is_nobodys():
-    made = lambda n, t: {"title": t, "number": n, "name": "x%d" % n, "seconds": LENGTH, "box": (0, 0, 1, 1), "order": n, "image": None}
-    readings = bdcrawl.readings_of([made(7, "a.m2ts"), made(8, "a.m2ts"), made(9, "b.m2ts")])
-    assert [r["title"] for r in readings] == ["b.m2ts"] and readings[0]["text"] == "9) x9"
-
-
 def test_a_blu_rays_episodes_become_labels_under_its_own_ids():
     pressed = [{"title": "00018.m2ts", "number": 10, "name": "Chuck Versus the DeLorean", "seconds": LENGTH, "box": (0, 0, 1, 1),
                 "order": 3, "image": None}]
-    tv = {"readings": bdcrawl.readings_of(pressed), "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
+    tv = {"readings": readings_of(pressed), "promos": [], "promo_said": {}, "play_alls": [], "opening": []}
     found = menus.tv_found(tv, {0: {"season": 2, "number": 10, "name": "Chuck Versus the DeLorean", "score": 1.0, "by": "name"}})
     labels = menus.detected_tv_labels(found, TITLES)
     assert labels["00018.m2ts"]["episode"] == 10 and labels["00018.m2ts"]["title"] == "Chuck Versus the DeLorean"
@@ -1030,12 +632,6 @@ def test_the_apps_own_labelling_takes_a_blu_rays_ids():
     assert app.detected_for(rep, found)["00018.m2ts"]["episode"] == 10
     assert app.films_by_menus(rep, found) is None
     assert app.suspect_report(found) == "The suspects named 1 episode"
-
-
-def test_no_page_answering_says_so(monkeypatch, tmp_path):
-    v = FakeVlc()
-    v.lines = lambda: BAR_LINES
-    assert crawl(monkeypatch, v, tmp_path) == []
 
 
 def wb_disc(tmp_path):
@@ -1191,9 +787,12 @@ def test_the_scan_only_crawls_a_dvd_as_the_setting_says():
 
 
 def test_during_a_scan_goes_by_each_formats_own_switch(monkeypatch):
-    """During a scan only runs ahead what Detect titles would, on any Blu-ray, film or show, of any style."""
+    """During a scan only runs ahead what Detect titles would, on any Blu-ray, film or show, of any style. A Blu-ray's
+    menus are read from its files alone (the hdmv-menus library, MakeMKV's own to open it), VLC or no VLC; a DVD's
+    by VLC."""
     from disc_detective import bdhdmv
-    monkeypatch.setattr(bdhdmv, "available", lambda: False)
+    monkeypatch.setattr(bdhdmv, "available", lambda: True)
+    monkeypatch.setattr(bdhdmv, "aacs_library", lambda: "libmmbd64.dll")
     disc = {"path": "E:\\", "status": "unidentified", "candidates": []}
 
     def wanting(mode, dvd=False, blu=False):
@@ -1203,27 +802,29 @@ def test_during_a_scan_goes_by_each_formats_own_switch(monkeypatch):
     for kind in ("tv", "movie"):
         film = dict(disc, format="Blu-ray", kind=kind)
         assert wanting("unknown", blu=True).stakeout_in_scan(film, "vlc") and wanting("weak", blu=True).stakeout_in_scan(film, "vlc")
+        assert wanting("unknown", blu=True).stakeout_in_scan(film, None)            # (no VLC: none needed)
         assert not wanting("unknown", dvd=True).stakeout_in_scan(film, "vlc")       # (the DVD switch says nothing of it)
         assert not wanting("never", blu=True).stakeout_in_scan(film, "vlc")
-        assert not wanting("unknown", blu=True).stakeout_in_scan(film, None)        # (no VLC)
     dvd = dict(disc, format="DVD", kind="movie")
     assert wanting("unknown", dvd=True).stakeout_in_scan(dvd, "vlc")
+    assert not wanting("unknown", dvd=True).stakeout_in_scan(dvd, None)            # (a DVD: VLC's)
     assert not wanting("unknown", blu=True).stakeout_in_scan(dvd, "vlc")            # (nor the Blu-ray switch of a DVD)
     known = dict(disc, format="Blu-ray", kind="tv", personal_hit=True, labels={"a": {}}, match={"season": 1}, status="identified (your case files)")
     assert not wanting("unknown", blu=True).stakeout_in_scan(known, "vlc")          # (its titles known: no call to)
-    # no VLC, but a Blu-ray's menus read from its files (the hdmv-menus library, MakeMKV's own to open it)
-    monkeypatch.setattr(bdhdmv, "available", lambda: True)
-    monkeypatch.setattr(bdhdmv, "aacs_library", lambda: "libmmbd64.dll")
     film = dict(disc, format="Blu-ray", kind="movie")
-    assert wanting("unknown", blu=True).stakeout_in_scan(film, None)
-    assert not wanting("unknown", dvd=True).stakeout_in_scan(dict(disc, format="DVD", kind="movie"), None)   # (a DVD: VLC's)
     monkeypatch.setattr(bdhdmv, "aacs_library", lambda: None)
-    assert not wanting("unknown", blu=True).stakeout_in_scan(film, None)            # (nothing to open it with)
+    assert not wanting("unknown", blu=True).stakeout_in_scan(film, "vlc")           # (nothing to open it with, VLC or not)
+    monkeypatch.setattr(bdhdmv, "aacs_library", lambda: "libmmbd64.dll")
+    monkeypatch.setattr(bdhdmv, "available", lambda: False)
+    assert not wanting("unknown", blu=True).stakeout_in_scan(film, "vlc")           # (no hdmv-menus: nothing to read it)
 
 
 def test_a_blu_rays_crawl_in_a_scan_feeds_the_search(monkeypatch):
     """The crawl's readings named and settled as a DVD's are: what it says changes the answer."""
     from disc_detective import app
+    from disc_detective import bdhdmv
+    monkeypatch.setattr(bdhdmv, "available", lambda: True)            # (a Blu-ray's menus read from its files:
+    monkeypatch.setattr(bdhdmv, "aacs_library", lambda: "libmmbd.so")  # the library, MakeMKV's to open it)
     a = app.App.__new__(app.App)
     a.settings = {"bluray_menus": True, "detect_in_scan": "unknown"}
     a._before, a._stakeouts = None, {}
@@ -1298,7 +899,6 @@ def test_a_blu_ray_stakeout_says_so_when_rapidocr_cant_run(monkeypatch):
     a._menu_files = lambda rep: None
     monkeypatch.setattr(menus, "rapid_missing", lambda: True)
     monkeypatch.setattr(bdmenus, "menu_style", lambda root: {"menu": "HDMV", "framework": None})
-    monkeypatch.setattr(bdcrawl, "crawl", lambda *args: pytest.fail("no crawl without a reader"))
     with pytest.raises(menus.NoReader):
         a._stakeout({"format": "Blu-ray", "path": "E:\\", "content_hash": "AB", "titles": []}, "vlc")
     assert issubclass(menus.NoReader, menus.Lost)             # (never an error for a scan)
@@ -1309,7 +909,6 @@ def test_an_unsupported_menu_style_is_logged_and_not_crawled(monkeypatch, caplog
     a = App.__new__(App)
     a.post = lambda *args: pytest.fail("nothing to tell: no stakeout")
     a._menu_files = lambda rep: None
-    monkeypatch.setattr(bdcrawl, "crawl", lambda *args: pytest.fail("not this style"))
     rep = {"format": "Blu-ray", "path": "E:\\", "content_hash": "AB", "titles": []}
     for style in ({"menu": "BD-J", "framework": "onQ"}, {"menu": "BD-J", "framework": None}, {"menu": None, "framework": None}):
         monkeypatch.setattr(bdmenus, "menu_style", lambda root: style)
@@ -1322,6 +921,9 @@ def test_an_unsupported_menu_style_is_logged_and_not_crawled(monkeypatch, caplog
 
 def test_a_scan_goes_on_after_an_unsupported_menu_style(monkeypatch, caplog):
     from disc_detective import app
+    from disc_detective import bdhdmv
+    monkeypatch.setattr(bdhdmv, "available", lambda: True)            # (a Blu-ray's menus read from its files:
+    monkeypatch.setattr(bdhdmv, "aacs_library", lambda: "libmmbd.so")  # the library, MakeMKV's to open it)
     a = app.App.__new__(app.App)
     a.settings = {"bluray_menus": True, "detect_in_scan": "unknown"}
     a._before, a._stakeouts = None, {}
@@ -1358,56 +960,6 @@ def test_a_dvd_films_crawl_keeps_its_feature(monkeypatch):
            "found": {"feature": 1, "feature_name": "", "extras": [], "promos": [], "promo_said": {}, "play_alls": [], "opening": []}}
     found = a._name_titles(raw, {"kind": "movie", "content_hash": "AB", "match": {"name": "Film", "imdb_id": "tt1"}})
     assert found["feature"] == 1
-
-
-def film_crawl():
-    """What a film Blu-ray's buttons might play: one Play, two extras."""
-    press = lambda title, name, seconds, n: {"title": title, "number": None, "name": name, "seconds": seconds, "box": (70, 50 * n, 300, 50 * n + 20),
-                                             "order": n, "image": "bd_page.png", "vlc": n}
-    return [press("00800.mpls", "Play Movie", 7200.0, 1)], [press("00810.mpls", "Gag Reel", 300.0, 1), press("00811.mpls", "Theatrical Trailer", 120.0, 2)]
-
-
-def test_a_blu_rays_crawl_comes_as_pages_for_the_shared_rules(tmp_path):
-    pressed, extras = film_crawl()
-    c = types.SimpleNamespace(extras_heading=("BONUS FEATURES", False), playing=9)
-    raw = bdcrawl.crawl_result("E:\\", c, pressed, extras, str(tmp_path))
-    bar, films, more = raw["pages"]
-    assert [b["text"] for b in bar["buttons"]] == ["Episodes", "Special Features"]
-    assert films["route"] == [{"page": 0, "program": 1, "button": 1}] and more["route"] == [{"page": 0, "program": 1, "button": 2}]
-    assert more["heading_line"] == "BONUS FEATURES" and more["buttons"][1]["plays"] == {"title": "00811.mpls", "chapter": 1, "seconds": 120.0}
-    assert raw["found"]["feature"] == "00800.mpls" and [e["title"] for e in raw["found"]["extras"]] == ["00810.mpls", "00811.mpls"]
-    # (the shared rules' answer, as labels on a Blu-ray's ids)
-    titles = [{"id": t, "role": "extra", "duration": 300} for t in ("00800.mpls", "00810.mpls", "00811.mpls")]
-    labels = menus.detected_labels(raw["found"], titles)
-    assert labels["00800.mpls"]["type"] == "MainMovie" and labels["00810.mpls"]["title"] == "Gag Reel"
-    assert labels["00811.mpls"]["type"] == "Trailer"
-    # kept, to go over again with no disc
-    kept = json.load(open(tmp_path / "crawl.json", encoding="utf-8"))
-    assert menus.menu_titles(kept)["feature"] == "00800.mpls" and kept["tv"]["readings"][0]["title"] == "00800.mpls"
-    words = (tmp_path / "crawl.txt").read_text(encoding="utf-8")
-    assert "plays title 00810.mpls" in words and "Feature:  title 00800.mpls" in words
-
-
-def test_a_shows_blu_ray_keeps_its_readings_and_a_film_goes_by_its_pages(monkeypatch, tmp_path):
-    from disc_detective import app
-    v = FakeVlc()
-    got = crawl(monkeypatch, v, tmp_path)
-    c = types.SimpleNamespace(extras_heading=(None, False), playing=1)
-    raw = bdcrawl.crawl_result("E:\\", c, got, v.extras, str(tmp_path))
-    assert raw["tv"]["readings"] == bdcrawl.readings_of(got + v.extras)                # (a show: as it was)
-    assert raw["pages"][1]["buttons"][0]["text"] == "7) " + NAMES[0]
-    a = app.App.__new__(app.App)
-    a.scan_args = lambda: types.SimpleNamespace(imdb_dir=None, offline=True, db=None, tmdb_key=None)
-    asked = []
-    a._name_episodes = lambda *args: asked.append("episodes") or {}
-    monkeypatch.setattr(core, "imdb_open", lambda *args, **kw: (_ for _ in ()).throw(OSError()))
-    monkeypatch.setattr(core, "library_open", lambda *args: types.SimpleNamespace(close=lambda: None))
-    monkeypatch.setattr(core, "film_credits", lambda *args, **kw: [])
-    a._name_titles(raw, {"kind": "tv", "content_hash": "AB", "match": {}})
-    assert asked == ["episodes"]
-    asked.clear()
-    found = a._name_titles(raw, {"kind": "movie", "content_hash": "AB", "match": {"name": "Film", "imdb_id": "tt1"}})
-    assert not asked and found["feature"] == raw["found"]["feature"]
 
 
 def test_a_title_id_is_a_dvds_number_or_a_blu_rays_own():
@@ -1490,7 +1042,6 @@ def test_a_reading_called_off_stops_at_its_next_step_and_doesnt_fall_back(monkey
     monkeypatch.setattr(bdmenus, "crawlable", lambda style: True)
     monkeypatch.setattr(menus, "rapid_missing", lambda: False)
     monkeypatch.setattr(bdhdmv, "available", lambda: True)
-    monkeypatch.setattr(bdcrawl, "crawl", lambda *args: pytest.fail("no fallback to VLC once called off"))
 
     def reading(root, titles, out, log, progress=None, **k):
         progress("setup")

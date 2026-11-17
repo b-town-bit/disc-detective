@@ -599,6 +599,14 @@ def project_labels(titles, entries, film=None, known_film=None, texts=None):
     for key, (kind, title, why) in menus.name_extras(extras, film).items():
         out[key] = {"type": kind, "title": title, "note": menus.with_why(said[key]["note"], why),
                     **({"exact": said[key]["exact"]} if kind != Type.PROMO else {})}
+    # (what the menus offer names it, as on any disc, the user's: a title no button plays, all of whose clip is in
+    # one a button does -- the menus' run of them, a Play All -- is that one's piece, not labelled: Muppets from
+    # Space's previews, Smurfs and Zoo, offered only as "Previews" one after the other)
+    if texts:
+        from .core import title_pieces
+        for piece in title_pieces(titles, set(texts)):
+            if piece not in texts:
+                out.pop(piece, None)
     return out
 
 
@@ -705,3 +713,182 @@ def watch_playlist(source, playlist, ffplay, title=None, video=None):
         + ["-playlist", str(num), "-i", "bluray:" + root], env=env, creationflags=flags, close_fds=True,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return True
+
+
+# ---- an episode only a Play All plays (Chuck Season 2's): its own clip, played whole ----
+# ffmpeg's bluray: input can't seek into such a Play All (every clip in it starts its clock at the same time: -ss
+# finds no frame past the first clip, -chapter is ignored), but each episode is a clip of its own: its file, read
+# in aligned units, decrypted by the user's own MakeMKV (libmmbd's libaacs functions), piped into ffplay. A
+# Blu-ray scan needs MakeMKV anyway: nothing fetched, nothing shipped (the user's, 2026-11-16).
+
+UNIT = 6144                 # an aligned unit: 32 source packets, AACS decrypts one at a time
+ENCRYPTED = 0xC0            # the first byte's copy permission bits: set, the unit is encrypted
+MMBD_NAMES = {"nt": ("libmmbd64.dll", "libmmbd.dll"), "darwin": ("libmmbd.dylib",), "posix": ("libmmbd.so.0", "libmmbd.so")}
+MMBD_DIRS = {"darwin": ("/Applications/MakeMKV.app/Contents/lib",), "posix": ("/usr/lib", "/usr/local/lib", "/usr/lib/x86_64-linux-gnu")}
+# (macOS and Linux names and places as MakeMKV installs them: untested)
+
+
+def mmbd_library():
+    """MakeMKV's libmmbd, as installed with it: the file (the 64-bit one for a 64-bit Python), or None."""
+    import sys
+    system = "nt" if os.name == "nt" else ("darwin" if sys.platform == "darwin" else "posix")
+    names = MMBD_NAMES[system]
+    if system == "nt":
+        names = names[:1] if sys.maxsize > 2 ** 32 else names[1:]
+        dirs = decryption_dirs()
+    else:
+        dirs = list(MMBD_DIRS[system])
+    for d in dirs:
+        for n in names:
+            if os.path.isfile(os.path.join(d, n)):
+                return os.path.join(d, n)
+    return None
+
+
+def clip_path(source, clip):
+    """A clip's file on a Blu-ray (a drive or a folder): "00016.m2ts" (or "00016") -> BDMV/STREAM/00016.m2ts."""
+    from . import core
+    bdmv = core.find_child(source, "BDMV") or os.path.join(source, "BDMV")
+    stream = core.find_child(bdmv, "STREAM") or os.path.join(bdmv, "STREAM")
+    return os.path.join(stream, os.path.splitext(os.path.basename(clip))[0] + ".m2ts")
+
+
+def clip_encrypted(path, units=16):
+    """True if a clip's first aligned units are encrypted (a disc's), False if not (a decrypted backup's)."""
+    with open(path, "rb") as fh:
+        for _ in range(units):
+            u = fh.read(UNIT)
+            if len(u) < UNIT:
+                break
+            if u[0] & ENCRYPTED:
+                return True
+    return False
+
+
+class Aacs:
+    """libaacs's functions in MakeMKV's libmmbd, through ctypes: a disc opened, its units decrypted in place."""
+
+    def __init__(self, library, root):
+        import ctypes
+        if os.name == "nt":
+            os.add_dll_directory(os.path.dirname(library))
+        self._c = ctypes
+        lib = self._lib = ctypes.CDLL(library)
+        lib.aacs_open2.restype = ctypes.c_void_p
+        lib.aacs_open2.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
+        lib.aacs_decrypt_unit.restype = ctypes.c_int
+        lib.aacs_decrypt_unit.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+        lib.aacs_close.argtypes = [ctypes.c_void_p]
+        err = ctypes.c_int(0)
+        self._h = lib.aacs_open2(os.fsencode(root), None, ctypes.byref(err))
+        if not self._h:
+            raise OSError("MakeMKV's library couldn't open the disc (error %d)" % err.value)
+        self._buf = ctypes.create_string_buffer(UNIT)
+
+    def decrypt(self, unit):
+        self._c.memmove(self._buf, unit, UNIT)
+        if self._lib.aacs_decrypt_unit(self._h, self._buf) != 1:
+            raise OSError("MakeMKV's library couldn't decrypt the clip")
+        return self._buf.raw
+
+    def close(self):
+        h, self._h = self._h, None
+        if h:
+            self._lib.aacs_close(h)
+
+
+class ClipWatch:
+    """A clip played whole in ffplay's window, decrypted as it's read (Aacs), from a thread: opening the disc first
+    (MakeMKV's library takes 12-17 s), ffplay's window after. Stands in for its Popen in menus._watching: poll()
+    None while playing or opening, kill() stops it all and closes the disc. failed: why it stopped short, if it did
+    (on_fail told, from its thread)."""
+
+    def __init__(self, command, path, root, library, on_fail=None, opener=Aacs, popen=None):
+        import subprocess
+        import threading
+        self.command, self.path, self.root, self.library = command, path, root, library
+        self.on_fail, self.opener = on_fail, opener
+        self.popen = popen or subprocess.Popen
+        self.proc, self.failed, self._stop = None, None, threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+        return self
+
+    def _run(self):
+        import subprocess
+        aacs = None
+        try:
+            aacs = self.opener(self.library, self.root)
+            if self._stop.is_set():
+                return
+            flags = 0x08000000 if os.name == "nt" else 0       # (CREATE_NO_WINDOW: its picture, no console)
+            self.proc = self.popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, creationflags=flags, close_fds=True)
+            with open(self.path, "rb") as fh:
+                while not self._stop.is_set() and self.proc.poll() is None:
+                    unit = fh.read(UNIT)
+                    if len(unit) < UNIT:
+                        break
+                    if unit[0] & ENCRYPTED:
+                        unit = aacs.decrypt(unit)
+                    try:
+                        self.proc.stdin.write(unit)
+                    except OSError:         # (its window closed)
+                        break
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass
+        except OSError as exc:
+            if not self._stop.is_set():
+                self.failed = str(exc)
+                if self.on_fail:
+                    self.on_fail(self.failed)
+        finally:
+            if aacs is not None:
+                aacs.close()
+
+    def poll(self):
+        if self._thread.is_alive():
+            return None
+        return self.proc.poll() if self.proc is not None else 0
+
+    def kill(self):
+        self._stop.set()
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.kill()
+        self._thread.join(timeout=5)
+
+
+def watch_clip(source, clip, ffplay, title=None, video=None, on_fail=None):
+    """Plays one clip of a Blu-ray (a drive or a folder) whole in ffplay's window: an episode only a Play All plays
+    ("00016.m2ts"). A decrypted folder's file as it is (its window can seek); a disc's decrypted as it's read by
+    the user's MakeMKV (ClipWatch: no seeking, the window after the disc's opened). One window at a time
+    (menus._watching). "playing" (its window open), "opening" (the disc being opened, its window after: on_fail
+    told if it can't be); else why not: "ffplay", "file" (no such clip), "library" (no MakeMKV)."""
+    import subprocess
+    from . import menus
+    if not ffplay:
+        return "ffplay"
+    path = clip_path(source, clip)
+    menus.stop_watching()
+    try:
+        locked = clip_encrypted(path)
+    except OSError:
+        return "file"
+    size = watch_size(video)
+    head = [ffplay, "-hide_banner", "-loglevel", "error", "-window_title", title or clip, "-sn"] + \
+        (["-x", str(size[0]), "-y", str(size[1])] if size else [])
+    flags = 0x08000000 if os.name == "nt" else 0
+    if not locked:
+        menus._watching = subprocess.Popen(head + ["-i", path], creationflags=flags, close_fds=True,
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "playing"
+    library = mmbd_library()
+    if not library:
+        return "library"
+    root = source if source.endswith(("\\", "/")) else source + os.sep
+    menus._watching = ClipWatch(head + ["-f", "mpegts", "-i", "pipe:0"], path, root, library, on_fail).start()
+    return "opening"

@@ -10,7 +10,7 @@ msgstr ""
 "Project-Id-Version: Disc Detective 0.4.dev0\n"
 "Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
 "\n"
-"POT-Creation-Date: 2026-11-15 06:29-0600\n"
+"POT-Creation-Date: 2026-11-17 12:15-0600\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -232,12 +232,7 @@ msgid "menu style not yet supported ({style})"
 msgstr ""
 
 #: disc_detective/app.py
-msgid "reading the HDMV menus failed: the crawl instead"
-msgstr ""
-
-#: disc_detective/app.py
-#, python-brace-format
-msgid "reading the pop-up menu of {root} with VLC {vlc}"
+msgid "reading the HDMV menus failed"
 msgstr ""
 
 #: disc_detective/app.py
@@ -476,84 +471,12 @@ msgstr ""
 
 #: disc_detective/bdcrawl.py
 #, python-brace-format
-msgid "[{k}/{n}] button {number} {name}"
-msgstr ""
-
-#: disc_detective/bdcrawl.py
-msgid "its marker wasn't seen on it: not pressed"
-msgstr ""
-
-#: disc_detective/bdcrawl.py
-msgid "nothing moved"
-msgstr ""
-
-#: disc_detective/bdcrawl.py
-#, python-brace-format
-msgid "title {title} at {at:.0f} s: {name}"
-msgstr ""
-
-#: disc_detective/bdcrawl.py
-#, python-brace-format
-msgid "title {title} at {at:.0f} s: not one title's start"
-msgstr ""
-
-#: disc_detective/bdcrawl.py
-msgid ""
-"special features: no marker in its words, its highlight followed by its "
-"colour"
-msgstr ""
-
-#: disc_detective/bdcrawl.py
-#, python-brace-format
-msgid "title {title}: {name}"
-msgstr ""
-
-#: disc_detective/bdcrawl.py
-#, python-brace-format
-msgid "title {title}: not one of the disc's titles"
-msgstr ""
-
-#: disc_detective/bdcrawl.py
-#, python-brace-format
-msgid ""
-"special features: {n} button, not what the page's Play All has: every way"
-" from each"
-msgid_plural ""
-"special features: {n} buttons, not what the page's Play All has: every "
-"way from each"
-msgstr[0] ""
-msgstr[1] ""
-
-#: disc_detective/bdcrawl.py
-#, python-brace-format
-msgid "special features: {n} button"
-msgid_plural "special features: {n} buttons"
-msgstr[0] ""
-msgstr[1] ""
-
-#: disc_detective/bdcrawl.py
-#, python-brace-format
-msgid "[{k}/{n}] button {name}"
-msgstr ""
-
-#: disc_detective/bdcrawl.py
-msgid ""
-"its two ends land where the page's Play All has them: its order names the"
-" rest"
-msgstr ""
-
-#: disc_detective/bdcrawl.py
-#, python-brace-format
 msgid "the menu's episode {number} plays {playlist}, not among the disc's titles"
 msgstr ""
 
 #: disc_detective/bdcrawl.py
 #, python-brace-format
 msgid "the disc's menu files list {count} of its titles, nothing played"
-msgstr ""
-
-#: disc_detective/bdcrawl.py
-msgid "no page of episodes: a film's pop-up, or none answered"
 msgstr ""
 
 #: disc_detective/bdhdmv.py
@@ -1039,6 +962,13 @@ msgstr ""
 #: disc_detective/menus.py
 #, python-brace-format
 msgid "questioning page {page} of title set {vts} ({k} of {n})"
+msgstr ""
+
+#: disc_detective/menus.py
+#, python-brace-format
+msgid ""
+"page {page} of title set {vts}: its words look to be in the subpicture: "
+"each of its {n} buttons pictured selected ({seconds:.0f} s)"
 msgstr ""
 
 #: disc_detective/menus.py

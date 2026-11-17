@@ -414,9 +414,10 @@ def test_detected_labels():
     assert misread["Title 2"]["type"] == "Trailer"            # a letter misread (Abbott and Costello Go to Mars)
     # what a player shows before the menu (Jurassic World's preview reel, and an 85 s one the
     # scan called junk): previews, even set aside as junk
-    reel = [{"id": "Title 10", "role": "feature"}, {"id": "Title 2", "role": "junk"}, {"id": "Title 3", "role": "extra"}]
+    reel = [{"id": "Title 10", "role": "feature"}, {"id": "Title 2", "role": "junk", "duration": 8.0},
+            {"id": "Title 3", "role": "extra", "duration": 150.0}]
     previews = menus.detected_labels({"feature": 10, "extras": [], "opening": [2, 3]}, reel)
-    assert previews["Title 3"]["type"] == previews["Title 2"]["type"] == "Promo"
+    assert previews["Title 3"]["type"] == "Promo" and "Title 2" not in previews     # (8 s: a logo, left be)
     assert previews["Title 3"]["title"] == "Previews" and "before the menu" in previews["Title 3"]["note"]
 
 
@@ -612,6 +613,13 @@ def test_a_titles_picture_outlines_the_words_read(tmp_path):
     pics = menus.title_pictures(out, str(tmp_path))
     assert pics[38]["rect"] == [148, 311, 350, 349] and pics[38]["button"] == [76, 285, 397, 349]
     assert pics[39]["rect"] == pics[39]["button"] == [76, 351, 397, 384]       # (not known: the button's)
+    # (a run of ads one button starts: each shown as its first is, where the button's words were read -- The
+    # Sorcerer's Apprentice's Sneak Peeks)
+    out = {"pages": [{"domain": 17, "page": 48, "program": 2, "route": [], "image": "page_17_48_2.png",
+                      "buttons": [{"n": 3, "rect": [444, 360, 499, 409], "text": "Sneak Peeks", "words": [454, 341, 494, 379],
+                                   "plays": {"title": 66, "chapter": 1, "after": [70, 74]}}]}]}
+    pics = menus.title_pictures(out, str(tmp_path))
+    assert pics[66]["rect"] == pics[70]["rect"] == pics[74]["rect"] == [454, 341, 494, 379]
 
 
 def test_a_reading_says_where_it_was_read(monkeypatch):
@@ -1471,6 +1479,8 @@ def test_tiny_buttons_named_by_the_pages_layout(monkeypatch):
     assert [got.get(tuple(r)) for r in rects[:6]] == ["Amazing", "Epic", "Thread of Hope", "Upside Down",
                                                       "Suit Up", "Blockbuster Countdown Thursday"]
     assert got.get(tuple(rects[6])) != "Review #1 MARKETING"         # (a panel under it, not stacked)
+    # (without the text grouping: a blank page, no lettering to group -- test_menu_pipelines has it grouped)
+    monkeypatch.setattr(menus, "TEXT_BLOCKS", False)
     assert menus.button_words(img, rects[1], rects) == "Epic"
     # where it was read, handed on with it: the name it was read from, not the sliver's own area
     assert menus.where_read(menus.button_words(img, rects[1], rects)) == [272, 160, 311, 179]
@@ -2268,3 +2278,226 @@ def test_a_play_all_or_its_clips_whichever_the_menus_name():
     core.apply_labels(titles, labels)
     assert [x["role"] for x in titles] == ["feature", "play-all", "extra", "extra"]
     assert titles[1]["note"] == "plays 00711.mpls, 00712.mpls (each named)"
+
+
+def _menu_frame(btns, lit=None, level=None, words=True):
+    """A DVD menu frame (720x480): each button's name in the subpicture (words), the highlighted one (lit) in gold;
+    over a flat grey (level: the video darkened, the subpicture still drawn), else over a busy backdrop."""
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (720, 480), (level,) * 3 if level is not None else (40, 90, 140))
+    d = ImageDraw.Draw(img)
+    if level is None:
+        for x in range(0, 720, 24):
+            d.line((x, 0, x + 200, 480), fill=(70, 120, 60), width=6)
+    for b in btns:
+        x0, y0, x1, y1 = b["rect"]
+        if b["n"] == lit:
+            d.rectangle((x0 + 4, y0 + 4, x1 - 4, y1 - 4), fill=(230, 180, 40))
+        elif words:
+            d.rectangle((x0 + 10, y0 + 12, x1 - 10, y1 - 12), fill=(240, 240, 240))
+    if level is not None:
+        img.info["dark"], img.info["level"] = True, level
+    return img
+
+
+def _menu_btns():
+    rect = lambda k: [100, 60 + 70 * k, 400, 110 + 70 * k]
+    out = []
+    for k in range(4):
+        n = k + 1
+        out.append({"n": n, "rect": rect(k), "auto": False, "up": n - 1 if n > 1 else 0, "down": n + 1 if n < 4 else 0,
+                    "left": 0, "right": 0, "cmd": {"op": "vts_title", "title": n}})
+    return out
+
+
+def test_a_pages_words_in_its_subpicture_are_told_over_a_flat_grey():
+    """_subpicture_words: over the video darkened the subpicture still shows; most unselected buttons showing
+    lettering there: the page's words are in it (WALL-E's); only the highlighted one showing: a plain page."""
+    btns = _menu_btns()
+    assert menus._subpicture_words([_menu_frame(btns, lit=1, level=0), _menu_frame(btns, lit=1, level=255)], btns, 1)
+    plain = [_menu_frame(btns, lit=1, level=0, words=False), _menu_frame(btns, lit=1, level=255, words=False)]
+    assert not menus._subpicture_words(plain, btns, 1)
+
+
+def test_a_subpicture_pages_buttons_are_each_pictured_selected(tmp_path, monkeypatch):
+    """On a page whose words are in its subpicture, the crawl moves the highlight onto each button in turn and
+    pictures it selected, then back where it was; on a plain page nothing's moved. The pictures are a crawl's
+    buttons' only if its words prove to be in the subpicture (crawl)."""
+    btns = _menu_btns()
+    monkeypatch.setattr(menus, "pause", lambda s: None)
+
+    class Vlc:
+        def __init__(self, words):
+            self.lit, self.level, self.words, self.keys = 1, None, words, []
+            self.is_dark = False
+
+        def dark(self, on, level=0):
+            self.level, self.is_dark = (level if on else None), on
+
+        def settle(self, n=3, limit=1.5):
+            return True
+
+        def frame(self):
+            return _menu_frame(btns, self.lit, self.level, self.words)
+
+        def press(self, key):
+            self.keys.append(key)
+            self.lit = {b["n"]: b for b in btns}[self.lit][key] or self.lit
+
+    st = (1, 2, 1)
+    pages = {(1, 2): {"buttons": btns, "program_buttons": [btns]}}
+    for words, pictured in ((True, {1, 2, 3, 4}), (False, set())):
+        c = menus._Crawler("C:/VLC", "dvd:///E:/", pages, str(tmp_path), lambda s: None)
+        c.v = Vlc(words)
+        c._picture_each(st, c.v.frame(), 1, btns)
+        assert set(c.shots.get(st, {})) == pictured
+        assert c.v.lit == 1 and c.v.level is None             # (left as it was: highlight and video)
+        if words:
+            assert c.v.keys == ["down", "down", "down", "up", "up", "up"]
+            for n, name in c.shots[st].items():
+                from PIL import Image
+                with Image.open(os.path.join(str(tmp_path), name)) as im:   # (each with its own button lit)
+                    x0, y0, x1, y1 = {b["n"]: b for b in btns}[n]["rect"]
+                    assert im.convert("RGB").getpixel((x0 + 6, y0 + 6)) == (230, 180, 40)
+        c.pool.shutdown(wait=False)
+        c.more.shutdown(wait=False)
+
+
+def test_a_play_all_the_menus_name_alone_is_labelled_by_its_buttons_name():
+    """A Play All the scan knows, all the menus offer of its clips (Chuck S1 D1's "Declassified Scenes": its five
+    scenes in a row, no button of their own): an extra by its button's own name (a name of its own: not its
+    heading, "ADDITIONAL FOOTAGE"), labelled; its clips its pieces, left be."""
+    out = {"reader": "rapidocr", "scan_play_alls": ["00026.mpls"], "pages": [
+        {"domain": "bd", "page": 2, "program": 1, "route": [], "image": "p.png", "heading": "", "buttons": [
+            {"n": 1, "rect": [0, 20, 9, 29], "text": "Play Episode", "plays": {"title": "00012.mpls", "chapter": 1, "seconds": 17958.0}},
+            {"n": 4, "rect": [0, 0, 9, 9], "text": "Declassified Scenes", "heading": "ADDITIONAL FOOTAGE",
+             "plays": {"title": "00026.mpls", "chapter": 1, "seconds": 344.0}}]}]}
+    found = menus.menu_titles(out)
+    assert [(e["title"], e["name"]) for e in found["extras"]] == [("00026.mpls", "Declassified Scenes")]
+    titles = [{"id": "00026.mpls", "role": "play-all", "duration": 344.0},
+              {"id": "00032.mpls", "role": "junk", "duration": 25.0}]
+    labels = menus.detected_labels(found, titles)
+    assert labels["00026.mpls"]["title"] == "Declassified Scenes" and "00032.mpls" not in labels
+
+
+def test_an_ad_run_the_menus_offer_alone_is_labelled_and_its_ads_are_its_pieces():
+    """A Play All of ads the menus offer as one ("SNEAK PEEKS", two previews in a row, no button of their own --
+    Muppets from Space's): labelled a promo, as TheDiscDB gets them, its previews its pieces."""
+    out = {"reader": "rapidocr", "scan_play_alls": ["Title 5"], "pages": [
+        {"domain": 1, "page": 2, "program": 1, "route": [], "image": "p.png", "heading": "", "buttons": [
+            {"n": 1, "rect": [0, 20, 9, 29], "text": "Play Movie", "plays": {"title": 1, "chapter": 1, "seconds": 5292.0}},
+            {"n": 2, "rect": [0, 0, 9, 9], "text": "Sneak Peeks", "plays": {"title": 5, "chapter": 1, "seconds": 116.0}}]}]}
+    found = menus.menu_titles(out)
+    assert found["promos"] == [5]
+    titles = [{"id": "Title 1", "role": "feature", "duration": 5292.0, "clips": "1"},
+              {"id": "Title 5", "role": "play-all", "duration": 116.0, "clips": "6 7"},
+              {"id": "Title 6", "role": "junk", "duration": 60.0, "clips": "6"},
+              {"id": "Title 7", "role": "junk", "duration": 56.0, "clips": "7"}]
+    labels = menus.detected_labels(found, titles)
+    assert labels["Title 5"]["type"] == "Promo" and "Title 6" not in labels and "Title 7" not in labels
+
+
+def test_a_play_all_button_named_by_its_heading_when_nothing_else_plays_its_titles():
+    """A DVD page's "Play All" under its heading ("DELETED SCENES"), its scenes no button of their own: named by its
+    heading, an extra, its scenes its pieces; with a button for one of its scenes, a Play All, as before."""
+    def out(more=()):
+        return {"reader": "rapidocr", "pages": [
+            {"domain": 1, "page": 2, "program": 1, "route": [], "image": "p.png", "heading": "", "buttons": [
+                {"n": 1, "rect": [0, 20, 9, 29], "text": "Play Movie", "plays": {"title": 1, "chapter": 1, "seconds": 5292.0}},
+                {"n": 2, "rect": [0, 0, 9, 9], "text": "Play All", "heading": "DELETED SCENES",
+                 "plays": {"title": 5, "chapter": 1, "seconds": 300.0}}] + list(more)}]}
+    titles = [{"id": "Title 1", "role": "feature", "duration": 5292.0, "clips": "1"},
+              {"id": "Title 5", "role": "play-all", "duration": 300.0, "clips": "6 7"},
+              {"id": "Title 6", "role": "extra", "duration": 140.0, "clips": "6"},
+              {"id": "Title 7", "role": "extra", "duration": 160.0, "clips": "7"}]
+    labels = menus.detected_labels(menus.menu_titles(out()), titles)
+    assert (labels["Title 5"]["type"], labels["Title 5"]["title"]) == ("DeletedScene", "Deleted Scenes")
+    assert "Title 6" not in labels and "Title 7" not in labels
+    scene = {"n": 3, "rect": [0, 40, 9, 49], "text": "The Long Goodbye", "plays": {"title": 6, "chapter": 1, "seconds": 140.0}}
+    labels = menus.detected_labels(menus.menu_titles(out([scene])), titles)
+    assert "Title 5" not in labels and labels["Title 6"]["title"] == "The Long Goodbye"
+
+
+def test_what_plays_before_the_menu_is_previews_only_if_long_enough_and_numbered():
+    """Before the menu: a clip long enough to be a trailer "Previews" (several: "Previews 1", "Previews 2", in the
+    order they play); a short one (a studio's logo, a warning: Chuck's 12-second clips) left as the scan has it."""
+    titles = [{"id": "Title 1", "role": "junk", "duration": 12.0}, {"id": "Title 2", "role": "junk", "duration": 95.0},
+              {"id": "Title 3", "role": "junk", "duration": 64.0}]
+    assert menus.opening_names({"opening": [2]}, titles) == {"Title 2": "Previews"}
+    assert menus.opening_names({"opening": [1, 3, 2]}, titles) == {"Title 3": "Previews 1", "Title 2": "Previews 2"}
+    found = {"feature": 9, "extras": [], "opening": [1, 2]}
+    labels = menus.detected_labels(found, titles + [{"id": "Title 9", "role": "feature", "duration": 5000.0}])
+    assert labels["Title 2"]["title"] == "Previews" and "Title 1" not in labels
+
+
+def test_a_button_no_one_can_get_to_isnt_offered():
+    """reachable_buttons: from what a page opens on (or a command selects), the buttons the arrows lead to. Chuck S1
+    D2's "Chuck's World" (4): its arrows only to itself, none to it, the page opening on 5 -- not reachable; DVD-style
+    neighbours alike; no arrows known at all, every one."""
+    nb = lambda up, down, left, right: {"up": up, "down": down, "left": left, "right": right}
+    page = [{"id": 4, "neighbours": nb(4, 4, 4, 4)}, {"id": 5, "neighbours": nb(5, 6, 5, 12)},
+            {"id": 6, "neighbours": nb(5, 7, 6, 12)}, {"id": 7, "neighbours": nb(6, 7, 7, 12)},
+            {"id": 12, "neighbours": nb(12, 12, 5, 12)}]
+    assert menus.reachable_buttons(page, {5}) == {5, 6, 7, 12}
+    dvd = [{"n": 1, "up": 2, "down": 2, "left": 1, "right": 1}, {"n": 2, "up": 1, "down": 1, "left": 2, "right": 2},
+           {"n": 3, "up": 3, "down": 3, "left": 3, "right": 3}]
+    assert menus.reachable_buttons(dvd, {1}) == {1, 2}
+    assert menus.reachable_buttons([{"id": 1}, {"id": 2}], set()) == {1, 2}
+
+
+def test_an_extras_description_goes_with_its_name_through_the_namer():
+    """The words a menu prints under a button's name (Harry Potter's): the extra's label keeps them as its
+    description, beside its name, the name itself unchanged."""
+    titles = [{"id": "Title 1", "role": "feature"}, {"id": "Title 3", "role": "extra"}, {"id": "Title 4", "role": "extra"}]
+    found = {"feature": 1, "promos": [],
+             "extras": [{"title": 3, "name": "The Hidden Secrets of Harry Potter",
+                         "description": "Take a thrilling look back through the previous movies."},
+                        {"title": 4, "name": "Conjuring a Scene"}]}
+    labels = menus.detected_labels(found, titles)
+    assert labels["Title 3"]["title"] == "The Hidden Secrets of Harry Potter"
+    assert labels["Title 3"]["description"] == "Take a thrilling look back through the previous movies."
+    assert "description" not in labels["Title 4"]
+
+
+def test_a_buttons_description_lines_come_with_its_grouped_name():
+    from test_textblocks import GREY, Page
+    from disc_detective import textblocks
+    p = Page()
+    p.text((60, 60), "Production Diary", size=26)
+    p.text((60, 95), "A look behind the scenes of the film.", size=16, colour=GREY, bold=False)
+    p.text((60, 170), "Deleted Scenes", size=26)
+    got = textblocks.page_names(p.image, p.lines, {1: (40, 50, 560, 150), 2: (40, 160, 560, 220)})
+    assert [t for t, _, _ in got[1]] == ["Production Diary"]
+    assert [t for t, _, _ in got[1].description] == ["A look behind the scenes of the film."]
+    assert list(got[2].description) == []
+
+
+def test_scenes_shorter_than_the_scans_episodes_are_extras_though_the_menus_name_none():
+    """A Play All's episodes no menu button names (Chuck Season 2): the scan's own episode titles say how long an
+    episode is, so a button's minute-long scene is an extra all the same."""
+    tv = {"readings": [{"title": "00005.mpls", "text": "Chuck Versus the Fat Lady Sc. 8-10", "seconds": 153.3, "bonus": False},
+                       {"title": "00010.mpls", "text": "Chuck Versus the Gravitron Sc. 25", "seconds": 64.6, "bonus": False}]}
+    assert menus.tv_found(tv, {})["extras"] == []
+    found = menus.tv_found(tv, {}, [2521.1, 2578.6])
+    assert [e["title"] for e in found["extras"]] == ["00005.mpls", "00010.mpls"]
+
+
+def test_a_titles_picture_has_its_description_inside_its_one_outline(tmp_path):
+    """A button with a description under its name (Chuck Season 2's deleted scenes): the description is part of its
+    title in the picture -- its text kept, one outline round the name's lines and the description's, as a name over
+    two lines has; a TV reading's too. A reading hands where its description was read on, kept through a copy
+    (pickle) as its other parts are."""
+    import pickle
+    out = {"pages": [{"domain": "bd", "page": 3, "program": 1, "route": [], "image": "hdmv_00017_p3.png",
+                      "buttons": [{"n": 7, "rect": [324, 100, 720, 140], "text": "Chuck Versus the Fat Lady Sc. 8-10",
+                                   "words": [330, 104, 700, 116], "description": "Chuck with Jill, Sarah and Casey.",
+                                   "description_words": [380, 118, 650, 128], "plays": {"title": "00005.mpls", "chapter": 1}}]}]}
+    pic = menus.title_pictures(out, str(tmp_path))["00005.mpls"]
+    assert pic["description"] == "Chuck with Jill, Sarah and Casey." and "description_rect" not in pic
+    assert pic["rect"] == [330, 104, 700, 128] and pic["button"] == [324, 100, 720, 140]
+    tv = {"readings": [{"title": "00005.mpls", "image": "p.png", "rect": [324, 100, 720, 140], "words": [330, 104, 700, 116],
+                        "text": "Chuck Versus the Fat Lady Sc. 8-10", "description": "Chuck with Jill, Sarah and Casey.",
+                        "description_words": [380, 118, 650, 128]}]}
+    assert menus.tv_pictures(tv, "d")["00005.mpls"]["rect"] == [330, 104, 700, 128]
+    w = pickle.loads(pickle.dumps(menus.Words("Name", [1, 2, 3, 4], description="Its words.", described=[1, 5, 3, 8])))
+    assert (w.description, w.described) == ("Its words.", [1, 5, 3, 8])

@@ -54,3 +54,33 @@ class LineRole(_Named):
     TITLE = "title"
     DESCRIPTION = "description"
     OTHER = "other"
+
+
+# A title's description, kept in its title (the user's, 2026-11-16): "The Hidden Secrets of Harry Potter ‖ Take a
+# thrilling look back...", the words a menu prints under a button's name. One field to edit by hand (move or delete
+# the mark to change the split); only these two read or write the mark. OCR can't make one: every reading turns
+# "‖" into "II" (MEN IN BLACK II).
+TITLE_SEP = " ‖ "
+_MARK = "‖"
+
+
+def title_parts(text):
+    """A stored title's name and description: "Name ‖ Description" -> ("Name", "Description"); no mark ->
+    (text, ""). Either side trimmed; None -> ("", "")."""
+    text = text or ""
+    if _MARK not in text:
+        return text.strip(), ""
+    name, _, description = text.partition(_MARK)
+    return name.strip(), description.strip()
+
+
+def join_title(name, description=""):
+    """A title stored with its description: ("Name", "Description") -> "Name ‖ Description"; no description,
+    the name alone."""
+    name, description = (name or "").strip(), (description or "").strip()
+    return name + TITLE_SEP + description if description else name
+
+
+def no_mark(text):
+    """OCR's reading with any "‖" as the "II" it is (a mark only the description joining writes)."""
+    return (text or "").replace(_MARK, "II")

@@ -10,7 +10,7 @@ msgstr ""
 "Project-Id-Version: Disc Detective 0.4.dev0\n"
 "Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
 "\n"
-"POT-Creation-Date: 2026-11-15 06:58-0600\n"
+"POT-Creation-Date: 2026-11-17 12:15-0600\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -785,6 +785,10 @@ msgid "A stakeout needs VLC: install it, or set its folder in Settings"
 msgstr ""
 
 #: disc_detective/app.py
+msgid "A Blu-ray's stakeout needs MakeMKV to open the disc: install it"
+msgstr ""
+
+#: disc_detective/app.py
 msgid "The stakeout couldn't go ahead: details in the case notes"
 msgstr ""
 
@@ -1394,6 +1398,22 @@ msgid ""
 msgstr ""
 
 #: disc_detective/app.py
+#, python-brace-format
+msgid "Couldn't play {name}: {why}"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"MakeMKV's decryption library wasn't found: reinstall MakeMKV to watch "
+"this episode"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{name} isn't on the disc in the drive"
+msgstr ""
+
+#: disc_detective/app.py
 msgid "The film itself, in any cut (theatrical, extended, director's)."
 msgstr ""
 
@@ -1523,14 +1543,6 @@ msgstr ""
 
 #: disc_detective/app.py
 msgid "The gold dashed box is the button on the menu."
-msgstr ""
-
-#: disc_detective/app.py
-msgid "It's shown selected, as a player shows it."
-msgstr ""
-
-#: disc_detective/app.py
-msgid "The menu's own highlight may be on another button."
 msgstr ""
 
 #: disc_detective/app.py
@@ -2417,6 +2429,10 @@ msgstr ""
 
 #: disc_detective/app.py disc_detective/core.py
 msgid "Name"
+msgstr ""
+
+#: disc_detective/app.py disc_detective/core.py
+msgid "Description"
 msgstr ""
 
 #: disc_detective/app.py

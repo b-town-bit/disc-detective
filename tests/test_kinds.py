@@ -6,7 +6,7 @@ import os
 import sqlite3
 
 from disc_detective import app, core
-from disc_detective.kinds import LineRole, Role, Type
+from disc_detective.kinds import TITLE_SEP, LineRole, Role, Type, join_title, no_mark, title_parts
 
 PKG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "disc_detective")
 
@@ -86,3 +86,27 @@ def test_the_code_names_roles_and_types_by_name():
         if name.endswith(".py") and name != "kinds.py":
             found += spelt_out(os.path.join(PKG, name))
     assert found == []
+
+
+def test_a_titles_description_rides_after_its_mark_and_comes_apart_again():
+    stored = join_title("The Hidden Secrets of Harry Potter", "Take a thrilling look back.")
+    assert stored == "The Hidden Secrets of Harry Potter" + TITLE_SEP + "Take a thrilling look back."
+    assert title_parts(stored) == ("The Hidden Secrets of Harry Potter", "Take a thrilling look back.")
+    assert join_title("Deleted Scenes", "") == "Deleted Scenes" and title_parts("Deleted Scenes") == ("Deleted Scenes", "")
+    assert title_parts(None) == ("", "") and title_parts("Name ‖") == ("Name", "")
+
+
+def test_ocr_never_makes_the_mark():
+    assert no_mark("MEN IN BLACK ‖") == "MEN IN BLACK II"
+
+
+def test_a_labels_description_is_stored_with_its_name_and_read_apart(tmp_path):
+    con = core.library_open(str(tmp_path / "lib.sqlite"))
+    h = "D" * 32
+    core.set_label(con, h, "00012.mpls", "Featurette", "The Hidden Secrets ‖ A look back.")
+    core.set_label(con, h, "00013.mpls", "Featurette", "Conjuring a Scene ‖ ")
+    got = core.get_labels(con, h)
+    assert (got["00012.mpls"]["title"], got["00012.mpls"]["description"]) == ("The Hidden Secrets", "A look back.")
+    assert got["00012.mpls"]["text"] == "The Hidden Secrets" + TITLE_SEP + "A look back."
+    # (none after its mark: a label as it always was, its name alone)
+    assert got["00013.mpls"] == {"type": "Featurette", "title": "Conjuring a Scene", "season": None, "episode": None}

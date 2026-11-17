@@ -690,3 +690,26 @@ def test_a_disc_just_put_in_is_waited_on_for_its_label(monkeypatch, tmp_path):
     assert core.volume_label("E:\\") is None and len(answers) == 1
     del answers[:]
     assert core.volume_label(str(tmp_path), wait=5) is None and answers == []
+
+
+def test_a_labels_description_goes_to_the_packet_as_theirs(tmp_path):
+    """A title saved with its menu description ("Name ‖ Description"): the packet names it by its name alone and gives
+    the description its own column, their form's optional Description."""
+    con = core.library_open(str(tmp_path / "lib.sqlite"))
+    h = "H" * 32
+    with con:
+        con.execute("INSERT INTO discs (hash, format, label, status, best_guess, truth, first_seen, last_seen) "
+                    "VALUES (?, 'DVD', 'HP', 'identified', 'Harry Potter (2001)', 'Harry Potter (2001)', '2026', '2026')", (h,))
+        con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?, 'Title 1', 'feature', 9000)", (h,))
+        con.execute("INSERT INTO titles (hash, title_id, role, duration) VALUES (?, 'Title 3', 'extra', 600)", (h,))
+    core.set_label(con, h, "Title 1", "MainMovie", "Harry Potter")
+    core.set_label(con, h, "Title 3", "Featurette", "The Hidden Secrets ‖ A look back through the films.")
+    log = "\n".join(['CINFO:2,0,"HP"', 'TINFO:0,9,0,"2:30:00"', 'TINFO:0,24,0,"1"', 'TINFO:0,27,0,"t00.mkv"',
+                     'TINFO:1,9,0,"0:10:00"', 'TINFO:1,24,0,"3"', 'TINFO:1,27,0,"t01.mkv"'])
+    pk = core.build_packet(con, h, log, str(tmp_path / "packet"))
+    lab = {l["our_title"]: l for l in pk["labels"]}
+    assert (lab["Title 3"]["title"], lab["Title 3"]["description"]) == ("The Hidden Secrets", "A look back through the films.")
+    ident = next(s for s in pk["steps"] if s.get("descriptions"))
+    assert dict(zip([t[2] for t in ident["titles"]], ident["descriptions"]))["The Hidden Secrets"] == "A look back through the films."
+    text = core.packet_checklist(pk)
+    assert "| The Hidden Secrets | S/E |" not in text and "A look back through the films. |" in text

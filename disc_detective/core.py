@@ -69,7 +69,7 @@ import xml.etree.ElementTree as ET
 from . import i18n
 from . import tools
 from .i18n import N_, N_log, Said, ui, ui_n
-from .kinds import Role, Type
+from .kinds import Role, Type, join_title, no_mark, title_parts
 
 VERSION = "0.4.dev0"      # (between releases: the release's own, "0.4", set just before its tag)
 USER_AGENT = "disc-detective/" + VERSION
@@ -2197,9 +2197,9 @@ def _tesseract_phrases(image):
     phrases = []
     for psm in ("11", "3"):
         try:
-            tsv = subprocess.run([tools.which("tesseract"), src, "stdout", "--psm", psm, "tsv"],
-                                 capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                 timeout=60, **NO_CONSOLE).stdout
+            tsv = no_mark(subprocess.run([tools.which("tesseract"), src, "stdout", "--psm", psm, "tsv"],
+                                         capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                         timeout=60, **NO_CONSOLE).stdout)
         except Exception:
             return None
         lines = {}
@@ -7451,9 +7451,17 @@ def title_tracks(t):
 
 
 def get_labels(con, h):
-    """Your labels for a disc's titles: {title_id: {"type", "title", "season", "episode"}}."""
-    return {r["title_id"]: {"type": r["type"], "title": r["title"], "season": r["season"], "episode": r["episode"]}
-            for r in con.execute("SELECT * FROM labels WHERE hash=?", (h,))}
+    """Your labels for a disc's titles: {title_id: {"type", "title", "season", "episode"}}, "title" its name alone;
+    one saved with a description (kinds.join_title) has "description" too, and "text": the two as stored, what the
+    title box shows and saves."""
+    out = {}
+    for r in con.execute("SELECT * FROM labels WHERE hash=?", (h,)):
+        name, description = title_parts(r["title"])
+        out[r["title_id"]] = {"type": r["type"], "title": name if r["title"] is not None else None,
+                              "season": r["season"], "episode": r["episode"]}
+        if description:
+            out[r["title_id"]].update(description=description, text=r["title"])
+    return out
 
 
 def set_suggested(con, h, title_id, edit=None):
@@ -7472,7 +7480,9 @@ SUGGESTED_DAYS = 30        # submitted this long ago and still not in TheDiscDB'
 
 
 def set_label(con, h, title_id, type_=None, title=None, season=None, episode=None):
-    """Label one title (TheDiscDB's terms); no type and no title clears it."""
+    """Label one title (TheDiscDB's terms); no type and no title clears it. title: its name, with its description
+    after the mark if it has one (kinds.join_title), as the title box has it."""
+    title = join_title(*title_parts(title)) if title else title
     with con:
         if not (type_ or (title or "").strip()):
             con.execute("DELETE FROM labels WHERE hash=? AND title_id=?", (h, title_id))
@@ -8406,7 +8416,8 @@ def packet_labels(con, h, log_text):
                  "duration": m["duration_text"], "chapters": m["chapters"], "size": m["size"],
                  "segment_count": m.get("segment_count"), "segments": m.get("segments", ""),
                  "our_title": t["title_id"] if t else None, "role": role, "matched_by": how,
-                 "type": None, "title": None, "season": None, "episode": None, "sent": False, "note": ""}
+                 "type": None, "title": None, "description": None, "season": None, "episode": None, "sent": False,
+                 "note": ""}
         if role in (Role.FEATURE, Role.VERSION, Role.EPISODE, Role.EXTRA):
             entry["note"] = "not labelled: leave it blank"
         elif role in (Role.PLAY_ALL, Role.DUPLICATE, Role.JUNK, Role.LOOP, Role.SEGMENT):
@@ -8424,7 +8435,7 @@ def packet_labels(con, h, log_text):
         if my:                                   # what you said this title is, in TheDiscDB's terms
             kind, name = discdb_label(my["type"], my["title"])
             entry.update(type=kind, title=name or (pt["title"] if kind == Type.MAIN_MOVIE else None),
-                         season=my["season"], episode=my["episode"],
+                         description=my.get("description") or None, season=my["season"], episode=my["episode"],
                          note=("your label for %s (MakeMKV lists this copy of it instead)" % carried[t["title_id"]]
                                if t["title_id"] in carried else "your label") +
                          (" (a promo: TheDiscDB files those as Trailer)" if my["type"] == Type.PROMO else ""))
@@ -8746,7 +8757,9 @@ def submission_steps(pk, pt):
          titles=[("%02d" % l["source"] if isinstance(l["source"], int) else str(l["source"] or ""),
                   l["type"] or "", l["title"] or "",
                   (_ep_code(int(l["season"]), episode_numbers(l["episode"])) or "") if l["season"] and l["episode"]
-                  else "") for l in sent])
+                  else "") for l in sent],
+         # (the words a menu prints under a title's button: their form's optional Description, beside each)
+         descriptions=[l.get("description") or "" for l in sent])
     step(N_("Review and submit"), notes=[ui("Submit For Review. It's listed under My Contributions; a reviewer's "
                                             "questions come under its Messages.")])
     return steps
@@ -8766,9 +8779,16 @@ def packet_checklist(pk, pt=None):
         if s["file"]:
             L.append("  (%s)" % s["file"])
         if s["titles"]:
-            L.append("| %s | %s | %s | S/E |" % (ui("Playlist"), ui("Type"), ui("Name")))
-            L.append("|---|---|---|---|")
-            L += ["| %s | %s | %s | %s |" % (src, kind, name.replace("|", "/"), se) for src, kind, name, se in s["titles"]]
+            said = s.get("descriptions") or []
+            if any(said):
+                L.append("| %s | %s | %s | S/E | %s |" % (ui("Playlist"), ui("Type"), ui("Name"), ui("Description")))
+                L.append("|---|---|---|---|---|")
+                L += ["| %s | %s | %s | %s | %s |" % (src, kind, name.replace("|", "/"), se, (said[k] if k < len(said) else "").replace("|", "/"))
+                      for k, (src, kind, name, se) in enumerate(s["titles"])]
+            else:
+                L.append("| %s | %s | %s | S/E |" % (ui("Playlist"), ui("Type"), ui("Name")))
+                L.append("|---|---|---|---|")
+                L += ["| %s | %s | %s | %s |" % (src, kind, name.replace("|", "/"), se) for src, kind, name, se in s["titles"]]
         L += s["after"] + [""]
     return "\n".join(L)
 
