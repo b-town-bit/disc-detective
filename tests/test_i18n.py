@@ -433,3 +433,16 @@ def test_the_log_english_and_the_interface_the_systems_unless_set(tmp_path, monk
     finally:
         for area in i18n.DOMAINS:
             i18n.set_language(area, None)
+
+
+def test_a_path_on_another_drive_is_printed_whole(monkeypatch):
+    """GitHub's Windows runners check the project out on D: and keep a test's temporary folder on C:, with no way
+    from one to the other: such a path is printed whole, never an error."""
+    import os
+    messages = _messages()
+
+    def two_drives(path, start=None):
+        raise ValueError("path is on mount 'C:', start on mount 'D:'")
+    assert messages.shown(os.path.join(messages.ROOT, "disc_detective")) == "disc_detective"
+    monkeypatch.setattr(os.path, "relpath", two_drives)
+    assert messages.shown("C:\Temp\locale\de\LC_MESSAGES\interface.po") == "C:\Temp\locale\de\LC_MESSAGES\interface.po"

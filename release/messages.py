@@ -17,6 +17,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKG = os.path.join(ROOT, "disc_detective")
 LOCALE = os.path.join(PKG, "locale")
 
+
+def shown(path):
+    """A path to print: from the project's folder, else whole (another drive has no way there from it: a
+    test's temporary folder on C:, GitHub's Windows runners checking the project out on D:)."""
+    try:
+        return os.path.relpath(path, ROOT)
+    except ValueError:
+        return path
+
 # Babel's keywords for each area (name:singular,plural for a counted one). Said goes to both: a message
 # shown on the screen and written to the log, each in its own area's language.
 KEYWORDS = {
@@ -87,13 +96,13 @@ def extract():
             os.remove(new)
         else:
             os.replace(new, out)
-            print("updated", os.path.relpath(out, ROOT))
+            print("updated", shown(out))
 
 
 def new(lang):
     for area in KEYWORDS:
         babel("init", "-D", area, "-i", template(area), "-d", LOCALE, "-l", lang)
-        print("started", os.path.relpath(os.path.join(LOCALE, lang, "LC_MESSAGES", area + ".po"), ROOT))
+        print("started", shown(os.path.join(LOCALE, lang, "LC_MESSAGES", area + ".po")))
 
 
 def update():
