@@ -146,7 +146,9 @@ def test_a_line_only_reading_at_twice_the_size_finds_is_in_the_name(named):
     b = p.text((80, 112), "II", size=14, line=False)
     p.twice = [("II", (b[0] - 2.0, b[1] - 2.0, b[2] + 2.0, b[3] + 2.0), 0.85), ("by Waif", (400, 300, 460, 316), 0.88)]
     p.text((60, 200), "STUART LITTLE 2", size=22)
-    got = named(p, [(200, 88, 216, 112), (260, 200, 276, 226)])
+    # (the lamp 50 px from "BLACK"'s ink: well inside an empty button's reach, 60, whatever pixel a font version ends
+    # its last letter on -- 60 px away, Pillow 11 and 13 put it either side of the line)
+    got = named(p, [(190, 88, 206, 112), (260, 200, 276, 226)])
     assert got == {1: "MEN IN BLACK II", 2: "STUART LITTLE 2"}
 
 
