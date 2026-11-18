@@ -10,7 +10,7 @@ msgstr ""
 "Project-Id-Version: Disc Detective 0.4.dev0\n"
 "Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
 "\n"
-"POT-Creation-Date: 2026-11-17 12:15-0600\n"
+"POT-Creation-Date: 2026-11-18 08:37-0600\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -248,6 +248,10 @@ msgstr ""
 #: disc_detective/app.py
 #, python-brace-format
 msgid "the film's credits: {count} words of names"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "the film's credits couldn't be read"
 msgstr ""
 
 #: disc_detective/app.py

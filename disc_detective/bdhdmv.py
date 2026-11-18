@@ -795,6 +795,8 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
                     entry["description"] = text.description
                     if getattr(text, "described", None):    # (where it was read: outlined with the name)
                         entry["description_words"] = list(text.described)
+                if getattr(text, "shape", None):        # (its outline, following its lines' slant)
+                    entry["shape"] = [list(p) for p in text.shape]
                 if text and how_sure is not None:      # (another reader's too: noted as RapidOCR's are)
                     menus._note_sure(str(text), how_sure)
                 if text and others:

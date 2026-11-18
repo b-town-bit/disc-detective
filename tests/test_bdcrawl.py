@@ -1053,3 +1053,38 @@ def test_a_reading_called_off_stops_at_its_next_step_and_doesnt_fall_back(monkey
     with pytest.raises(menus.Cancelled):
         a._stakeout(rep, "vlc")
     assert not issubclass(menus.Cancelled, menus.Lost)
+
+
+def test_an_extras_description_is_in_its_file_name_in_brackets():
+    """A deleted scene with the words its menu prints under it (Chuck S2 D3's "Sc. 22" / "Big Mike talks to Herd."):
+    its file is named with them in brackets, no full stop, as Plex shows it -- beside its episode, its file name
+    first, or in its season's Deleted Scenes folder by its own name alone. None, the name alone."""
+    from disc_detective import app
+    name = app.described("Sc. 22", "Big Mike talks to Herd.")
+    assert name == "Sc. 22 (Big Mike talks to Herd)"
+    episode = "Chuck {imdb-tt0934814}/Season 02/Chuck - s02e14 - Chuck Versus the Best Friend.mkv"
+    assert app.linked_dest(episode, name, "DeletedScene") == \
+        "Chuck {imdb-tt0934814}/Season 02/Chuck - s02e14 - Chuck Versus the Best Friend - Sc. 22 (Big Mike talks to Herd)-deleted.mkv"
+    assert app.extra_dest({"type": "DeletedScene"}, name, {}, "Chuck {imdb-tt0934814}", 2) == \
+        "Chuck {imdb-tt0934814}/Season 02/Deleted Scenes/Sc. 22 (Big Mike talks to Herd).mkv"
+    assert app.described("Making Of", "") == "Making Of" and app.described("Morgan", "Date-crashes: again.") == "Morgan (Date-crashes - again)"
+
+
+def test_a_known_films_stakeout_reads_with_its_peoples_names(monkeypatch):
+    """The stakeout's dictionary, a disc known already: its film's people's words with the titles' (Enchanted's
+    "Nathaniel", no well-known title's word: a name, not a misreading to read again); a disc not known yet, the
+    titles' alone, no credits asked for."""
+    from disc_detective import app
+    asked = []
+    monkeypatch.setattr(core, "word_checker", lambda d: lambda w: w.lower() in {"revelation"})
+    monkeypatch.setattr(core, "library_open", lambda *args: types.SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(core, "film_credits", lambda con, imdb_id, *a, **kw: asked.append(imdb_id) or
+                        [("Timothy Spall", "Nathaniel", "actor")])
+    args = types.SimpleNamespace(imdb_dir="d", offline=True, db=None, tmdb_key=None)
+    known = app.App._crawl_words({"match": {"name": "Enchanted", "imdb_id": "tt0461770"}}, args)
+    assert known("Nathaniel") and known("Revelation") and known("spall") and not known("Revelat")
+    assert asked == ["tt0461770"]
+    fresh = app.App._crawl_words({"status": "unidentified"}, args)
+    assert not fresh("Nathaniel") and fresh("Revelation") and asked == ["tt0461770"]
+    monkeypatch.setattr(core, "word_checker", lambda d: None)
+    assert app.App._crawl_words({"match": {"imdb_id": "tt0461770"}}, args) is None

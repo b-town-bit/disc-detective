@@ -1921,7 +1921,7 @@ def test_the_menu_button_that_plays_a_title(gui, tmp_path, monkeypatch):
     assert not hasattr(v, "head") and v.path.winfo_manager() and v.path.cget("style") == "DeskFind.TLabel"
     # (the words as read set apart the same way, not the line round them)
     assert v.words.cget("style") == "DeskFind.TLabel" and v.said.cget("style") == "DeskSub.TLabel"
-    assert v.said.cget("text") == "Detect titles read it as " and v.words.cget("text") == "“Odette Reads”"
+    assert v.said.cget("text") == "Detect titles read it as " and v.words.cget("text") == "Odette Reads"
     assert v.trail == "Main Menu › Bonus Features › Odette's Friends › Jean-Bob"
     assert str(v.path.cget("text")) == v.trail                   # (room for it all: no ellipsis)
     # too long for the window: cut short, the whole on hover
@@ -2428,7 +2428,7 @@ def test_a_menu_picture_shows_the_words_read_on_demand(tmp_path):
         v.show("00052.mpls", {"image": small, "rect": [0, 0, 120, 40], "button": [0, 0, 120, 40], "text": "Meville's Cactus",
                               "alone": True, "read_as": "Meville's Cactus", "name": "Neville's Cactus"})
         root.update()
-        assert v.fixed.winfo_manager() and v.fixed.cget("text") == "“Neville's Cactus”"
+        assert v.fixed.winfo_manager() and v.fixed.cget("text") == "Neville's Cactus"     # (bold, no quotes)
         assert v.fix_text == "Read as “Meville's Cactus”, corrected to “Neville's Cactus”"
         assert not v.fix_note.winfo_manager()
         v.fixed.event_generate("<Button-1>")
@@ -2455,6 +2455,19 @@ def test_a_menu_picture_shows_the_words_read_on_demand(tmp_path):
         v.show("Title 44", {"image": path, "rect": [385, 382, 622, 456], "button": [385, 382, 622, 456], "text": ""})
         v._pointer(ev(*v.hot[:2]))
         assert v.photo is v.photos[0] and "point at it" not in v.read.cget("text")
+        # a setting on the same page pressed first (WALL-E's commentary "ON"): it's ringed and numbered on the picture
+        # as it is, pointing or not, and the help says to press them in order; without one, nothing of the kind
+        plain = {"image": path, "rect": [295, 274, 425, 287], "button": [222, 268, 471, 292], "text": "Garbage Airlock"}
+        v.show("Title 83", plain)
+        root.update()
+        k = v.photos[0].width() / 720
+        on_ring = (round(322 * k), round(206 * k))       # (where ON's ring goes, by its left edge: plain menu now)
+        before, said_before = v.photos[0].get(*on_ring), "in order" in v.read.cget("text")
+        v.show("Title 82", dict(plain, pressed=[{"rect": [322, 194, 350, 218]}]))
+        root.update()
+        assert "Press the numbered buttons in order" in v.read.cget("text") and not said_before
+        near = [v.photos[0].get(on_ring[0] - d, on_ring[1]) for d in range(0, round(12 * k))]
+        assert any(px != before for px in near) and v.photos[1].get(*on_ring) == v.photos[0].get(*on_ring)
     finally:
         root.destroy()
 
