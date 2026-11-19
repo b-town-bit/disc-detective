@@ -7,6 +7,7 @@ BDMV/JAR/<folder>/bluray-project.bin: each playlist by name ("FPL_MainFeature", 
 Serenade", "SF_Theatrical_Trailer"), its number, frame rate and running time. Its names are the
 menus' own words, exact: no picture to read. (BD-J menus need Java to run; this needs nothing.)
 The menus' AV streams are encrypted (AACS); these files aren't."""
+import codecs
 import os
 import re
 import struct
@@ -67,7 +68,8 @@ def _framework(root):
         for framework, name in FRAMEWORK_FILES:
             if os.path.isfile(os.path.join(jar, folder, name)):
                 return framework
-    return None
+    # (a menu template in plain text files, by their shape: _template_folder)
+    return "menu template" if _template_folder(root) else None
 
 
 def menu_style(root):
@@ -235,6 +237,122 @@ def wb_film(root, read=None):
     return (entries if len(entries) > 1 else []), texts
 
 
+# ---- a menu template kept in plain text files (Spider-Man's Blu-ray: streams.xml, template.xml and
+# dictionary.txt in a JAR folder), found by its files' shape, not by whose it is ----
+
+def _cp1252(err):
+    """A stray Windows-1252 byte in a UTF-8 file, as that ("SPIDER-MAN\\x99": its ™)."""
+    return err.object[err.start:err.end].decode("cp1252", "replace"), err.end
+
+
+codecs.register_error("disc_detective_cp1252", _cp1252)
+
+
+def _plain_text(path):
+    with open(path, "rb") as fh:
+        b = fh.read()
+    text = b.decode("utf-8", "disc_detective_cp1252").lstrip("﻿")
+    return re.sub(r"<!--.*?-->", "", text, flags=re.S)     # (what's commented out isn't on the disc's menus)
+
+
+TEMPLATE_FILES = ("streams.xml", "template.xml", "dictionary.txt")
+
+
+def _template_folder(root):
+    """The JAR folder of a menu template in plain text files, or None: a streams.xml whose <added-value>
+    names its videos' playlists ("<behind_3>00308</behind_3>"), a template.xml whose pages list their
+    buttons' texts and what each does (<button-text>, <button>), and a dictionary.txt of each text by its
+    key, a column per language (tab-separated)."""
+    jar = os.path.join(root, "BDMV", "JAR")
+    try:
+        folders = [os.path.join(jar, f) for f in sorted(os.listdir(jar))]
+    except OSError:
+        return None
+    for f in folders:
+        if not all(os.path.isfile(os.path.join(f, n)) for n in TEMPLATE_FILES):
+            continue
+        try:
+            streams, template = (_plain_text(os.path.join(f, n)) for n in TEMPLATE_FILES[:2])
+            with open(os.path.join(f, "dictionary.txt"), "rb") as fh:
+                head = fh.readline()
+        except OSError:
+            continue
+        if (re.search(r"<added-value>\s*<(\w+)>\s*\d{5}\s*</\1>", streams) and "<button-text>" in template
+                and head.count(b"\t") >= 1):
+            return f
+    return None
+
+
+def _dictionary(path):
+    """dictionary.txt: {key: its English text} (the column headed eng, else the first after the keys)."""
+    import csv
+    import io
+    rows = list(csv.reader(io.StringIO(_plain_text(path)), delimiter="\t"))
+    if not rows:
+        return {}
+    head = [h.strip().lower() for h in rows[0]]
+    col = next((i for i, h in enumerate(head) if i and h in ("eng", "en", "english")), 1)
+    return {r[0].strip(): " ".join(r[col].split()) for r in rows[1:] if len(r) > col and r[0].strip() and r[col].strip()}
+
+
+def _children(block):
+    """A template block's elements without attributes (a language's own lists, menu-language="jpn", left
+    out): [(tag, inside)], in order."""
+    return re.findall(r"<(\w+)>(.*?)</\1>", block, re.S)
+
+
+def template_film(root):
+    """A film disc's titles as a menu template's plain text files have them (Spider-Man's Blu-ray): (entries,
+    texts), the shape of menu_project() and menu_texts(), for project_labels. streams.xml names each video's
+    playlist (<feature>, and <added-value>: "<behind_3>00308</behind_3>"); template.xml each page's buttons,
+    their texts' keys (<button-text>) and, in the same order, what each does (<button>: "#behind_3" plays that
+    video, "AV_2" opens the page of that name under <menus>); dictionary.txt each key's words ("SPIDER
+    WRANGLER"). Each entry carries the words of the button that opens its page ("under": "Behind the Scenes
+    of Spider-Man"); no running time (seconds None). ([], {}) for another kind of disc."""
+    from . import menus
+    folder = _template_folder(root)
+    if not folder:
+        return [], {}
+    try:
+        streams, template = (_plain_text(os.path.join(folder, n)) for n in TEMPLATE_FILES[:2])
+        words = _dictionary(os.path.join(folder, "dictionary.txt"))
+    except (OSError, UnicodeError):
+        return [], {}
+    added = re.search(r"<added-value>(.*?)</added-value>", streams, re.S)
+    videos = {k: "%05d.mpls" % int(v) for k, v in re.findall(r"<(\w+)>\s*(\d{5})\s*</\1>", added.group(1))} if added else {}
+    entries, texts, seen = [], {}, set()
+    feature = re.search(r"<feature>\s*(\d{5})\s*</feature>", streams)
+    if feature:
+        entries.append({"name": "FPL_MainFeature", "playlist": "%05d.mpls" % int(feature.group(1)), "fps": None, "seconds": None})
+        seen.add(entries[-1]["playlist"])
+
+    def walk(block, under, depth=0):
+        subs = re.search(r"<menus>(.*)</menus>", block, re.S)
+        own = block[:subs.start()] + block[subs.end():] if subs else block
+        pages = dict(_children(subs.group(1))) if subs else {}
+        keys = re.search(r"<button-text>([^<]*)</button-text>", own)
+        does = re.search(r"<button>([^<]*)</button>", own)
+        if not (keys and does):
+            return
+        for key, act in zip(keys.group(1).split(","), does.group(1).split(",")):
+            key, act = key.strip(), act.strip()
+            said = menus.nice_name(words.get(key) or "")
+            if act.startswith("#") and act[1:] in videos and said and videos[act[1:]] not in seen:
+                pl = videos[act[1:]]
+                seen.add(pl)
+                play_all = re.fullmatch(r"play\s*all", said, re.I)
+                entries.append({"name": ("SF_Play_All_" if play_all else "SF_") + act[1:], "playlist": pl, "fps": None,
+                                "seconds": None, "under": under})
+                texts[pl] = said
+            elif act in pages and depth < 6:
+                walk(pages[act], said or under, depth + 1)
+    for _tag, block in _children(re.sub(r"^\s*<\?xml[^>]*\?>", "", template.strip())):
+        for _tag, page in _children(block) or [(None, block)]:
+            if "<button-text>" in page:
+                walk(page, "")
+    return (entries if len(entries) > 1 else []), texts
+
+
 def wb_menu(root, label, read=None):
     """What Warner's BD-J framework's plain text files say of this disc (its menu covers the whole set):
     {"season", "disc", "episodes": [{"number", "playlist", "read"}], "extras": [{"playlist", "read", "under",
@@ -388,7 +506,8 @@ def project_play_alls(titles, entries):
     one after another), its running time its playlist's: play-alls, not extras of their own."""
     by = {t["id"]: t for t in titles}
     return [e["playlist"] for e in entries if re.search(r"play[ _]?all", e["name"], re.I) and e["playlist"] in by
-            and abs((by[e["playlist"]].get("duration") or 0) - e["seconds"]) <= max(2.0, LENGTH_FIT * e["seconds"])]
+            and (e["seconds"] is None or       # (a menu template's: no running time, its playlist by number)
+                 abs((by[e["playlist"]].get("duration") or 0) - e["seconds"]) <= max(2.0, LENGTH_FIT * e["seconds"]))]
 
 
 # ---- the menus' own words, in their Java code (Sony's framework: a table per menu page and
@@ -565,7 +684,8 @@ def project_labels(titles, entries, film=None, known_film=None, texts=None):
         # a name whose running time isn't its playlist's: not trusted, but for an ad (hidden, never ripped
         # unless ticked: Muppets from Space's "SF_Previews", 197 s for its two previews' 116) and a trailer
         # whose time in the project can't be one (its "SF_Teaser_Trailer", 1 s for 59): yours to confirm
-        off = abs((t.get("duration") or 0) - e["seconds"]) > max(2.0, LENGTH_FIT * e["seconds"])
+        # (no running time given -- a menu template's, its playlist by number -- nothing to doubt)
+        off = e["seconds"] is not None and abs((t.get("duration") or 0) - e["seconds"]) > max(2.0, LENGTH_FIT * e["seconds"])
         if off and not (AD_RE.search(nice(e["name"])) or
                         (e["seconds"] < BROKEN_LENGTH and re.search(r"\btrailer\b|\bteaser\b", nice(e["name"]), re.I))):
             continue
@@ -592,7 +712,9 @@ def project_labels(titles, entries, film=None, known_film=None, texts=None):
             out[t["id"]] = {"type": Type.PROMO, "title": menus.ad_name({"own": other}), "note": word + ": another film, an ad"}
             continue
         extras.append({"key": t["id"], "name": name, "note": word, "exact": exact,
-                       **({"names_film": known_film(name)} if trailer and known_film else {})})
+                       **({"names_film": known_film(name)} if trailer and known_film else {}),
+                       # (its page's heading, where the files give it: its kind, the way there -- "TV Spots")
+                       **({"kind": menus.heading_kind(e["under"]), "via": e["under"]} if e.get("under") else {})})
     # what each is, and what it's called: the one namer's, as on any disc (menus.name_extras): "Music Video:
     # “Shining Star” by ..." Music, its name what follows; another film's trailer an ad, a judgement, not exact
     said = {e["key"]: e for e in extras}

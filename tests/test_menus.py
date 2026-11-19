@@ -2632,6 +2632,16 @@ def test_a_name_in_capitals_is_title_cased_letter_by_letter():
     assert menus.nice_name('"HERO" BY CHAD KROEGER') == '"Hero" by Chad Kroeger' and menus.nice_name('DUMPED!"') == "Dumped!"
 
 
+def test_initials_stay_capitals_and_a_name_after_mc_has_its_own_capital():
+    """The recasing's known forms take the initials menus print (Spider-Man's Blu-ray: "HBO MAKING OF SPIDER-MAN",
+    "CGI SPIDER-MAN"), and a name after "Mc" its own capital ("BONE SAW MCGRAW"); a short word that only starts so
+    as it was."""
+    assert menus.nice_name("HBO MAKING OF SPIDER-MAN") == "HBO Making of Spider-Man"
+    assert menus.nice_name("CGI SPIDER-MAN") == "CGI Spider-Man" and menus.nice_name("IMAX: THE STORY") == "IMAX: The Story"
+    assert menus.nice_name("BONE SAW MCGRAW") == "Bone Saw McGraw" and menus.nice_name("DR. MCCOY'S") == "Dr. McCoy's"
+    assert menus.nice_name("MC HAMMER") == "Mc Hammer"
+
+
 def test_ocrs_slips_in_numbers_are_put_right_but_codes_are_left_alone():
     """number_slips (the user's): only words already holding a digit, each fix one a number there must be -- an item
     number at the start (Muppets from Space's "1O."), an ordinal whose ending fits, a year, O between digits, a

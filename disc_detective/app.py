@@ -2864,6 +2864,8 @@ class App:
                 from . import menus
                 entries, texts = bdmenus.wb_film(drive, lambda image: " ".join(
                     t for t, _x, _x in (menus.rapid_lines(image) or [])))
+            if not entries:               # (a menu template in plain text files: Spider-Man's)
+                entries, texts = bdmenus.template_film(drive)
             if not entries:
                 return
             film = naming_film(rep)

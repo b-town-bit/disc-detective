@@ -443,3 +443,69 @@ def test_watch_clip_plays_a_decrypted_folders_clip_as_it_is_and_says_what_it_lac
     (tmp_path / "BDMV" / "STREAM" / "00016.m2ts").write_bytes(unit(0xC0, 1))
     monkeypatch.setattr(bdmenus, "mmbd_library", lambda: None)
     assert bdmenus.watch_clip(root, "00016.m2ts", "ffplay.exe") == "library"
+
+
+def write_template(tmp_path, folder="00000"):
+    """A menu template in plain text files, made up in the shape of Spider-Man's Blu-ray's: streams.xml naming
+    the videos' playlists (a comment before its declaration, a commented-out entry), template.xml's pages, and
+    dictionary.txt's words, a column per language (a quoted text over two lines, a stray Windows-1252 byte)."""
+    jar = tmp_path / "BDMV" / "JAR" / folder
+    jar.mkdir(parents=True)
+    (jar / "streams.xml").write_text(
+        "﻿<!-- Streams -->\n<?xml version=\"1.0\"?>\n<streams><playlist>\n<feature>00001</feature>\n"
+        "<added-value>\n<behind_0>00345</behind_0>\n<behind_1>00306</behind_1>\n<tv_1>00331</tv_1>\n"
+        "<SF_3>00317</SF_3> <!-- Gag Outtakes -->\n<t00>00009</t00>\n<!-- <old_1>00777</old_1> -->\n"
+        "</added-value></playlist></streams>\n", encoding="utf-8")
+    (jar / "template.xml").write_text(
+        "<?xml version=\"1.0\"?>\n<template>\n<special_features>\n"
+        "<button-text>sf_0,sf_1,sf_2,sf_3,sf_4</button-text>\n"
+        "<!-- <button>#old_1</button> -->\n"
+        "<button>GAME,AV_1,#SF_3,AV_2,#t00</button>\n<menus>\n<GAME><button>~6</button></GAME>\n"
+        "<AV_1><button-text>behind_0,behind_1</button-text><button>#behind_0,#behind_1</button></AV_1>\n"
+        "<AV_2><button-text>tv_1</button-text><button>#tv_1</button>\n"
+        "<button-text menu-language=\"jpn\">tv_9</button-text><button menu-language=\"jpn\">#tv_9</button></AV_2>\n"
+        "</menus>\n</special_features>\n</template>\n", encoding="utf-8")
+    (jar / "dictionary.txt").write_bytes(
+        "﻿Item Type\teng\tspa\nsf_0\tTRIVIA\tTRIVIA\nsf_1\t\"BEHIND THE SCENES\nOF SPIDER-MAN".encode() + b"\x99\"\tDETR\xc3\x81S\n"
+        + "sf_2\tGAGS & OUTTAKES\tTOMAS\nsf_3\tTV SPOTS\tANUNCIOS\nsf_4\tPREVIEWS\tAVANCES\nbehind_0\tPLAY ALL\tTODO\n"
+          "behind_1\t    COSTUME DESIGN \tVESTUARIO\ntv_1\tAMAZING\tASOMBROSO\ntv_9\tCINGULAR\tCINGULAR\n".encode())
+    return str(tmp_path)
+
+
+def test_a_menu_template_in_plain_text_files_is_found_by_its_shape(tmp_path):
+    """A menu template's files (streams.xml, template.xml, dictionary.txt) make a disc's style one, whoever made it;
+    a folder missing one, or with the names but not their shape, isn't."""
+    root = write_template(tmp_path / "a")
+    (tmp_path / "a" / "BDMV" / "index.bdmv").write_bytes(index("hdmv", "bdj"))
+    assert bdmenus.menu_style(root) == {"menu": "BD-J", "framework": "menu template"}
+    b = tmp_path / "b" / "BDMV" / "JAR" / "00000"
+    b.mkdir(parents=True)
+    for name in bdmenus.TEMPLATE_FILES:
+        (b / name).write_text("nothing of the kind")
+    assert bdmenus.template_film(str(tmp_path / "b")) == ([], {})
+    (tmp_path / "a" / "BDMV" / "JAR" / "00000" / "dictionary.txt").unlink()
+    assert bdmenus.template_film(root) == ([], {})
+
+
+def test_a_menu_templates_files_name_each_title_by_its_button(tmp_path):
+    """Each page's buttons, their words' keys paired with what each does, in order: "#key" plays the video
+    streams.xml gives that key, "AV_1" opens that page, whose button's words are its heading. Only the language
+    with no menu-language of its own (English), what's commented out left out, the words recased; then through
+    project_labels as any menu project's: the film, its Play All, a TV spot its own trailer, previews an ad."""
+    root = write_template(tmp_path)
+    entries, texts = bdmenus.template_film(root)
+    assert [(e["name"], e["playlist"], e.get("under")) for e in entries] == [
+        ("FPL_MainFeature", "00001.mpls", None),
+        ("SF_Play_All_behind_0", "00345.mpls", "Behind the Scenes of Spider-Man"),
+        ("SF_behind_1", "00306.mpls", "Behind the Scenes of Spider-Man"),
+        ("SF_SF_3", "00317.mpls", ""), ("SF_tv_1", "00331.mpls", "TV Spots"), ("SF_t00", "00009.mpls", "")]
+    assert texts["00306.mpls"] == "Costume Design" and texts["00317.mpls"] == "Gags & Outtakes"
+    titles = [{"id": i, "duration": d, "role": r} for i, d, r in (
+        ("00001.mpls", 7272, "feature"), ("00345.mpls", 1940, "extra"), ("00306.mpls", 508, "extra"),
+        ("00317.mpls", 185, "extra"), ("00331.mpls", 33, "junk"), ("00009.mpls", 524, "extra"))]
+    labels = bdmenus.project_labels(titles, entries, "Spider-Man", None, texts)
+    assert labels["00001.mpls"]["type"] == "MainMovie"
+    assert "00345.mpls" not in labels and bdmenus.project_play_alls(titles, entries) == ["00345.mpls"]
+    assert (labels["00306.mpls"]["type"], labels["00306.mpls"]["title"], labels["00306.mpls"]["exact"]) == ("Extra", "Costume Design", True)
+    assert (labels["00331.mpls"]["type"], labels["00331.mpls"]["title"]) == ("Trailer", "Amazing")
+    assert labels["00009.mpls"]["type"] == "Promo"

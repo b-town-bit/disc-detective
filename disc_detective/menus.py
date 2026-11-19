@@ -5642,7 +5642,11 @@ def nice_name(text):
 
 CONTRACTED = {"s", "t", "d", "m", "re", "ve", "ll"}          # a contraction's endings, after its apostrophe: small
 SMALL_APOSTROPHE = {"o'clock", "ma'am", "o’clock", "ma’am"}    # words small after their apostrophe too
-CASE_FORMS = {"dvd": "DVD", "dvd-rom": "DVD-ROM", "tv": "TV", "blu-ray": "Blu-ray", "3d": "3D"}   # (their own forms)
+CASE_FORMS = {"dvd": "DVD", "dvd-rom": "DVD-ROM", "tv": "TV", "blu-ray": "Blu-ray", "3d": "3D",   # (their own forms)
+              # (initials menus print, kept in capitals: Spider-Man's "HBO Making of", "CGI Spider-Man")
+              "hbo": "HBO", "cgi": "CGI", "bbc": "BBC", "mtv": "MTV", "pbs": "PBS", "cnn": "CNN", "hd": "HD",
+              "imax": "IMAX", "vhs": "VHS", "fbi": "FBI", "cia": "CIA", "nasa": "NASA", "usa": "USA", "uk": "UK"}
+MC_RE = re.compile(r"mc[a-z]{2,}")        # a name after "Mc", its own capital: McGraw, McCoy
 ROMAN_RE = re.compile(r"(?:ii|iii|iv|vi|vii|viii|ix|xi|xii|xiii)")
 
 
@@ -5653,7 +5657,8 @@ def title_case(text):
     unless a contraction's end follows it ("Rizzo's", "I'm", "You're": CONTRACTED; o'clock, ma'am) -- a name's a
     capital, "O'Brien", "L'Oreal" (the user's) -- nor straight after a digit ("70th", "2nd"). The small
     words small (SMALL_WORDS) but first, last ("Mind If I Drop In"), after a colon or opening a bracket. Words with
-    forms of their own as they have them (CASE_FORMS: DVD, Blu-ray); Roman numerals in capitals ("Men in Black II")."""
+    forms of their own as they have them (CASE_FORMS: DVD, Blu-ray, HBO); Roman numerals in capitals ("Men in Black
+    II"); a name after "Mc" its own capital too ("McGraw")."""
     words = text.lower().split(" ")
     last = len(words) - 1
     out = []
@@ -5680,6 +5685,8 @@ def title_case(text):
             if small and not any(c.isalpha() for c in chars[:j]):
                 continue
             chars[j] = ch.upper()
+        if MC_RE.match(core) and not small:
+            chars[len(lead) + 2] = chars[len(lead) + 2].upper()    # ("Bone Saw McGraw")
         out.append("".join(chars))
     return " ".join(out)
 
