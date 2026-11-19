@@ -3731,7 +3731,26 @@ def _leads_to_title(pages, s, visited, found, known, learned, pressed, unknown_m
     return False
 
 
-def _page_plan(pages, routes, done, found, known, learned, copies=None, rank=None):
+def anchor_pages(anchored, candidates):
+    """Each anchored title's page nearest the first menu (the user's, 2026-11-19): anchored {title: "main" or
+    "episode"}; candidates [(title, page, presses there, a Play All's copy of it)]. A main movie's nearest button
+    playing it; an episode's nearest that isn't a Play All starting at it, a Play All's only if that's all there is.
+    The pages, nearest first, each once."""
+    best = {}
+    for t, page, presses, play_all in candidates:
+        if t not in anchored:
+            continue
+        key = (bool(play_all) and anchored[t] == "episode", presses)
+        if t not in best or key < best[t][0]:
+            best[t] = (key, page)
+    out = []
+    for _, page in sorted(best.values(), key=lambda kv: kv[0][1]):
+        if page not in out:
+            out.append(page)
+    return out
+
+
+def _page_plan(pages, routes, done, found, known, learned, copies=None, rank=None, anchored=None):
     """The pages to read, in order, from what the disc's program says plays what, before a word is
     read: few, by taking the page that names the most titles still unnamed for each page it costs
     (the pages on the way to it count, and what they name). A copy's video counts once, whichever of
@@ -3755,19 +3774,35 @@ def _page_plan(pages, routes, done, found, known, learned, copies=None, rank=Non
                 title = nxt and _scene_state(pages, nxt, known)
             if title and title not in found and video(title) not in named:
                 holds.setdefault(s, set()).add(video(title))
-    return plan_pages(holds, {s: [y for y, _ in r] for s, r in routes.items()}, done, rank)
+    # (and each main movie's and episode's page nearest the first menu, read whatever else names it: anchored)
+    must = []
+    if anchored:
+        cands = [(k["plays"]["title"], s, len(routes[s]), bool(k["plays"].get("after") or k["plays"].get("into")))
+                 for (s, _n), k in known.items() if s in routes and (k.get("plays") or {}).get("chapter") in (1, None)
+                 and "title" in (k.get("plays") or {})]
+        must = [s for s in anchor_pages(anchored, cands) if s not in done]
+    return plan_pages(holds, {s: [y for y, _ in r] for s, r in routes.items()}, done, rank, must=must)
 
 
-def plan_pages(holds, ways, done=(), rank=None, cost=None):
+def plan_pages(holds, ways, done=(), rank=None, cost=None, must=()):
     """The pages to read, in order, so every title still unnamed is read on some page: a DVD's and a
     Blu-ray's alike, each from what its buttons are known to play before a word is read. holds: {page:
     the titles (a copy's video once) a button on it would name}; ways: {page: the pages on the way to
     it, in order}; done: pages read or given up on; rank(page): ties go to the lowest. Greedy: the page
     that names the most titles still unnamed for what it costs (cost(pages): the pages new to the
-    crawl it takes; by default how many, the pages on the way counted, and what they name)."""
+    crawl it takes; by default how many, the pages on the way counted, and what they name). must: pages
+    read whatever else names their titles (each main movie's and episode's page nearest the first menu,
+    the user's: its picture there), first, the pages on the way to them with them."""
     plan, chosen = [], set(done)
+    named = set()                   # (what the pages read anyway name: sought no further)
+    for s in must:
+        new = [x for x in list(ways.get(s, [])) + [s] if x not in chosen]
+        plan += new
+        chosen.update(new)
+        for x in new:
+            named |= holds.get(x, set())
     holds = {s: t for s, t in holds.items() if s not in chosen}
-    left = set().union(*holds.values()) if holds else set()
+    left = (set().union(*holds.values()) if holds else set()) - named
     cost = cost or len
 
     def worth(s):
@@ -5007,17 +5042,18 @@ def waits_told(progress):
 
 
 def crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, is_word=None, tv=False, every_title=False,
-          progress=no_progress):
+          progress=no_progress, anchored=None):
     """_crawl, with is_word (a dictionary: core.word_checker) to judge Windows' OCR readings by
     (WORDS) while it runs. tv: a TV disc's, its episode pages read too. every_title: the pages of
-    copies and Play Alls too, for a picture of each. progress: CRAWL_STAGES, as they come."""
+    copies and Play Alls too, for a picture of each. progress: CRAWL_STAGES, as they come. anchored: {title number:
+    "main" or "episode"}, each one's page nearest the first menu read whatever else names it (_page_plan)."""
     global WORDS
     WORDS = is_word
     readings_begin()                            # (this stakeout's readings: how sure of each)
     progress("start")
     try:
         with waits_told(progress):
-            return _crawl(drive, vlc_dir, structure, out_dir, log, everything, tv, every_title, progress)
+            return _crawl(drive, vlc_dir, structure, out_dir, log, everything, tv, every_title, progress, anchored)
     finally:
         WORDS = None
         # VLC let go of, however it ended (an error, the disc taken out mid-stakeout): no player
@@ -5030,7 +5066,7 @@ _crawlers = []        # the stakeout's VLC sessions (_Crawler), closed when it's
 
 
 def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=False, every_title=False,
-           progress=no_progress):
+           progress=no_progress, anchored=None):
     """The menu buttons that matter: their words (OCR) and where they go, a page or what they
     play. In rounds: a tour through the pages there's a way to, reading their buttons; then each
     button whose result the disc doesn't state outright is pressed, from a fresh start, and what
@@ -5239,7 +5275,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
                 found |= given_up
                 tell_titles(named() | given_up)          # (as read so far, not hoped)
                 plan = [] if everything else _page_plan(pages, routes, done, found, known, c.learned,
-                                                        {} if every_title else copies, page_rank)
+                                                        {} if every_title else copies, page_rank, anchored)
                 if not plan and not everything and not all(c.read(x) for x in c.reading):
                     for x in list(c.reading):
                         c.first_words(x)
@@ -5494,6 +5530,7 @@ def _crawl(drive, vlc_dir, structure, out_dir, log=print, everything=False, tv=F
             log("  " + i18n.log("couldn't read the disc's titles for its Play All ({error})", error=e))
     if _rapid:
         out["found"]["reader"] = "rapidocr"
+    out["anchored"] = [[t, k] for t, k in sorted((anchored or {}).items(), key=lambda kv: str(kv[0]))]
     return finish_crawl(out, out_dir)
 
 
@@ -6345,11 +6382,54 @@ def fix_tv_readings(tv, episodes, people, is_word, also=None, seen=None, sure=No
         new = fix_reading(text, people, is_word, also.get(text), seen)
         if known and sure.get(text, 0) < SURE_ENOUGH and not readable(new, known, True):
             new = next((a for a in also.get(text) or [] if readable(a, known, True)), new)
-        readings.append(dict(r, text=new, read=text) if new != text else r)
+        r = dict(r, text=new, read=text) if new != text else r
+        if r.get("description"):        # (its description's words put right as its name's are, then a sentence)
+            said = nice_description(r["description"], people, is_word, fix=lambda t: fix_reading(t, people, is_word, None, seen))
+            r = dict(r, description=said) if said != r["description"] else r
+        readings.append(r)
     return dict(tv, readings=readings)
 
 
-def correct_names(found, people, is_word, title_fix=None, seen=None):
+def nice_description(text, people=(), is_word=None, film=None, fix=None):
+    """A description as a sentence (the user's, 2026-11-19): menus print them in small capitals, and OCR reads some
+    words as capitals, some not ("Take a thrilling look back through THE PREVIOUS MOVIES in SEARCH oF CLUES TO...").
+    Every word small but "I" and a single name of the film's people no dictionary has ("Yates"); then its words put
+    right (fix: fix_reading, on the small words -- "iark day" Mark Day by the credits); then whole names as the
+    people have them ("Mark Day"; never a common word alone: "Spend a day") and the film's own title as it is; a
+    capital read on its own kept only before another capitalised word ("Director David", "Editor Mark": a role
+    before a name, not "the Mysteries of", "Stages."); its first word, and the first after a full stop, a capital. A
+    description written as a sentence already (no word in capitals or odd case) as it is, its words put right."""
+    text = re.sub(r"\s+", " ", text or "").strip()
+    odd = lambda w: len(w) >= 2 and not (w.islower() or w.istitle())       # (capitals, or capitals and small mixed)
+    orig = re.findall(r"[A-Za-z]+", text)
+    if not any(odd(w) for w in orig):
+        return fix(text) if fix else text
+    names, single = [], {}
+    for n in people or ():
+        for part in re.split(r"\s*/\s*", re.sub(r"\([^)]*\)", " ", n or "")):
+            ws = re.findall(r"[A-Za-z][A-Za-z'-]*", part)
+            if len(ws) >= 2:
+                names.append(" ".join(ws))
+            for w in ws:
+                if len(w) >= 3 and not (is_word and is_word(w)) and w.lower() not in EXTRAS_VOCAB:
+                    single[w.lower()] = w
+    out = re.sub(r"[A-Za-z]+", lambda m: single.get(m.group(0).lower()) or ("I" if m.group(0) == "I" else m.group(0).lower()), text)
+    if fix:
+        out = fix(out)
+    for whole in sorted(set(names) | ({film} if film else set()), key=len, reverse=True):
+        out = re.sub(r"(?<![A-Za-z])%s(?![A-Za-z])" % r"\s+".join(map(re.escape, whole.split())), whole, out, flags=re.I)
+    roles = {orig[i].lower() for i in range(len(orig) - 1) if orig[i].istitle() and len(orig[i]) > 1
+             and orig[i + 1][:1].isupper() and orig[i].lower() not in SMALL_WORDS}
+    for _ in range(4):                  # (a role before a name before a name: "Actress Nat Tena")
+        was = out
+        out = re.sub(r"\b([a-z]+)(\s+)(?=[A-Z])", lambda m: (m.group(1).capitalize() if m.group(1) in roles
+                                                              else m.group(1)) + m.group(2), out)
+        if out == was:
+            break
+    return re.sub(r"(^|[.!?]['\")]?\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), out)
+
+
+def correct_names(found, people, is_word, title_fix=None, seen=None, film=None):
     """found (menu_titles()) with its names put right where they can be: an extra's against the
     film's people (credit_fix), then the words read well elsewhere on the disc (seen_fix; seen:
     disc_words); an ad's against the films it may advertise (title_fix: a known title, closely,
@@ -6359,7 +6439,12 @@ def correct_names(found, people, is_word, title_fix=None, seen=None):
     extras = []
     for e in found.get("extras") or []:
         new = fix_reading(e.get("name"), people, is_word, e.get("also"), seen)
-        extras.append(dict(e, name=new, read=e["name"]) if new != e.get("name") else e)
+        e = dict(e, name=new, read=e["name"]) if new != e.get("name") else e
+        if e.get("description"):        # (its description's words put right as its name's are, then a sentence)
+            said = nice_description(e["description"], people, is_word, film,
+                                    fix=lambda t: fix_reading(t, people, is_word, None, seen))
+            e = dict(e, description=said) if said != e["description"] else e
+        extras.append(e)
     promo_said, promo_read = {}, dict(found.get("promo_read") or {})
     for t, ad in (found.get("promo_said") or {}).items():
         own = ad.get("own") or ""
@@ -6448,21 +6533,29 @@ def pressed_first(page, button, by):
     return out
 
 
-def title_pictures(out, out_dir):
+def title_pictures(out, out_dir, anchored=None):
     """For each title a menu button plays, the button to show for it: {title: {"image": the
     page's picture (a path), "rect": the button's [x0, y0, x1, y1] (the disc's 720x480), "text":
-    its words as read}}. Only pages read have a picture; of a title's buttons, the one read
-    best (the film: its Play button sooner than a scene's; nothing read, the first). The
-    feature's, though: the button nearest the menu the disc opens on, as a viewer plays the film
-    (WALL-E's main menu Play, read as "DO", not a commentary page's "Play Film" three presses on)."""
+    its words as read}}. Only pages read have a picture; of a title's buttons there, by its type (the user's,
+    2026-11-19; anchored {title: "main" or "episode"}, the disc's film found too where nothing's anchored):
+      a main movie     the one nearest the first menu, playing it from its start, however it read (WALL-E's main
+                       menu Play, read as "DO", not a commentary page's "Play Film" three presses on)
+      an episode       the one nearest that isn't a Play All starting at it; a Play All's if that's all there is
+      any other        read differently (read and not, or other words): the one read best ("1. Opening" over
+                       nothing); read alike, the one nearest the first menu
+    Nearest: its menu's depth, then the presses on the way. Read best: a reading of words, then the one its name
+    came from, then from its start, then the first button (Play before FastPlay)."""
     best = {}
     found = out.get("found") or {}
-    # (every film-length title's, as the feature's: each film of a disc of several (Who Done It?'s
-    # Play on its own menu, not its commentary page's "Frank ON", which reads better), each cut of
-    # one (its own Play): a commentary's button may go on with whichever is playing, its own doesn't)
-    films = {found.get("feature")} | {f["title"] for f in found.get("features") or []} | {
-        b["plays"]["title"] for p in out["pages"] for b in p["buttons"]
-        if b.get("plays") and b["plays"].get("chapter") in (1, None) and (b["plays"].get("seconds") or 0) >= FILM_SECONDS}
+    # (the main movies: anchored by type; else the films the crawl found -- each film of a disc of several, Who Done
+    # It?'s Play on its own menu, not its commentary page's "Frank ON", which reads better)
+    # (anchored: given, else as the crawl kept it, pairs -- a DVD's title numbers stay numbers in crawl.json)
+    kinds = dict(anchored if anchored is not None else map(tuple, out.get("anchored") or []))
+    if not any(k == "main" for k in kinds.values()):
+        for t in {found.get("feature")} | {f["title"] for f in found.get("features") or []}:
+            if t is not None:
+                kinds.setdefault(t, "main")
+    cands = {}
     # (each title's reading its name comes from, as menu_titles takes it: its wordiest; the button that read it
     # is the one to show, its words there, not another of its buttons unread: Order of the Phoenix's "GRAWP",
     # one word, scores no more than nothing, and its unread copy on another menu won)
@@ -6500,12 +6593,14 @@ def title_pictures(out, out_dir):
             # (a scrap read off a logo counts for nothing: then the first button, Play before FastPlay)
             # (and one that says it's an ad over one saying nothing: The Sorcerer's Apprentice's title
             # 66, FastPlay's first sneak peek too, but "Peeks" names it, "Ploy" doesn't)
-            rank = (score if score >= 6 else 0, (b.get("text") or "") == named_by.get(t, None), _ad_text(b.get("text")),
+            read = (score if score >= 6 else 0, (b.get("text") or "") == named_by.get(t, None), _ad_text(b.get("text")),
                     b["plays"].get("chapter") == 1, -b["n"])
-            if t in films:                      # (from its start, then nearest the first menu)
-                rank = (b["plays"].get("chapter") == 1, -len(p.get("route") or [])) + rank
-            if t not in best or rank > best[t][0]:
-                best[t] = (rank, dict(shown))
+            near = (-(p.get("depth") or 0), -len(p.get("route") or []))
+            # (a Play All's copy: one starting part way into what it plays, or playing on into more, or saying so)
+            play_all = b["plays"].get("chapter") not in (1, None) or bool(b["plays"].get("after")) or \
+                bool(PLAY_ALL_RE.search(b.get("text") or ""))
+            cands.setdefault(t, []).append((read, near, play_all, b["plays"].get("chapter") == 1, b.get("text") or "",
+                                            dict(shown)))
             # another title the button plays, chosen on the way (each friend's story on The Swan Princess, the
             # friend picked a page before): the same button, its own way there, named by the choice
             for o in b["plays"].get("others") or []:
@@ -6518,6 +6613,19 @@ def title_pictures(out, out_dir):
                                                **({"shape": [list(q) for q in b["shape"]]} if b.get("shape") else {}),
                                                **({"pressed": pressed_first(p, b, o.get("by"))}
                                                   if pressed_first(p, b, o.get("by")) else {})})
+    # each title's button, by its type
+    plain = lambda x: " ".join(re.findall(r"[a-z0-9]+", x.lower()))
+    for t, cs in cands.items():
+        if kinds.get(t) == "main":
+            key = lambda c: (c[3], c[1], c[0])
+        elif kinds.get(t) == "episode":
+            key = lambda c: (not c[2], c[1], c[0])
+        elif len({plain(c[4]) for c in cs}) > 1:
+            key = lambda c: (c[0], c[1])
+        else:
+            key = lambda c: (c[1], c[0])
+        pick = max(cs, key=key)
+        best[t] = (key(pick), pick[5])      # (its own button over a run's or a choice's: as ever)
     # outlined: where the name was read, as the reading says ("words": the lines kept, the name beside
     # a marker, its plate), never looked for again (a guess can show words that weren't the ones read);
     # not known (a reading saved before), the button's area, as the disc draws it ("button": that, either way)

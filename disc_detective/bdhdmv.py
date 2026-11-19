@@ -424,7 +424,7 @@ SCOPES = ("titles", "language", "all")
 
 
 def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=None, tv=False, scope="titles",
-         is_word=None):
+         is_word=None, anchored=None):
     """The disc's HDMV menus as a crawl's result (a DVD crawl's shape: its pages as a DVD's, "found" by the
     shared rules), nothing played. None when the library isn't installed or the disc has no HDMV menus.
     aacs: a libaacs-compatible library (MakeMKV's, by default); read_words: a picture to its words
@@ -437,7 +437,9 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
     film's scenes say which is the film); "language", every menu reached in the player's language, each
     button that plays a title read, and each that turns to a page on the way to one (not each page's own
     tabs over again, nor the languages' going back to the first); "all", that of every menu, every
-    language. is_word: a dictionary, for the readings worth a second look (button_words)."""
+    language. is_word: a dictionary, for the readings worth a second look (button_words). anchored: {title id:
+    "main" or "episode"}, in scope "titles" each one's button nearest the first menu read whatever else names it
+    (menus.anchor_pages: an episode's not a Play All's starting at it, unless that's all), its picture there."""
     if not available():
         return None
     import time
@@ -706,9 +708,18 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
         rank = lambda pk: best[pk] * len(order) + order.index(pk)
         found, tried, done = set(), {}, set()
         sought = {v for vs in holds.values() for v in vs}
+        # (each main movie's and episode's button nearest the first menu, read whatever else names its title: the
+        # user's, its picture there -- its menu's depth, then the presses on the way)
+        anchor_keys = {}
+        if anchored:
+            presses = lambda key: (loaded[key[:2]]["depth"], len(loaded[key[:2]]["routes"].get(key[2], [])))
+            cands = [(title_for(pl), key, presses(key), not from_start(key)) for pl, keys in by_title.items() for key in keys]
+            for key in menus.anchor_pages(anchored, cands):
+                anchor_keys.setdefault(key[:3], []).append(key)
         while True:
             left = {pk: {v for v in vs if v not in found and tried.get(v, 0) < TRIES} for pk, vs in holds.items()}
-            todo = menus.plan_pages({pk: v for pk, v in left.items() if v}, {}, done, rank)
+            todo = menus.plan_pages({pk: v for pk, v in left.items() if v}, {}, done, rank,
+                                    must=[pk for pk in anchor_keys if pk not in done])
             count["total"] = len(count["pages"]) + len([pk for pk in todo if pk not in count["pages"]])
             # (the titles sought settled: named, given up on, or with no page left to read them on)
             waiting = {v for pk in todo for v in left[pk]}
@@ -718,7 +729,9 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
                 break
             pk = todo[0]
             done.add(pk)
-            for vid in sorted(left[pk], key=str):
+            for key in anchor_keys.get(pk, []):
+                look(key)
+            for vid in sorted(left.get(pk, ()), key=str):
                 for key in holds[pk][vid]:
                     text, sure, _ = look(key)
                     if menus.names_title(text, sure, need_sure=True):
@@ -918,4 +931,5 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
                 for t in [title_for(o["playlist"])] if t]
         out["tv"]["play_order"] = core.play_titles_order(titles, runs)
     out["found"] = dict(menus.menu_titles(out), reader="rapidocr")
+    out["anchored"] = [[t, k] for t, k in sorted((anchored or {}).items(), key=lambda kv: str(kv[0]))]
     return menus.finish_crawl(out, out_dir)

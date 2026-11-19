@@ -2472,6 +2472,33 @@ def test_a_menu_picture_shows_the_words_read_on_demand(tmp_path):
         root.destroy()
 
 
+def test_a_menu_pictures_description_has_its_own_wrapped_line(tmp_path):
+    """A title's description, read under its name (Order of the Phoenix's run long), shown on a line of its own under
+    the name, wrapped, never on the name's line running off the window; none, no such line."""
+    from PIL import Image
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display")
+    root.withdraw()
+    try:
+        path = str(tmp_path / "page.png")
+        Image.new("RGB", (720, 480), (40, 60, 90)).save(path)
+        v = dd_app.MenuPicture(root)
+        said = ("Director David Yates and Editor Mark Day show us what a difference a good edit makes and allow you "
+                "to edit a scene.")
+        v.show("00032.mpls", {"image": path, "rect": [400, 100, 600, 200], "button": [400, 100, 600, 200],
+                              "text": "Harry Potter: The Magic of Editing", "description": said})
+        root.update()
+        assert v.words.cget("text") == "Harry Potter: The Magic of Editing"
+        assert v.described.winfo_manager() and v.described.cget("text") == said and int(str(v.described.cget("wraplength"))) == 640
+        v.show("00033.mpls", {"image": path, "rect": [400, 100, 600, 200], "button": [400, 100, 600, 200], "text": "Additional Scenes"})
+        root.update()
+        assert not v.described.winfo_manager()
+    finally:
+        root.destroy()
+
+
 def test_edit_titles_puts_episodes_first_then_extras_as_the_menus_have_them():
     rows = {"Title 30": {"type": "Promo"},
             "Title 21": {"type": "Extra"},
@@ -3817,3 +3844,15 @@ def test_a_newer_version_shows_on_the_about_link_and_inside(gui, monkeypatch):
     root.update()
     assert "Working offline: not looking for a newer version." in texts() and not looked
     app.about_win.top.destroy()
+
+
+def test_the_main_movies_and_episodes_anchored_for_the_menus_search():
+    """anchored_titles: the disc's main movies and episodes, by their labels where they have one (MainMovie, Episode),
+    else by the scan (the film and its other cuts; episodes); a DVD crawl's by title number."""
+    rep = {"titles": [{"id": "Title 1", "role": "feature"}, {"id": "Title 2", "role": "version"},
+                      {"id": "Title 3", "role": "extra"}, {"id": "Title 4", "role": "episode"},
+                      {"id": "Title 5", "role": "feature"}],
+           "labels": {"Title 3": {"type": "MainMovie"}, "Title 5": {"type": "Extra"}}}
+    assert dd_app.anchored_titles(rep, number=True) == {1: "main", 2: "main", 3: "main", 4: "episode"}
+    bd = {"titles": [{"id": "00030.mpls", "role": "extra"}, {"id": "00059.mpls", "role": "feature"}], "labels": {}}
+    assert dd_app.anchored_titles(bd) == {"00059.mpls": "main"}

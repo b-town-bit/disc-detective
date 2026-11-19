@@ -600,6 +600,52 @@ def test_the_button_to_show_for_each_title(tmp_path):
     assert menus.title_pictures(out, str(tmp_path))[1]["rect"] == [10, 10, 200, 40]   # the first: Play
 
 
+def test_a_main_movies_and_episodes_page_nearest_the_menu_is_read_whatever_else_names_it():
+    """The search (the user's, 2026-11-19): the greedy plan as ever, and each main movie's and episode's page nearest
+    the first menu (anchor_pages) read too, first, the pages on the way with it, though another page in the plan names
+    its title -- an episode's nearest that isn't a Play All starting at it, a Play All's only if that's all."""
+    holds = {"deep": {1, 2}, "main": {1}}
+    assert menus.plan_pages(holds, {}) == ["deep"]                                # (greedy: one page names both)
+    assert menus.plan_pages(holds, {}, must=["main"]) == ["main", "deep"]
+    assert menus.plan_pages(holds, {"main": ["root"]}, must=["main"]) == ["root", "main", "deep"]   # (and its way)
+    assert menus.plan_pages({"main": {1}}, {}, must=["main"]) == ["main"]                   # (its title not sought again)
+    cands = [(1, "main", 0, False), (1, "scenes", 2, False),                     # the film: its Play on the main menu
+             (5, "episodes", 1, False), (5, "menu", 0, True),                   # an episode: not its Play All's copy
+             (6, "menu", 0, True),                                              # ... unless that's all there is
+             (9, "menu", 0, False)]                                             # (an extra: not anchored)
+    assert menus.anchor_pages({1: "main", 5: "episode", 6: "episode"}, cands) == ["main", "menu", "episodes"]
+
+
+def test_an_episodes_picture_is_its_nearest_button_not_a_play_alls(tmp_path):
+    """An episode's picture: its nearest button that isn't a Play All starting at it (one starting part way in, or
+    saying Play All), a Play All's only when that's all there is; any other title read alike, its nearest."""
+    page = lambda n, depth, buttons: {"domain": "bd", "page": n, "program": 1, "depth": depth, "route": [],
+                                      "image": "p%d.png" % n, "buttons": buttons}
+    near = page(1, 0, [{"n": 1, "rect": [0, 0, 10, 10], "text": "Play All", "plays": {"title": "00010.mpls", "chapter": 3}}])
+    far = page(2, 1, [{"n": 2, "rect": [0, 20, 10, 30], "text": "Chuck Versus the Ex", "plays": {"title": "00010.mpls", "chapter": 1}}])
+    pic = menus.title_pictures({"pages": [near, far]}, str(tmp_path), {"00010.mpls": "episode"})["00010.mpls"]
+    assert pic["image"].endswith("p2.png")
+    pic = menus.title_pictures({"pages": [near]}, str(tmp_path), {"00010.mpls": "episode"})["00010.mpls"]
+    assert pic["image"].endswith("p1.png")                              # (only its Play All's: that, then)
+    a = page(1, 0, [{"n": 1, "rect": [0, 0, 10, 10], "text": "Bloopers", "plays": {"title": "00020.mpls", "chapter": 1}}])
+    b = page(2, 1, [{"n": 2, "rect": [0, 20, 10, 30], "text": "Bloopers", "plays": {"title": "00020.mpls", "chapter": 1}}])
+    assert menus.title_pictures({"pages": [b, a]}, str(tmp_path))["00020.mpls"]["image"].endswith("p1.png")
+
+
+def test_a_long_extras_picture_is_its_read_copy_not_an_unread_one_nearer_the_menu(tmp_path):
+    """A title long enough to be a film but not the disc's film found (Order of the Phoenix's 44-minute "The Hidden
+    Secrets of Harry Potter"), its button on two copies of a page: the copy read is its picture, though the other is
+    nearer the first menu -- never "couldn't read its words" for a name read. The disc's own film keeps the copy
+    nearest the menu (the test above)."""
+    near = {"domain": 1, "page": 1, "program": 1, "route": [], "image": "page_1_1_1.png",
+            "buttons": [{"n": 30, "rect": [10, 10, 200, 40], "text": "", "plays": {"title": 30, "chapter": 1, "seconds": 2635}}]}
+    far = {"domain": 1, "page": 2, "program": 1, "route": [{"page": 1, "program": 1, "button": 9}], "image": "page_1_2_1.png",
+           "buttons": [{"n": 33, "rect": [10, 50, 200, 80], "text": "The Hidden Secrets of Harry Potter",
+                        "plays": {"title": 30, "chapter": 1, "seconds": 2635}}]}
+    pic = menus.title_pictures({"pages": [near, far], "found": {"feature": 1}}, str(tmp_path))[30]
+    assert pic["image"].endswith("page_1_2_1.png") and pic["text"] == "The Hidden Secrets of Harry Potter"
+
+
 def test_a_titles_picture_outlines_the_words_read(tmp_path):
     """The outline on a title's picture: where its name was read, as the reading handed it on
     ("words": Enchanted's tall button areas, the lines in them), never looked for again; not known
@@ -2640,6 +2686,30 @@ def test_initials_stay_capitals_and_a_name_after_mc_has_its_own_capital():
     assert menus.nice_name("CGI SPIDER-MAN") == "CGI Spider-Man" and menus.nice_name("IMAX: THE STORY") == "IMAX: The Story"
     assert menus.nice_name("BONE SAW MCGRAW") == "Bone Saw McGraw" and menus.nice_name("DR. MCCOY'S") == "Dr. McCoy's"
     assert menus.nice_name("MC HAMMER") == "Mc Hammer"
+
+
+def test_a_description_in_small_capitals_reads_as_a_sentence():
+    """A description as OCR reads a menu's small capitals (Order of the Phoenix's): its words small, but names as the
+    film's people have them (a whole name; a single one no dictionary has), the film's title as it is, a role before a
+    name ("Editor Mark Day") and its first word a capital; its words put right first (fix: the credits' "Mark" for
+    "Iark"); one written as a sentence already as it is."""
+    people = ["David Yates", "Mark Day", "Natalia Tena", "Daniel Radcliffe"]
+    is_word = lambda w: w.lower() in {"day", "mark", "director", "editor", "difference", "good", "edit", "scene", "spend",
+                                      "actress", "tour", "stages", "movies", "harry", "potter", "order", "phoenix", "mat"}
+    fix = lambda t: t.replace("iark day", "Mark Day")
+    said = menus.nice_description("Director David Yates and Editor Iark Day show us what A DIFFERENCE A GOOD EDIT MAKES AND "
+                                  "ALLOW YOU TO EDIT A SCENE.", people, is_word, fix=fix)
+    assert said == "Director David Yates and Editor Mark Day show us what a difference a good edit makes and allow you to " \
+                   "edit a scene."
+    said = menus.nice_description("Spend a day with Actress Mat Tena AnD RECEiVE A VERY PERSONAL tour of the Harry Potter And "
+                                  "The Order of the Phoenix Stages.", people, is_word, "Harry Potter and the Order of the Phoenix")
+    assert said == "Spend a day with Actress Mat Tena and receive a very personal tour of the Harry Potter and the Order of " \
+                   "the Phoenix stages."
+    assert menus.nice_description("Morgan and Lester ponder their end.", people, is_word) == "Morgan and Lester ponder their end."
+    # (and as correct_names hands an extra on: its name put right as ever, its description made a sentence)
+    got = menus.correct_names({"extras": [{"title": 32, "name": "Harry Potter: The Magic of Editing",
+                                           "description": "SHOW US WHAT A GOOD EDIT MAKES."}]}, people, is_word)
+    assert got["extras"][0]["description"] == "Show us what a good edit makes."
 
 
 def test_ocrs_slips_in_numbers_are_put_right_but_codes_are_left_alone():

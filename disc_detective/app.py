@@ -210,6 +210,31 @@ def grown(points, by):
     return out
 
 
+def anchored_titles(rep, number=False):
+    """The disc's main movies and episodes, for the menus' search and pictures (the user's, 2026-11-19): {title:
+    "main" or "episode"}, each one's button nearest the first menu read and shown. By its label where it has one
+    (yours, TheDiscDB's: MainMovie, Episode), else by the scan (the film and its other cuts; a show's episodes).
+    number: a DVD crawl's keys, its title numbers ("Title 3": 3); else the titles' own ids ("00030.mpls")."""
+    labels = rep.get("labels") or {}
+    out = {}
+    for t in rep.get("titles") or []:
+        kind = (labels.get(t["id"]) or {}).get("type")
+        if kind:
+            got = "main" if kind == Type.MAIN_MOVIE else "episode" if kind == Type.EPISODE else None
+        else:
+            got = "main" if t.get("role") in (Role.FEATURE, Role.VERSION) else "episode" if t.get("role") == Role.EPISODE else None
+        if not got:
+            continue
+        key = t["id"]
+        if number:
+            m = re.match(r"Title (\d+)$", str(key))
+            if not m:
+                continue
+            key = int(m.group(1))
+        out[key] = got
+    return out
+
+
 def described(name, description):
     """An extra's file name with the words its menu prints under it, in brackets, as Plex shows it ("Sc. 22 (Big
     Mike talks to Herd)": the user's, 2026-11-17, tried in Plex): no full stop at its end; none, the name alone."""
@@ -3583,7 +3608,7 @@ class App:
                                   tv=rep.get("kind") == "tv",
                                   # (a quick crawl, each title's best button; every one, if Settings ask)
                                   scope="language" if self.settings.get("menu_every_title") else "titles",
-                                  is_word=self._crawl_words(rep, self.scan_args()))
+                                  is_word=self._crawl_words(rep, self.scan_args()), anchored=anchored_titles(rep))
             except (menus.Cancelled, menus.Unsupported):
                 raise                    # (called off; a Java menu after all)
             except Exception:
@@ -3602,7 +3627,7 @@ class App:
         # (the IMDb index as a dictionary: which of Windows OCR's two readings has real words)
         result = menus.crawl(root, vlc, structure, out, log=log, is_word=self._crawl_words(rep, args),
                              tv=rep.get("kind") == "tv", every_title=bool(self.settings.get("menu_every_title")),
-                             progress=progress)
+                             progress=progress, anchored=anchored_titles(rep, number=True))
         result["suspects"] = sum(1 for p in result["pages"] for b in p["buttons"] if "chain" in b)
         return result
 
@@ -3621,7 +3646,7 @@ class App:
         match = rep.get("match") or {}
         # (and by the words read well elsewhere in the menus: "Iagic" by "Magic")
         found = menus.correct_names(found, names, is_word, lambda t: di.title_fix(titles, t, match.get("year")),
-                                    seen=menus.disc_words(raw, is_word, names))
+                                    seen=menus.disc_words(raw, is_word, names), film=naming_film(rep))
         found = menus.plain_names(found, is_word)
         # the well-known films trailers are named for (Spider-Man's xXx, Mr. Deeds...): for the namer to judge
         # other films' trailers by (menus.name_extras, when labelled: detected_for)
@@ -5577,7 +5602,7 @@ class MenuPicture:
         th.Tooltip(self.path, lambda: self.trail if str(self.path.cget("text")) != self.trail else "")
         # what it was read as: the name, a link when it was put right (read as, put right as: pointed at,
         # or clicked), then how to look at it
-        said = ttk.Frame(body, style="Desk.TFrame")
+        said = self.said_row = ttk.Frame(body, style="Desk.TFrame")
         said.pack(anchor="w", pady=(4, 0))
         # (only the words as read set apart: "Detect titles read it as" and its full stop as the help text is)
         self.said = ttk.Label(said, text="", style="DeskSub.TLabel")
@@ -5586,6 +5611,9 @@ class MenuPicture:
         self.fixed = th.link(said, "", self._toggle_fix, style="DeskFindLink.TLabel")
         self.said_end = ttk.Label(said, text="", style="DeskSub.TLabel")
         th.Tooltip(self.fixed, lambda: self.fix_text)
+        # (its description, read under its name: a line of its own, wrapped -- Order of the Phoenix's run long, and
+        # beside the name on one line they ran off the window)
+        self.described = ttk.Label(body, text="", style="DeskFind.TLabel", wraplength=640, justify="left")
         self.fix_note = ttk.Label(body, text="", style="DeskSub.TLabel", wraplength=640, justify="left")
         self.fix_text = ""
         self.read = ttk.Label(body, text="", style="DeskSub.TLabel", wraplength=640, justify="left")
@@ -5616,6 +5644,7 @@ class MenuPicture:
         self.fixed.pack_forget()
         self.words.pack_forget()
         self.said_end.pack_forget()
+        self.described.pack_forget()
         fixed = bool(name and read_as and name != read_as)
         self.fix_text = _("Read as “{read}”, corrected to “{name}”", read=read_as, name=name) if fixed else ""
         self.fix_note.config(text=self.fix_text + "." if fixed else "")
@@ -5626,10 +5655,13 @@ class MenuPicture:
         self.said.config(text=before)
         shown = self.fixed if fixed else self.words
         # (set apart by its bold alone, no quotes round it: the user's)
-        shown.config(text=join_title(name, pic.get("description")) if fixed else words)
+        shown.config(text=name if fixed else words)
         shown.pack(side="left")
         self.said_end.config(text=after)
         self.said_end.pack(side="left")
+        if pic.get("description"):
+            self.described.config(text=pic["description"])
+            self.described.pack(anchor="w", after=self.said_row)
 
     def _toggle_fix(self):
         """A click on the corrected name: its reading shown, or hidden again."""
@@ -5649,8 +5681,8 @@ class MenuPicture:
         # (a picture kept before the way there was: its page's name, as its heading had it; the first menu's, Main Menu)
         self.trail = menu_trail(pic.get("page_trail")) or menu_name(pic.get("page_from"))
         fit_label(self.path, self.trail, "DeskFind.TLabel")
-        # (what was read: the name, and the words under it describing it, as the title box has them)
-        words = join_title((pic.get("text") or "").strip(), pic.get("description"))
+        # (what was read: the name; the words under it describing it on their own line, _said)
+        words = (pic.get("text") or "").strip()
         if pic.get("alone"):                      # (only the button: the disc's own image of it)
             self._said(_("Read as {words}."), pic, words)
             self.read.config(text=_("Its button in the disc's menu, as the disc has it."))

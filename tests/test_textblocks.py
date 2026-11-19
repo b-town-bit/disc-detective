@@ -488,3 +488,146 @@ def test_a_slanted_names_lines_read_in_order_along_the_slant():
     # (a logo's words each at its own slant, "THE" tipped over a level "JUNGLE": as they came, not along one)
     logo = [("JUNGLE", dict(slanted(320, 425, 226), k=0.0)), ("THE", slanted(326, 358, 211, k=-0.3))]
     assert textblocks.slant_order(logo) == logo
+
+
+def described_page(entries, title_size=26):
+    """Buttons stacked, each a title over a description of two lines in smaller grey lettering (Order of the
+    Phoenix's, Azkaban's): (page, rects, measured lines, styles, blocks), as classify has them."""
+    p = Page(size=(720, 120 * len(entries) + 40))
+    rects = {}
+    for k, (title, said) in enumerate(entries):
+        y = 30 + 120 * k
+        for j, t in enumerate(title):
+            p.text((60, y + 36 * j), t, size=title_size)
+        y += 36 * len(title) + 4
+        for j, t in enumerate(said):
+            p.text((60, y + 22 * j), t, size=16, colour=GREY, bold=False)
+        rects[k + 1] = (40, 20 + 120 * k, 680, 20 + 120 * (k + 1))
+    measured = textblocks.measure(p.image, p.lines)
+    st = {i: textblocks.style(p.image, t, ik) for i, (t, ik) in enumerate(measured)}
+    return p, rects, measured, st, textblocks.blocks(measured, rects)
+
+
+def named(measured, title, said=()):
+    """A button's names entry as classify gives it: its title's and description's lines by their words."""
+    at = lambda t: next(i for i, (x, _) in enumerate(measured) if x == t)
+    return {"name": " ".join(title), "idx": [at(t) for t in title], "lines": [measured[at(t)] for t in title],
+            "description": " ".join(said), "desc_idx": [at(t) for t in said], "description_lines": [measured[at(t)] for t in said],
+            "heading": ""}
+
+
+PHOENIX = [(["Trailing Tonks"], ["Spend a day with the actress and", "receive a very personal tour."]),
+           (["The Thestral Flight"], ["A look at how the flight was filmed", "over the streets of London."]),
+           (["The Hidden Secrets of", "Harry Potter"], ["Take a thrilling look back through", "the previous films for clues."])]
+
+
+def test_a_description_classify_took_for_a_title_goes_back_to_its_title():
+    """The style dictionary's second look (the user's design): Order of the Phoenix's "The Hidden Secrets of / Harry
+    Potter" left over its sentence, the sentence taken for its title -- its lines' style group is the page's
+    descriptions (after another group's line in its buttons, reading as sentences), so it's the description, and the
+    unused lines above it, in the page's title lettering, the title."""
+    p, rects, measured, st, blocks = described_page(PHOENIX)
+    names = {1: named(measured, PHOENIX[0][0], PHOENIX[0][1]), 2: named(measured, PHOENIX[1][0], PHOENIX[1][1]),
+             3: named(measured, PHOENIX[2][1])}
+    textblocks.restyle(measured, blocks, rects, names, st)
+    assert names[3]["name"] == "The Hidden Secrets of Harry Potter"
+    assert names[3]["description"] == "Take a thrilling look back through the previous films for clues."
+    assert names[1]["name"] == "Trailing Tonks" and names[2]["name"] == "The Thestral Flight"
+
+
+def test_a_colon_binds_the_title_line_between_it_and_its_description():
+    """Order of the Phoenix's "Harry Potter: / The Magic of Editing": classify's colon bound the description's first
+    line, the title's own second line left out -- the colon's is the line between in the title lettering, and the
+    description's lines go back to it whole."""
+    entries = PHOENIX[:2] + [(["Harry Potter:", "The Magic of Editing"], ["Director and editor show us what", "a good edit makes of a scene."])]
+    p, rects, measured, st, blocks = described_page(entries)
+    names = {1: named(measured, entries[0][0], entries[0][1]), 2: named(measured, entries[1][0], entries[1][1]),
+             3: named(measured, ["Harry Potter:", "Director and editor show us what"], ["a good edit makes of a scene."])}
+    textblocks.restyle(measured, blocks, rects, names, st)
+    assert names[3]["name"] == "Harry Potter: The Magic of Editing"
+    assert names[3]["description"] == "Director and editor show us what a good edit makes of a scene."
+
+
+def test_a_description_classify_dropped_comes_back_from_its_style_group():
+    """Azkaban's interviews: a button's description left out though it's in the lettering its siblings' confident
+    descriptions are in, close under its title -- it's the button's description."""
+    p, rects, measured, st, blocks = described_page(PHOENIX[:2] + [(["The Paper Swallow"], ["A note that flies across the", "office from desk to desk."])])
+    names = {1: named(measured, PHOENIX[0][0], PHOENIX[0][1]), 2: named(measured, PHOENIX[1][0], PHOENIX[1][1]),
+             3: named(measured, ["The Paper Swallow"])}
+    textblocks.restyle(measured, blocks, rects, names, st)
+    assert names[3]["name"] == "The Paper Swallow"
+    assert names[3]["description"] == "A note that flies across the office from desk to desk."
+
+
+def test_text_under_titles_with_no_confident_description_in_its_group_isnt_added():
+    """The noise guard: new lines join a description only where confident lines of their group are descriptions --
+    a backdrop's print read as words (DA502D7E's newspaper) has none; and a page whose names classify got right is
+    left as it is."""
+    p, rects, measured, st, blocks = described_page(PHOENIX[:2])
+    names = {1: named(measured, PHOENIX[0][0]), 2: named(measured, PHOENIX[1][0])}
+    textblocks.restyle(measured, blocks, rects, names, st)
+    assert names[1]["description"] == "" and names[2]["description"] == ""
+    right = {1: named(measured, PHOENIX[0][0], PHOENIX[0][1]), 2: named(measured, PHOENIX[1][0], PHOENIX[1][1])}
+    textblocks.restyle(measured, blocks, rects, right, st)
+    assert right[1]["description"] == " ".join(PHOENIX[0][1]) and right[2]["name"] == "The Thestral Flight"
+
+
+def _settle_page(lines, words, answers, monkeypatch, blocks=None, owners=None):
+    """The settle loop alone, its classify and verdicts stood in for: lines' texts, 20 pixels apart (never touching);
+    words: {line: its group's word}, or a list of them, one per round; answers [(fixed, {button: (title lines,
+    description lines)})], classify's by the fixed titles it's asked with; blocks (default: one, all the lines) and
+    owners ({line: button}, default 1). Returns (names, the fixed titles classify was asked with)."""
+    measured = [(t, {"top": 20 * i, "bottom": 20 * i + 9, "left": 0, "right": 200, "h": 10}) for i, t in enumerate(lines)]
+    blocks = blocks or [list(range(len(lines)))]
+    owners = owners or {i: 1 for i in range(len(lines))}
+    rounds = words if isinstance(words, list) else None
+    asked, calls = [], []
+
+    def classify(image, lines_, groups, rects, disc_rects=None, st=None, fixed=None):
+        asked.append(fixed)
+        got = next(a for f, a in answers if (f or None) == (fixed or None))
+        return {n: {"name": " ".join(lines[i] for i in t), "idx": list(t), "desc_idx": list(d)} for n, (t, d) in got.items()}, []
+
+    def verdicts(*a):
+        w = rounds[min(len(calls), len(rounds) - 1)] if rounds else words
+        calls.append(1)
+        return {"word": w.get, "confident": {}, "owner": owners, "order": lambda i: i, "by_button": {}, "evidence": [],
+                "group_of": {}}
+    monkeypatch.setattr(textblocks, "_classify", classify)
+    monkeypatch.setattr(textblocks, "_verdicts", verdicts)
+    st = {i: {"size": 10, "width": 8, "box": 12, "colour": (200, 200, 200), "ring": None, "caps": None} for i in range(len(lines))}
+    names, _, _v = textblocks._settle(None, measured, blocks, {n: (0, 0, 9, 9) for n in set(owners.values())}, None, st, None)
+    return names, asked
+
+
+def test_the_settle_loop_fixes_a_blocks_title_and_classify_judges_the_rest_by_it(monkeypatch):
+    """The user's settle loop: classify had "Trailing Tonks" for the block's heading, its sentence for the name; its
+    style group says it's the title, so it's fixed as the block's title and classify runs again, the sentence then its
+    description -- and nothing more to fix: settled, in one round."""
+    lines = ["Trailing Tonks", "Spend a day with the actress", "on a personal tour", "of the stages."]
+    names, asked = _settle_page(lines, {0: "title", 1: "description", 2: "description", 3: "description"},
+                                [(None, {1: ([1, 2, 3], [])}), ({0: [0]}, {1: ([0], [1, 2, 3])})], monkeypatch)
+    assert asked == [None, {0: [0]}]
+    assert names[1]["idx"] == [0] and names[1]["desc_idx"] == [1, 2, 3]
+
+
+def test_the_settle_loops_fixed_title_grows_through_the_hard_rules(monkeypatch):
+    """Spider-Man 2's "Peter Parker and" / "Mary Jane Watson", its first line in other lettering, no title word of its
+    own: the run fixed grows up through a line carrying on into it, so the title's never cut short."""
+    lines = ["Peter Parker and", "Mary Jane Watson", "A look at the pair."]
+    names, asked = _settle_page(lines, {1: "title", 2: "description"},
+                                [(None, {1: ([2], [])}), ({0: [0, 1]}, {1: ([0, 1], [2])})], monkeypatch)
+    assert asked[1] == {0: [0, 1]} and names[1]["name"] == "Peter Parker and Mary Jane Watson"
+
+
+def test_a_settle_loop_coming_round_again_keeps_classifys_own_names(monkeypatch):
+    """A state seen before, not the last: a cycle -- classify's own names kept, the page noted (SETTLE_CYCLES). Two
+    blocks: the first fixed in one round, the second the next, and classify's answer then its first again."""
+    lines = ["Title One", "Words under it.", "Title Two", "More words."]
+    first = {1: ([1], []), 2: ([3], [])}
+    textblocks.SETTLE_CYCLES.clear()
+    names, asked = _settle_page(lines, [{0: "title", 1: "description"}, {0: "title", 2: "title", 3: "description"}],
+                                [(None, first), ({0: [0]}, {1: ([0], [1]), 2: ([3], [])}), ({0: [0], 1: [2]}, first)],
+                                monkeypatch, blocks=[[0, 1], [2, 3]], owners={0: 1, 1: 1, 2: 2, 3: 2})
+    assert asked == [None, {0: [0]}, {0: [0], 1: [2]}]
+    assert names[1]["idx"] == [1] and names[2]["idx"] == [3] and len(textblocks.SETTLE_CYCLES) == 1

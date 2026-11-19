@@ -945,7 +945,7 @@ def split_at_headings(lines, groups, st, ref):
     return out
 
 
-def classify(image, lines, groups, rects, disc_rects=None, st=None):
+def _classify(image, lines, groups, rects, disc_rects=None, st=None, fixed=None):
     """Each button's name, description and heading from the blocks, by style (the user's rules, 2026-11-15):
       - the item style: the one most buttons have a line in;
       - a line in another style followed by items in their style: the heading of all of them, till the next one;
@@ -983,6 +983,8 @@ def classify(image, lines, groups, rects, disc_rects=None, st=None):
         else:
             own_firsts = [i for i in firsts if i in owned] or owned
             ref = max((st[i] for i in own_firsts), key=lambda a: sum(1 for j in own_firsts if same_style(a, st[j])))
+        if fixed and gi in fixed:       # (its title fixed by the settle loop: the block's lettering is its)
+            ref = st[fixed[gi][0]]
         item = {i: same_style(st[i], ref) for i in g}
         # (a button with no line in the item style -- the selected one drawn brighter in a saved frame: Enchanted's
         # "Happy Working Song" -- its lines not in the style of text no button holds; none left, all its lines)
@@ -1002,6 +1004,13 @@ def classify(image, lines, groups, rects, disc_rects=None, st=None):
                 column_gap(lines[a][1], lines[b][1]) < HEADING_GAP * min(lines[a][1]["h"], lines[b][1]["h"])
             if not item[a] and item[b] and (carries_on(lines[a][0], lines[b][0]) or touching) and colours_match(st[a], st[b]):
                 item[a] = True
+        if fixed and gi in fixed:       # (the fixed title an item, the lines above it none)
+            top = lines[fixed[gi][0]][1]["top"]
+            for i in g:
+                if i in fixed[gi]:
+                    item[i] = True
+                elif lines[i][1]["top"] < top:
+                    item[i] = False
         roles, heading, colon, bound = {}, [], [], None
         since = 0                       # (a heading starts a block, as an empty line does: nothing after it is an
                                         # item's before it -- Chuck S1 D3's ONLINE, its small print not Sword Skills')
@@ -1113,6 +1122,280 @@ def classify(image, lines, groups, rects, disc_rects=None, st=None):
     placement(lines, full, disc_owner, names, {i: gi for gi, g in enumerate(groups) for i in g}, st, rects)
     inline_whole(lines, names)
     return names, rest
+
+
+SETTLE_ROUNDS = 10      # rounds at most, the settle loop's (a state repeated ends it sooner, as a rule after one)
+SETTLE_CYCLES = []      # pages whose settle loop came round to a state seen before (classify's own names kept)
+
+
+def classify(image, lines, groups, rects, disc_rects=None, st=None):
+    """Each button's name, description and heading from the blocks, by style (_classify, the user's rules), settled
+    (_settle: a block's title fixed where its style group says another than classify's, classify again) and looked
+    at once more by the page's style dictionary (restyle). The page's style groups worked out once for both. Returns
+    ({button: {"name", "lines", "idx", "description", "heading"}}, the text no button holds)."""
+    st = st or {i: style(image, lines[i][0], lines[i][1]) for i in range(len(lines))}
+    sg = style_groups(st, len(lines)) if len(lines) >= 3 else None
+    names, rest, verdicts = _settle(image, lines, groups, rects, disc_rects, st, sg)
+    restyle(lines, groups, rects, names, st, sg, verdicts)
+    return names, rest
+
+
+def _state(names):
+    return tuple(sorted((n, tuple(v.get("idx") or []), tuple(v.get("desc_idx") or [])) for n, v in names.items()))
+
+
+def _settle(image, lines, groups, rects, disc_rects, st, sg):
+    """The user's settle loop (2026-11-19): classify; then, in a block of one button whose title isn't sure and whose
+    style group says another run of its lines is its title (_verdicts), that run fixed as the block's title -- grown
+    through the hard rules first: a line above carrying on into it or ending in a colon (Spider-Man 2's "Peter Parker
+    and" / "Mary Jane Watson", its first line in other lettering), lines it carries on into -- and classify run again,
+    its own rules judging the rest against it (Order of the Phoenix's "Trailing Tonks", classify's heading over its
+    sentence, the sentence its name). Each round's state kept: the same again, settled; one seen before, a cycle, and
+    classify's own names kept (SETTLE_CYCLES). SETTLE_ROUNDS at most. Returns (names, rest, the verdicts for them
+    or None): its last verdicts, for restyle to take as they are, where the names are still those they were worked
+    out for (most pages: nothing to fix)."""
+    first = _classify(image, lines, groups, rects, disc_rects, st=st)
+    names, rest = first
+    if len(lines) < 3:
+        return names, rest, None
+    seen, fixed = [_state(names)], {}
+    block_of = {i: k for k, b in enumerate(groups) for i in b}
+    # (classify's hard rules for a title: a colon, a line carrying on, and a line touching the one under it in its
+    # colour, no empty rows between -- Abbott and Costello's "BONUS" / "MATERIALS", "BONUS" all wide letters)
+    touching = lambda a, b: column_gap(lines[a][1], lines[b][1]) < HEADING_GAP * min(lines[a][1]["h"], lines[b][1]["h"]) \
+        and colours_match(st[a], st[b])
+    tied = lambda a, b: lines[a][0].rstrip().endswith(":") or carries_on(lines[a][0], lines[b][0]) or touching(a, b)
+    v = None
+    for _ in range(SETTLE_ROUNDS):
+        v = _verdicts(lines, groups, rects, names, st, sg)
+        if v is None:
+            break
+        word, confident, owner, order = v["word"], v["confident"], v["owner"], v["order"]
+        new = dict(fixed)
+        for n, nv in names.items():
+            title = list(nv.get("idx") or [])
+            if not title or confident.get(title[0]) or word(title[0]) == "title":
+                continue
+            gi = block_of.get(title[0])
+            if gi is None or gi in new or len({owner[i] for i in groups[gi] if owner[i] is not None}) != 1:
+                continue
+            mine = sorted((i for i in groups[gi] if owner[i] in (n, None)), key=order)
+            run = []
+            for i in mine:
+                if word(i) == "title":
+                    run.append(i)
+                elif run:
+                    break
+            while run and mine.index(run[0]) > 0 and tied(mine[mine.index(run[0]) - 1], run[0]):
+                run.insert(0, mine[mine.index(run[0]) - 1])
+            while run and mine.index(run[-1]) + 1 < len(mine) and tied(run[-1], mine[mine.index(run[-1]) + 1]):
+                run.append(mine[mine.index(run[-1]) + 1])
+            if run and run != title:
+                new[gi] = run
+        if new == fixed:
+            return names, rest, v       # (nothing more to fix: its verdicts are these names')
+        fixed = new
+        names, rest = _classify(image, lines, groups, rects, disc_rects, st=st, fixed=fixed)
+        state = _state(names)
+        if state == seen[-1]:
+            return names, rest, v       # (the same again: the verdicts were worked out for this state)
+        if state in seen:               # (a cycle: classify's own names, and the page noted)
+            SETTLE_CYCLES.append(tuple(t for t, _ in lines))
+            return first[0], first[1], None
+        seen.append(state)
+    return names, rest, None
+
+
+# ---- the page's style dictionary, a second look at what classify isn't sure of (the user's design, 2026-11-19;
+# demo temp/style_demo.py, benched on 15 keyed pages: titles 291 -> 297, descriptions 299 -> 306, the bench's
+# Blu-ray titles 312 -> 316, none lost, no time to speak of) ----
+
+STYLE_MOST = 0.6        # of the pairs across two groups alike, at least: one style group (OCR's box height left out)
+GROUP_FIRST = 0.6       # of a group's buttons in which its line comes first, at least: a title group
+GROUP_AFTER = 0.6       # ... in which it comes after another group's: a description group (with SENTENCE_SHARE)
+SENTENCE_SHARE = 0.3    # of its lines reading as sentences, at least: a description group (or smaller lettering)
+GROUP_FREE = 0.6        # of its lines no button's, at least: another group (headings, the page's own text)
+VERDICT_SHARE = 0.7     # of a group's placement evidence one way, at least: its word on its lines' role
+VOTES_LEAST = 3         # confident lines, at least, for their roles alone to speak for their group (and 0.8 of them)
+
+
+def style_groups(st, n):
+    """The page's lines grouped by style, by agreement across a group, never by a chain of pairs: two groups join
+    while STYLE_MOST of the pairs across them are alike (same_style, OCR's box height left out: noisy on short lines),
+    the most alike first. st: each line's style; n: how many lines. [[line, ...], ...]."""
+    alike = lambda a, b: same_style(dict(a, box=1), dict(b, box=1))
+    ok = [[alike(st[i], st[j]) if i != j else True for j in range(n)] for i in range(n)]
+    groups = [[i] for i in range(n)]
+    while True:
+        best, pair = STYLE_MOST, None
+        for x in range(len(groups)):
+            for y in range(x + 1, len(groups)):
+                share = sum(ok[i][j] for i in groups[x] for j in groups[y]) / (len(groups[x]) * len(groups[y]))
+                if share >= best and (pair is None or share > best):
+                    best, pair = share, (x, y)
+        if pair is None:
+            return groups
+        x, y = pair
+        groups[x] += groups.pop(y)
+
+
+def _sentence(text):
+    return bool(re.search(r"[.!?]['\")]?\s*$", text)) or len(text.split()) >= 5
+
+
+def restyle(lines, groups, rects, names, st, sg=None, verdicts=None):
+    """A second look at classify's names, by the page's style groups (the user's design): lines that look alike do
+    alike. First, each line classify named, CONFIDENT or not by how its own signs agree -- a title first of its
+    button's lines, in the page's item lettering, short (under 5 words, no full stop); a description after its
+    button's title, smaller than it, reading as a sentence (or a wrap). Then each style group's word on its lines,
+    from two kinds of evidence apart -- where its own lines sit (a title group first in its buttons, a description
+    group after another in them and reading as sentences or smaller, another group mostly no button's) and its
+    confident lines' roles (an unsure line has no say: it can't poison its group) -- a word when they agree, or one
+    is clear and the other silent, none on a conflict. Then, within a button, never a confident line, never past a
+    hard rule (a colon, a line carrying on, an inline piece stays with its title; a cut never parts them, the run
+    moved may hang together itself):
+      a title's end -> its description   its group's word description (all of the title only if a title-word line
+                                         of the button's above it takes its place)
+      a description's start -> its title its group's word title
+      an unused line -> its title        the button's, above its title or between a colon and the line after it
+      unused lines -> its description    the button's, close under its last line -- and only where confident lines
+                                         of its group are descriptions too: a backdrop's print read as words
+                                         (DA502D7E's newspaper) has no say in it
+    Order of the Phoenix's "The Hidden Secrets of / Harry Potter" over its sentence (classify had the sentence for
+    its title), "Harry Potter: / The Magic of Editing" (its colon had bound the description's first line), the
+    descriptions Azkaban's interviews lost. names: classify's, changed in place; sg: the page's style groups, if
+    worked out already (style_groups); verdicts: _verdicts' for these names, if worked out already (_settle's).
+    (Moves change the names; restyle's own verdicts are of the names before them, as they always were.)"""
+    v = verdicts if verdicts is not None else _verdicts(lines, groups, rects, names, st, sg)
+    if v is None:
+        return
+    order, word, confident, by_button, evidence, group_of = (v[k] for k in ("order", "word", "confident", "by_button",
+                                                                            "evidence", "group_of"))
+
+    def tied(a, b):
+        """b can't be parted from a, the line before it: a colon, a line carrying on, an inline piece."""
+        return lines[a][0].rstrip().endswith(":") or carries_on(lines[a][0], lines[b][0]) or \
+            bool(lines[b][1].get("inline")) or bool(lines[a][1].get("inline"))
+    _moves(lines, names, order, word, confident, by_button, evidence, group_of, tied)
+
+
+def _verdicts(lines, groups, rects, names, st, sg=None):
+    """restyle's and the settle loop's look at a page: each line classify named, confident or not; each style group's
+    evidence; and word(line), its group's word on its role. {"order", "word", "confident", "by_button", "owner",
+    "evidence", "group_of"}, or None for a page with too little on it."""
+    if not names or len(lines) < 3:
+        return None
+    order = lambda i: (lines[i][1]["top"], lines[i][1]["left"])
+    held = {i: _holder(rects, lines[i][1]) for i in range(len(lines))}
+    owner = dict(held)                  # (a line no box holds, in a block only one button's lines are in: its)
+    for b in groups:
+        mine = {held[i] for i in b if held[i] is not None}
+        if len(mine) == 1:
+            for i in b:
+                if owner[i] is None:
+                    owner[i] = next(iter(mine))
+    block_of = {i: k for k, b in enumerate(groups) for i in b}
+    ref = item_style(lines, st, held)
+    by_button = {}
+    for i in sorted(owner, key=order):
+        if owner[i] is not None:
+            by_button.setdefault(owner[i], []).append(i)
+    role, confident = {}, {}
+    for n, v in names.items():
+        title = list(v.get("idx") or [])
+        for i in title:
+            role[i] = "title"
+            confident[i] = bool(by_button.get(n)) and by_button[n][0] == i and ref is not None and \
+                same_style(st[i], ref) and not _sentence(lines[i][0])
+        for k, i in enumerate(v.get("desc_idx") or []):
+            role[i] = "description"
+            above = [j for j in title if order(j) < order(i)]
+            confident[i] = bool(above) and smaller(st[i], st[above[0]]) and (_sentence(lines[i][0]) or k > 0)
+    sg = sg if sg is not None else style_groups(st, len(lines))
+    group_of = {i: k for k, g in enumerate(sg) for i in g}
+    evidence = []
+    for k, g in enumerate(sg):
+        place = None
+        if len(g) >= 2:
+            buttons = {owner[i] for i in g if owner[i] is not None}
+            free = sum(1 for i in g if owner[i] is None) / len(g)
+            first = sum(1 for n in buttons if group_of[by_button[n][0]] == k) / max(len(buttons), 1)
+            after = sum(1 for n in buttons if group_of[by_button[n][0]] != k) / max(len(buttons), 1)
+            wraps = lambda i: any(j != i and block_of.get(j) == block_of.get(i) and order(j) < order(i) for j in g)
+            sentence = sum(1 for i in g if _sentence(lines[i][0]) or wraps(i)) / len(g)
+            over = [st[by_button[n][0]]["size"] for n in buttons if group_of[by_button[n][0]] != k]
+            small = bool(over) and statistics.median(st[i]["size"] for i in g) < 0.9 * statistics.median(over)
+            if free >= GROUP_FREE:
+                place = "other"
+            elif len(buttons) >= 2 and first >= GROUP_FIRST:
+                place = "title"
+            elif len(buttons) >= 2 and after >= GROUP_AFTER and (sentence >= SENTENCE_SHARE or small):
+                place = "description"
+        votes = {}
+        for i in g:
+            if confident.get(i):
+                votes[role[i]] = votes.get(role[i], 0) + 1
+        evidence.append((votes, place))
+
+    def word(i):
+        """Its group's word on line i's role, or None."""
+        votes, place = evidence[group_of[i]]
+        top = max(votes, key=votes.get) if votes else None
+        if top and place and top != place:
+            return None                                 # (a conflict: no word)
+        if place:
+            return place
+        if top and votes[top] >= VOTES_LEAST and votes[top] / sum(votes.values()) >= 0.8:
+            return top
+        return None
+    return {"order": order, "word": word, "confident": confident, "by_button": by_button, "owner": owner,
+            "evidence": evidence, "group_of": group_of}
+
+
+def _moves(lines, names, order, word, confident, by_button, evidence, group_of, tied):
+    """restyle's moves, by the page's verdicts (_verdicts): names changed in place."""
+    used = {i for v in names.values() for i in list(v.get("idx") or []) + list(v.get("desc_idx") or [])}
+    for n, v in names.items():
+        title, desc = list(v.get("idx") or []), list(v.get("desc_idx") or [])
+        if not title:
+            continue
+        mine = by_button.get(n, [])
+        lead = [i for i in mine if i not in used and order(i) < order(title[0]) and word(i) == "title" and lines[i][0].strip()]
+        between = lambda a, b: [m for m in mine if m not in used and order(a) < order(m) < order(b) and word(m) == "title"]
+        before = (list(title), list(desc))
+        cut = len(title)
+        while cut > 0 and not confident.get(title[cut - 1]) and word(title[cut - 1]) == "description":
+            cut -= 1
+        while 0 < cut < len(title) and tied(title[cut - 1], title[cut]) and not (
+                lines[title[cut - 1]][0].rstrip().endswith(":") and between(title[cut - 1], title[cut])):
+            cut += 1
+        if cut == 0 and not lead:
+            cut = 1 if len(title) > 1 else len(title)
+        if cut < len(title):
+            mids = between(title[cut - 1], title[cut]) if cut else []
+            used.update(mids)
+            desc, title = title[cut:] + desc, title[:cut] + mids
+        if not title and lead:
+            title = lead
+            used.update(lead)
+        while desc and title and not confident.get(desc[0]) and word(desc[0]) == "title" and order(desc[0]) > order(title[-1]):
+            title.append(desc.pop(0))
+        last = (desc or title)[-1]
+        for i in mine:
+            if i in used or order(i) <= order(last) or word(i) != "description" or \
+                    not evidence[group_of[i]][0].get("description"):
+                continue
+            a, b = lines[last][1], lines[i][1]
+            if column_gap(a, b) >= JOIN_BELOW * max(a["h"], b["h"]) * 1.5:
+                break
+            desc.append(i)
+            used.add(i)
+            last = i
+        if (title, desc) != before:
+            used.update(title + desc)
+            v.update(name=" ".join(lines[i][0] for i in title), lines=[lines[i] for i in title], idx=title,
+                     description=" ".join(lines[i][0] for i in desc), description_lines=[lines[i] for i in desc],
+                     desc_idx=desc)
 
 
 def placement(lines, rects, owner, names, group_of, st, trimmed=None):
