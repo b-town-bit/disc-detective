@@ -389,6 +389,27 @@ def test_the_copy_the_menus_play_is_the_one_labelled():
         {"id": "Title 17", "role": "duplicate", "note": "same video as Title 10"}])
 
 
+def test_a_labelled_copy_takes_its_originals_other_copies_too():
+    """Order of the Phoenix: three playlists of the film (00000, 00059, 00060), the scan keeping 00000 and the
+    others its copies; your label makes 00059 the film -- its Play button's -- and 00000 its copy. 00060, the one
+    its scene buttons jump into, is a copy of 00059 then too, not of a copy: not an extra."""
+    from disc_detective import core
+    titles = [{"id": "00000.mpls", "role": "feature", "note": None},
+              {"id": "00059.mpls", "role": "duplicate", "note": "same video as 00000.mpls"},
+              {"id": "00060.mpls", "role": "duplicate", "note": "same video as 00000.mpls"}]
+    core.apply_labels(titles, {"00059.mpls": {"type": "MainMovie"}})
+    notes = {t["id"]: (t["role"], t["note"]) for t in titles}
+    assert notes["00000.mpls"] == ("duplicate", "same video as 00059.mpls")
+    assert notes["00060.mpls"] == ("duplicate", "same video as 00059.mpls")
+    found = {"feature": "00059.mpls", "extras": [{"title": "00060.mpls", "name": ""}], "promos": []}
+    labels = menus.detected_labels(found, titles)
+    assert labels["00059.mpls"]["type"] == "MainMovie" and "00060.mpls" not in labels
+    core.apply_labels(titles, {})                       # (the label cleared: as the scan had them)
+    assert [(t["id"], t["role"], t["note"]) for t in titles] == [
+        ("00000.mpls", "feature", None), ("00059.mpls", "duplicate", "same video as 00000.mpls"),
+        ("00060.mpls", "duplicate", "same video as 00000.mpls")]
+
+
 def test_detected_labels():
     found = {"feature": 1, "extras": [{"title": 10, "name": "An Invitation to Father of the Bride"},
                                       {"title": 11, "name": ""}], "promos": []}

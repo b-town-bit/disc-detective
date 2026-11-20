@@ -7332,7 +7332,13 @@ def detected_labels(found, titles, keep=(), film=None):
         m = re.match(r"same video as (.+?)\s*$", t.get("note") or "") if t.get("role") == Role.DUPLICATE else None
         if m and played(t["id"]) and not played(m.group(1)):
             twins[t["id"]] = m.group(1)
-    described = {title_id(e["title"]): e["description"] for e in found.get("extras") or [] if e.get("description")}
+    # (one of them the feature: another the menus play nameless, the feature's video again, is a copy of it --
+    # Order of the Phoenix's 00060, its scene buttons' way in, beside 00059, its Play button's; both 00000's copies)
+    if feature in twins:
+        for tid, of in list(twins.items()):
+            if tid != feature and of == twins[feature] and not named.get(tid):
+                del twins[tid]
+    described ={title_id(e["title"]): e["description"] for e in found.get("extras") or [] if e.get("description")}
     out = {}
     for t in titles:
         tid = t["id"]
