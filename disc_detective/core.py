@@ -7573,6 +7573,15 @@ def apply_labels(titles, labels):
                 twin["scan_role"], twin["scan_note"] = twin["role"], twin.get("note")
                 twin["role"], twin["note"] = Role.DUPLICATE, "same video as %s" % tid
                 changed.append(twin)
+                # (its other copies: copies of this one now, as a copy the menus play is -- Order of the
+                # Phoenix's 00060, its scene buttons' way in, else a copy of a copy: an extra)
+                for x in titles:
+                    if x is not t and x is not twin and x["role"] == Role.DUPLICATE and \
+                            x.get("note") == "same video as %s" % twin["id"]:
+                        if "scan_role" not in x:
+                            x["scan_role"], x["scan_note"] = x["role"], x.get("note")
+                        x["note"] = "same video as %s" % tid
+                        changed.append(x)
         if t["role"] != role:
             t["scan_role"], t["scan_note"] = t["role"], t.get("note")
             t["role"], t["note"] = role, my.get("note") or "your label: %s" % my["type"]
