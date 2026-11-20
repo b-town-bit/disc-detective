@@ -18,6 +18,11 @@ its slope (RapidOCR's corners) straightened.
           tying its line to the one item after it, descriptions under items, a play-all alone a name of its own; one
           block per button (the first whole one); siblings' names start alike in their boxes (placement)."""
 import re
+import statistics
+
+import numpy as np
+
+from PIL import Image
 
 from . import menus
 
@@ -28,6 +33,8 @@ BOX_LINES = 3               # a box holding this many lines or fewer holds a nam
 BOX_JOIN = 1.4              # empty rows up to this many line heights: one text, when one such box holds both
 TILT_MIN = 3                # pixels a line rises across: tilted (with TILT_SLOPE)
 TILT_SLOPE = 0.026          # rows per column: tilted (1.5 degrees)
+SAME_SLANT = 0.05           # rows per column apart at most: lines at one slant (slant_order)
+HOLD_SHARE = 0.08           # of a slanted line's lettering in a button's box: that button's (slant_holders)
 SIZE_HINT = 0.15            # lettering this much smaller by two of its three measures: another style
 SATURATION_APART = 0.12     # as tinted give or take this: the same colour (gold isn't grey)
 DARK = 70                   # lettering this dark in every channel: near black, any two alike
@@ -59,8 +66,238 @@ def _holds(r, ik):
     return _mid_in(ik, r) and min(r[2], ik["right"]) - max(r[0], ik["left"]) >= 0.5 * (ik["right"] - ik["left"])
 
 
+def _holder(rects, ik):
+    """The button whose box holds a line: a slanted line's own (slant_holders: held_by, where it's one of these), else
+    the first whose box holds its middle (_holds)."""
+    n = ik.get("held_by")
+    if n is not None and n in rects:
+        return n
+    return next((m for m, r in rects.items() if _holds(r, ik)), None)
+
+
+def slant_order(items):
+    """A name's lines [(text, ink)] in reading order on a page drawn at a slant: by where each one's top crosses the
+    same column (band), not its upright box's top -- a longer line under a shorter one reaches higher at its far end,
+    Muppets from Space's main menu "SPECIAL / FEATURES" read "FEATURES SPECIAL"; lines level along it, left to right.
+    Upright lines, as they came; and lines of several slants, a logo's words each at its own (Disney's "Sleeping
+    Beauty", The Jungle Book 2's "THE" over "JUNGLE"): only a name all at one slant is a page drawn so."""
+    slopes = [ik.get("k") for _, ik in items]
+    if len(items) < 2 or not all(slopes) or max(slopes) - min(slopes) > SAME_SLANT:
+        return list(items)
+    ref = sum((ik["left"] + ik["right"]) / 2 for _, ik in items) / len(items)
+    top = lambda ik: band(ik, ref)[0]
+    rows = []
+    for item in sorted(items, key=lambda it: top(it[1])):
+        h = item[1].get("straight") or item[1]["h"]
+        if rows and top(item[1]) - top(rows[-1][0][1]) < 0.5 * h:
+            rows[-1].append(item)
+        else:
+            rows.append([item])
+    return [it for row in rows for it in sorted(row, key=lambda it: it[1]["left"])]
+
+
+# a line's slope by its own letters (the user's, 2026-11-18: whether a line slopes, and by how much): its ink sorted
+# into letters, a baseline and a top line through their bottoms and tops, descenders and capitals left out
+LETTER_GROW = 0.25       # of a line's height, its outline grown by, up and down, to hold its letters
+LETTERS_LEAST = 3        # letters at least, to judge a line's slope by (joined script reads as one or two shapes)
+LETTER_OFF = 0.25        # of a letter's height: further from the fit than this, not on it (a descender, a capital)
+RELIABLE_SHARE = 0.5     # of its letters on the baseline, at least: its measure to be trusted
+RELIABLE_AGREE = 0.035   # rows per column (2 degrees): its baseline and top line this near each other, at most
+RELIABLE_SPREAD = 0.12   # of a letter's height, its letters' scatter off the baseline, at most
+FLAT = 0.0175            # rows per column (1 degree): a baseline and top line both within this, the line is level
+
+
+def _ink_mask(gray):
+    """The crop's lettering: Otsu's threshold, the smaller side the ink (lettering has fewer pixels than round it)."""
+    hist = gray.histogram()
+    total = sum(hist)
+    s_all = sum(i * h for i, h in enumerate(hist))
+    best, w0, s0, cut = -1, 0, 0, 128
+    for t in range(256):
+        w0 += hist[t]
+        if not w0 or w0 == total:
+            continue
+        s0 += t * hist[t]
+        m0, m1 = s0 / w0, (s_all - s0) / (total - w0)
+        between = w0 * (total - w0) * (m0 - m1) ** 2
+        if between > best:
+            best, cut = between, t
+    px = gray.load()
+    dark = sum(hist[:cut + 1])
+    ink_dark = dark < total - dark
+    return lambda x, y: (px[x, y] <= cut) == ink_dark
+
+
+def _letters(image, corners, grow=LETTER_GROW):
+    """A line's lettering as its separate shapes (8-connected ink inside its outline, grown by `grow` of its height):
+    [(middle x, top, bottom, height)] in the crop's pixels, specks (under a fifth of the median height) left out."""
+    from PIL import ImageDraw
+    xs, ys = [p[0] for p in corners], [p[1] for p in corners]
+    (x0, y0), (x1, y1), (x2, y2), (x3, y3) = corners
+    gy0, gy1 = grow * (y3 - y0), grow * (y2 - y1)
+    quad = [(x0, y0 - gy0), (x1, y1 - gy1), (x2, y2 + gy1), (x3, y3 + gy0)]
+    qx, qy = [p[0] for p in quad], [p[1] for p in quad]
+    box = (max(0, int(min(qx))), max(0, int(min(qy))), min(image.width, int(max(qx)) + 1), min(image.height, int(max(qy)) + 1))
+    gray = image.convert("L").crop(box)
+    keep = Image.new("1", gray.size, 0)
+    ImageDraw.Draw(keep).polygon([(x - box[0], y - box[1]) for x, y in quad], fill=1)
+    kp = keep.load()
+    on0 = _ink_mask(gray)
+    W, H = gray.size
+    ink = [[bool(kp[x, y]) and on0(x, y) for x in range(W)] for y in range(H)]
+    seen = [[False] * W for _ in range(H)]
+    shapes = []
+    for y in range(H):
+        for x in range(W):
+            if ink[y][x] and not seen[y][x]:
+                stack, pts = [(x, y)], []
+                seen[y][x] = True
+                while stack:
+                    a, b = stack.pop()
+                    pts.append((a, b))
+                    for da in (-1, 0, 1):
+                        for db in (-1, 0, 1):
+                            c, d = a + da, b + db
+                            if 0 <= c < W and 0 <= d < H and ink[d][c] and not seen[d][c]:
+                                seen[d][c] = True
+                                stack.append((c, d))
+                if len(pts) >= 6:
+                    px, py = [p[0] for p in pts], [p[1] for p in pts]
+                    # (touching the crop's edge: a neighbour's or the background's, not this line's)
+                    if min(px) == 0 or min(py) == 0 or max(px) == W - 1 or max(py) == H - 1:
+                        continue
+                    shapes.append(((min(px) + max(px)) / 2, min(py), max(py), max(py) - min(py) + 1, max(px) - min(px) + 1))
+    if not shapes:
+        return []
+    mh = statistics.median(s[3] for s in shapes)
+    wide = max(1.0, (max(p[0] for p in quad) - min(p[0] for p in quad)))
+    return [s for s in shapes if s[3] >= 0.2 * mh and s[4] < 0.6 * wide]
+
+
+def _theil_sen(pts):
+    pairs = [(b[1] - a[1]) / (b[0] - a[0]) for i, a in enumerate(pts) for b in pts[i + 1:] if abs(b[0] - a[0]) > 1e-6]
+    if not pairs:
+        return None, None
+    k = statistics.median(pairs)
+    c = statistics.median(p[1] - k * p[0] for p in pts)
+    return k, c
+
+
+def letter_lines(image, corners):
+    """A line's baseline and top line through its letters' bottoms and tops, robustly: a first fit, then the letters
+    off it by more than LETTER_OFF of the median letter height left out (descenders below, ascenders and capitals above),
+    fitted again. {"base", "top", "n" (letters), "kept" (on the baseline), "spread" (their scatter, of a letter's
+    height)} or None for fewer than LETTERS_LEAST letters (joined script reads as one or two shapes)."""
+    shapes = _letters(image, corners)
+    if len(shapes) < LETTERS_LEAST:
+        return None
+    mh = statistics.median(s[3] for s in shapes)
+    out = {"n": len(shapes)}
+    for edge, at, side in (("base", 2, 1), ("top", 1, -1)):
+        pts = [(s[0], s[at]) for s in shapes]
+        k, c = _theil_sen(pts)
+        if k is None:
+            return None
+        for _ in range(2):
+            # (the line's own letters: none further from it than OFF of a letter's height, on its far side)
+            kept = [p for p in pts if side * (p[1] - (k * p[0] + c)) <= LETTER_OFF * mh and -side * (p[1] - (k * p[0] + c)) <= LETTER_OFF * mh] \
+                or pts
+            k, c = _theil_sen(kept) if len(kept) >= 2 else (k, c)
+        out[edge] = k
+        if edge == "base":
+            out["kept"] = len(kept)
+            out["spread"] = statistics.pstdev([p[1] - (k * p[0] + c) for p in kept]) / mh if len(kept) > 1 else 0.0
+    return out
+
+
+def line_slope(image, corners, box_k):
+    """(slope, how) of a line (corners: RapidOCR's, the page's pixels; box_k: their slope): by its letters where
+    they can tell ("measured": WALL-E's menu -16.2 degrees, Harry Potter's name buttons -4.6, their boxes -2), level
+    where its baseline and top line are both flat though its box tilts ("flat": Wallace & Gromit's bouncy "Cracking
+    Contraptions"), else its box's ("box": joined script, Ride 'em Cowboy's; 3-D lettering)."""
+    m = letter_lines(image, corners)
+    if m:
+        ok = m["kept"] >= RELIABLE_SHARE * m["n"] and abs(m["base"] - m["top"]) <= RELIABLE_AGREE and m["spread"] <= RELIABLE_SPREAD
+        if ok:
+            return (m["base"] + m["top"]) / 2, "measured"
+        if abs(m["base"]) <= FLAT and abs(m["top"]) <= FLAT:
+            return 0.0, "flat"
+    return box_k, "box"
+
+
+def clipped_area(poly, box):
+    """The area of a convex polygon [(x, y)] inside an upright box (x0, y0, x1, y1): Sutherland-Hodgman, then the
+    shoelace."""
+    pts = list(poly)
+    for edge in range(4):
+        inside = [lambda p: p[0] >= box[0], lambda p: p[0] <= box[2], lambda p: p[1] >= box[1], lambda p: p[1] <= box[3]][edge]
+        at = [lambda a, b: (box[0], a[1] + (b[1] - a[1]) * (box[0] - a[0]) / ((b[0] - a[0]) or 1e-9)),
+              lambda a, b: (box[2], a[1] + (b[1] - a[1]) * (box[2] - a[0]) / ((b[0] - a[0]) or 1e-9)),
+              lambda a, b: (a[0] + (b[0] - a[0]) * (box[1] - a[1]) / ((b[1] - a[1]) or 1e-9), box[1]),
+              lambda a, b: (a[0] + (b[0] - a[0]) * (box[3] - a[1]) / ((b[1] - a[1]) or 1e-9), box[3])][edge]
+        out = []
+        for k in range(len(pts)):
+            a, b = pts[k - 1], pts[k]
+            if inside(b):
+                if not inside(a):
+                    out.append(at(a, b))
+                out.append(b)
+            elif inside(a):
+                out.append(at(a, b))
+        pts = out
+        if not pts:
+            return 0.0
+    return abs(sum(pts[k - 1][0] * pts[k][1] - pts[k][0] * pts[k - 1][1] for k in range(len(pts)))) / 2
+
+
+def slant_holders(lines, rects, every=False, shapes=None):
+    """A slanted line's button (held_by in its ink), by its lettering's own band (band) over the buttons' boxes, not
+    its upright box's middle: the box it covers most of, if that's HOLD_SHARE of it at least -- a page drawn at a
+    slant has its lines' upright boxes far bigger than their words, overlapping, their middles off every button's
+    (WALL-E's main menu, PLAY and SCENE SELECTION each by the start of its own line, b1's and b2's: the user's).
+    Upright lines, and slanted ones no box covers so much of, as they were. every: upright lines too -- a slanted
+    region turned level (menus._page_names), its buttons still by each line's start, as they were on the slant."""
+    for _, ik in lines:
+        if not ik.get("k") and not every:
+            continue
+        cols = range(int(ik["left"]), int(ik["right"]) + 1)
+        area = sum(b - t for t, b in (band(ik, x) for x in cols)) or 1
+        best, most = None, 0.0
+        for n, r in rects.items():
+            if shapes and n in shapes and not ik.get("k"):  # (a button's true shape, turned with its region)
+                got = clipped_area(shapes[n], (ik["left"], ik["top"], ik["right"] + 1, ik["bottom"] + 1))
+            else:
+                got = 0.0
+                for x in range(max(int(ik["left"]), int(r[0])), min(int(ik["right"]), int(r[2])) + 1):
+                    t, b = band(ik, x)
+                    got += max(0.0, min(b, r[3]) - max(t, r[1]))
+            if got > most:
+                best, most = n, got
+        if best is not None and most >= HOLD_SHARE * area:
+            ik["held_by"] = best
+    return lines
+
+
 def _flat(image):
     return list((getattr(image, "get_flattened_data", None) or image.getdata)())   # (Pillow 12.1 renamed it)
+
+
+def _otsu_array(arr):
+    """otsu() of a uint8 array (NumPy): the same histogram, the same scan of thresholds."""
+    hist = np.bincount(arr.ravel(), minlength=256).tolist()
+    total = int(arr.size)
+    sum_all = sum(i * h for i, h in enumerate(hist))
+    best, cut, w0, sum0 = -1, 128, 0, 0
+    for t in range(256):
+        w0 += hist[t]
+        if w0 == 0 or w0 == total:
+            continue
+        sum0 += t * hist[t]
+        m0, m1 = sum0 / w0, (sum_all - sum0) / (total - w0)
+        between = w0 * (total - w0) * (m0 - m1) ** 2
+        if between > best:
+            best, cut = between, t
+    return cut
 
 
 def otsu(values):
@@ -90,13 +327,12 @@ def ink(gray, box, text):
     x0, y0, x1, y1 = max(0, x0), max(0, y0), min(gray.width, x1), min(gray.height, y1)
     if x1 - x0 < 3 or y1 - y0 < 3:
         return None
-    px = _flat(gray.crop((x0, y0, x1, y1)))
-    cut = otsu(px)
-    dark = sum(1 for v in px if v <= cut)
-    lit = (lambda v: v > cut) if dark >= len(px) / 2 else (lambda v: v <= cut)
-    w, h = x1 - x0, y1 - y0
-    on = [[lit(px[r * w + c]) for c in range(w)] for r in range(h)]
-    rows = [sum(row) for row in on]
+    a = np.asarray(gray.crop((x0, y0, x1, y1)), dtype=np.uint8)
+    cut = _otsu_array(a)
+    dark = int((a <= cut).sum())
+    on = (a > cut) if dark >= a.size / 2 else (a <= cut)
+    h, w = on.shape
+    rows = on.sum(axis=1).tolist()
     need = max(2, 0.08 * max(rows))
     runs, start, quiet = [], None, 0
     for r, n in enumerate(rows + [0, 0, 0]):
@@ -112,12 +348,12 @@ def ink(gray, box, text):
         return None
     mid = h / 2
     top, bot = min(runs, key=lambda ab: 0 if ab[0] <= mid <= ab[1] else min(abs(ab[0] - mid), abs(ab[1] - mid)))
-    cols = [sum(on[r][c] for r in range(top, bot + 1)) for c in range(w)]
+    cols = on[top:bot + 1].sum(axis=0).tolist()
     lit_cols = [c for c, n in enumerate(cols) if n]
     if not lit_cols:
         return None
     left, right = lit_cols[0], lit_cols[-1]
-    gaps, run = [], 0                   # (empty column runs inside the ink: (where it starts, its width))
+    gaps, run = [], 0
     for c in range(left, right + 1):
         if cols[c] == 0:
             run += 1
@@ -126,8 +362,6 @@ def ink(gray, box, text):
             run = 0
     hgt = bot - top + 1
     letters = max(1, len(re.sub(r"\s", "", text)))
-    # (a letter's width: the ink's, less the gaps between words (a quarter of the lettering's height or more), over
-    # the letters read; its size: from its top to its baseline, the last row with a third of the fullest row's ink)
     letter = max(1.0, (right - left + 1 - sum(g for _, g in gaps if g >= 0.25 * hgt)) / letters)
     full = max(rows[top:bot + 1])
     dense = [r for r in range(top, bot + 1) if rows[r] >= full / 3]
@@ -223,22 +457,42 @@ def split_line(text, ik, cuts=None):
     return parts if len(parts) > 1 else [(text, ik)]
 
 
+def _rgb(image, box):
+    """A box's pixels as an (n, 3) int64 array, row by row (as getdata has them)."""
+    crop = image.crop(box)
+    if crop.mode != "RGB":
+        crop = crop.convert("RGB")
+    return np.asarray(crop, dtype=np.int64).reshape(-1, 3)
+
+
+def _far_mean(px, ref):
+    """The fifth of pixels px furthest from colour ref (summed channel differences; equally far ones in their order,
+    a stable sort), averaged."""
+    d = np.abs(px - np.asarray(ref, dtype=np.int64)).sum(axis=1)
+    order = np.argsort(-d, kind="stable")
+    far = px[order[:max(1, len(px) // 5)]]
+    n = len(far)
+    return tuple(int(v) / n for v in far.sum(axis=0))
+
+
 def background(image, ik, gap=2, width=3):
     """The colour behind a line: the middle colour of a thin ring just outside its box (OCR boxes hug the letters, so
     the box's own middle colour can be the lettering's: the Muppets' outlined capitals, fill or outline by turns)."""
     W, H = image.size
     l, t, r, b = int(ik["left"]), int(ik["top"]), int(ik["right"]), int(ik["bottom"])
-    px = []
+    parts = []
     for x0, y0, x1, y1 in ((l - gap - width, t - gap - width, r + gap + width, t - gap),
                            (l - gap - width, b + gap, r + gap + width, b + gap + width),
                            (l - gap - width, t - gap, l - gap, b + gap),
                            (r + gap, t - gap, r + gap + width, b + gap)):
         x0, y0, x1, y1 = max(0, x0), max(0, y0), min(W, x1), min(H, y1)
         if x1 > x0 and y1 > y0:
-            px.extend(_flat(image.crop((x0, y0, x1, y1))))
-    if not px:
+            parts.append(_rgb(image, (x0, y0, x1, y1)))
+    if not parts:
         return None
-    return tuple(sorted(c[i] for c in px)[len(px) // 2] for i in range(3))
+    px = np.concatenate(parts)
+    s = np.sort(px, axis=0)
+    return tuple(int(v) for v in s[len(px) // 2])
 
 
 def ring_colour(image, ik):
@@ -248,11 +502,10 @@ def ring_colour(image, ik):
     bg = background(image, ik)
     if bg is None:
         return menus.lettering_colour(image, box)
-    px = _flat(image.crop(box))
-    if not px:
+    px = _rgb(image, box)
+    if not len(px):
         return None
-    far = sorted(px, key=lambda c: -sum(abs(c[i] - bg[i]) for i in range(3)))[:max(1, len(px) // 5)]
-    return tuple(sum(c[i] for c in far) / len(far) for i in range(3))
+    return _far_mean(px, bg)
 
 
 def style(image, text, ik):
@@ -438,6 +691,34 @@ def rejoin(lines, rects):
     return out
 
 
+def box_cut(lines, rects):
+    """A line OCR read across buttons side by side (small slanted lettering, its gap between columns no wider than a
+    word's: Spider-Man's TV SPOTS, "Blockbuster Countdown | Destiny Cutdown" read "Blockbustor Cutdown"): cut between
+    each two buttons it runs across, as the buttons say where one name stops (the user's; the DVD way's row cut, The
+    Swan Princess's "SCENE SELECTIONS SPECIAL FEATURES TRAILERS") -- at its widest ink gap between them (their middles
+    across), however narrow: a marker beside each name, or a box round it. Buttons it runs across: those that do
+    something (rects), the line's middle down within them, their middle across within its ink. [(text, ink)] -> the
+    same, such lines in parts."""
+    out = []
+    for text, ik in lines:
+        if ik.get("split_from") or len(text.split()) < 2:
+            out.append((text, ik))
+            continue
+        mid = (ik["top"] + ik["bottom"]) / 2
+        over = sorted((r for r in rects.values() if r[1] <= mid <= r[3] and ik["left"] < (r[0] + r[2]) / 2 < ik["right"]),
+                      key=lambda r: (r[0] + r[2]) / 2)
+        cuts = []
+        for a, b in zip(over, over[1:]):
+            lo, hi = (a[0] + a[2]) / 2, (b[0] + b[2]) / 2
+            between = [g for g in ik["gaps"] if lo <= g[0] + g[1] / 2 <= hi]
+            if between:
+                g = max(between, key=lambda g: g[1])
+                if g not in cuts:
+                    cuts.append(g)
+        out += split_line(text, ik, sorted(cuts)) if cuts else [(text, ik)]
+    return out
+
+
 def _whole(piece, src):
     if len(piece) == 1:
         return piece[0]
@@ -522,22 +803,30 @@ def stroke_colours(image, ik, bits):
     """Each word's lettering colour from its strokes alone: the pixels the line's own threshold marks as lettering
     (the fewer), the half of them furthest from it, averaged. [(r, g, b) or None] for bits [(left, right)]."""
     box = (ik["left"], ik["top"], ik["right"] + 1, ik["bottom"] + 1)
-    rgb = image.crop(box)
-    px = _flat(rgb)
-    gray = [round(0.299 * r + 0.587 * g + 0.114 * b) for r, g, b in px]
-    cut = otsu(gray)
-    light = sum(1 for v in gray if v > cut) <= len(gray) / 2
-    w = rgb.width
+    crop = image.crop(box)
+    px = np.asarray(crop.convert("RGB") if crop.mode != "RGB" else crop, dtype=np.int64)
+    h, w = px.shape[:2]
+    r, g, b = px[..., 0].astype(np.float64), px[..., 1].astype(np.float64), px[..., 2].astype(np.float64)
+    gray = np.round(0.299 * r + 0.587 * g + 0.114 * b).astype(np.int64)
+    cut = _otsu_array(gray.astype(np.uint8))
+    light = int((gray > cut).sum()) <= gray.size / 2
+    sel = (gray > cut) if light else (gray <= cut)
     out = []
     for left, right in bits:
-        mine = [(gray[y * w + x], px[y * w + x]) for y in range(rgb.height) for x in range(left - box[0], right - box[0] + 1)
-                if 0 <= x < w and ((gray[y * w + x] > cut) if light else (gray[y * w + x] <= cut))]
-        if len(mine) < 4:
+        c0, c1 = max(0, left - box[0]), min(w - 1, right - box[0])
+        if c1 < c0:
             out.append(None)
             continue
-        mine.sort(key=lambda v: -v[0] if light else v[0])
-        core = [c for _, c in mine[:max(2, len(mine) // 2)]]
-        out.append(tuple(sum(c[i] for c in core) / len(core) for i in range(3)))
+        m = sel[:, c0:c1 + 1]
+        gv = gray[:, c0:c1 + 1][m]
+        cv = px[:, c0:c1 + 1][m]
+        if len(gv) < 4:
+            out.append(None)
+            continue
+        order = np.argsort(-gv if light else gv, kind="stable")
+        core = cv[order[:max(2, len(gv) // 2)]]
+        n = len(core)
+        out.append(tuple(int(v) / n for v in core.sum(axis=0)))
     return out
 
 
@@ -656,7 +945,7 @@ def split_at_headings(lines, groups, st, ref):
     return out
 
 
-def classify(image, lines, groups, rects, disc_rects=None, st=None):
+def _classify(image, lines, groups, rects, disc_rects=None, st=None, fixed=None):
     """Each button's name, description and heading from the blocks, by style (the user's rules, 2026-11-15):
       - the item style: the one most buttons have a line in;
       - a line in another style followed by items in their style: the heading of all of them, till the next one;
@@ -668,7 +957,7 @@ def classify(image, lines, groups, rects, disc_rects=None, st=None):
       - one block per button: of those in the item style, the first wholly in its box, else the most in it.
     rects: the buttons' boxes, trimmed of overflow; disc_rects: as the disc has them (placement's).
     Returns ({button: {"name", "lines", "idx", "description", "heading"}}, the text no button holds)."""
-    owner = {i: next((n for n, r in rects.items() if _holds(r, lines[i][1])), None) for i in range(len(lines))}
+    owner = {i: _holder(rects, lines[i][1]) for i in range(len(lines))}
     st = st or {i: style(image, lines[i][0], lines[i][1]) for i in range(len(lines))}
     owned_all = [i for i in range(len(lines)) if owner[i] is not None]
     firsts = [min((i for i in owned_all if owner[i] == n), key=lambda i: lines[i][1]["top"])
@@ -682,12 +971,20 @@ def classify(image, lines, groups, rects, disc_rects=None, st=None):
             rest.append(" / ".join(lines[i][0] for i in g))
             continue
         if len({owner[i] for i in owned}) == 1:
-            ref = st[one_button_title(g, st, lines)]
+            # (one button's block: its title in the page's item style where it has a line in it -- such a line is
+            # no heading inside its own button's block, Chuck S2 D1's "Chuck Versus the Cougars Sc. 33" over its
+            # description, its comma no full stop; else by its runs of style, one_button_title)
+            if page_ref is not None and any(same_style(st[i], page_ref) for i in owned):
+                ref = page_ref
+            else:
+                ref = st[one_button_title(g, st, lines)]
         elif page_ref is not None and any(same_style(st[i], page_ref) for i in owned):
             ref = page_ref
         else:
             own_firsts = [i for i in firsts if i in owned] or owned
             ref = max((st[i] for i in own_firsts), key=lambda a: sum(1 for j in own_firsts if same_style(a, st[j])))
+        if fixed and gi in fixed:       # (its title fixed by the settle loop: the block's lettering is its)
+            ref = st[fixed[gi][0]]
         item = {i: same_style(st[i], ref) for i in g}
         # (a button with no line in the item style -- the selected one drawn brighter in a saved frame: Enchanted's
         # "Happy Working Song" -- its lines not in the style of text no button holds; none left, all its lines)
@@ -697,6 +994,23 @@ def classify(image, lines, groups, rects, disc_rects=None, st=None):
             if not any(item[i] for i in mine):
                 for i in [i for i in mine if not any(same_style(st[i], st[j]) for j in free)] or mine:
                     item[i] = True
+        # (a line carrying on into an item under it, in its colour, is that item's first line, whatever its size
+        # measures: Spider-Man 2's "Peter Parker and / Mary Jane Watson" -- a line ending in "and" is no heading)
+        # (nor one touching it, no empty rows between, in its colour and its button's box: a heading has space under
+        # it, as it has to start a block -- Abbott and Costello's "Bonus / Materials", "Bonus" all wide letters,
+        # measured as other lettering)
+        for a, b in reversed(list(zip(g, g[1:]))):
+            touching = owner[a] is not None and owner[a] == owner[b] and \
+                column_gap(lines[a][1], lines[b][1]) < HEADING_GAP * min(lines[a][1]["h"], lines[b][1]["h"])
+            if not item[a] and item[b] and (carries_on(lines[a][0], lines[b][0]) or touching) and colours_match(st[a], st[b]):
+                item[a] = True
+        if fixed and gi in fixed:       # (the fixed title an item, the lines above it none)
+            top = lines[fixed[gi][0]][1]["top"]
+            for i in g:
+                if i in fixed[gi]:
+                    item[i] = True
+                elif lines[i][1]["top"] < top:
+                    item[i] = False
         roles, heading, colon, bound = {}, [], [], None
         since = 0                       # (a heading starts a block, as an empty line does: nothing after it is an
                                         # item's before it -- Chuck S1 D3's ONLINE, its small print not Sword Skills')
@@ -801,13 +1115,287 @@ def classify(image, lines, groups, rects, disc_rects=None, st=None):
         idx = main["colon"] + main["name"]
         names[n] = {"name": " ".join(lines[i][0] for i in idx), "lines": [lines[i] for i in idx], "idx": idx,
                     "description": " ".join(lines[i][0] for i in main["description"]),
-                    "description_lines": [lines[i] for i in main["description"]],
+                    "description_lines": [lines[i] for i in main["description"]], "desc_idx": list(main["description"]),
                     "heading": " ".join(lines[i][0] for i in main["heading"])}
     full = disc_rects or rects
-    disc_owner = {i: next((n for n, r in full.items() if _holds(r, lines[i][1])), None) for i in range(len(lines))}
+    disc_owner = {i: _holder(full, lines[i][1]) for i in range(len(lines))}
     placement(lines, full, disc_owner, names, {i: gi for gi, g in enumerate(groups) for i in g}, st, rects)
     inline_whole(lines, names)
     return names, rest
+
+
+SETTLE_ROUNDS = 10      # rounds at most, the settle loop's (a state repeated ends it sooner, as a rule after one)
+SETTLE_CYCLES = []      # pages whose settle loop came round to a state seen before (classify's own names kept)
+
+
+def classify(image, lines, groups, rects, disc_rects=None, st=None):
+    """Each button's name, description and heading from the blocks, by style (_classify, the user's rules), settled
+    (_settle: a block's title fixed where its style group says another than classify's, classify again) and looked
+    at once more by the page's style dictionary (restyle). The page's style groups worked out once for both. Returns
+    ({button: {"name", "lines", "idx", "description", "heading"}}, the text no button holds)."""
+    st = st or {i: style(image, lines[i][0], lines[i][1]) for i in range(len(lines))}
+    sg = style_groups(st, len(lines)) if len(lines) >= 3 else None
+    names, rest, verdicts = _settle(image, lines, groups, rects, disc_rects, st, sg)
+    restyle(lines, groups, rects, names, st, sg, verdicts)
+    return names, rest
+
+
+def _state(names):
+    return tuple(sorted((n, tuple(v.get("idx") or []), tuple(v.get("desc_idx") or [])) for n, v in names.items()))
+
+
+def _settle(image, lines, groups, rects, disc_rects, st, sg):
+    """The user's settle loop (2026-11-19): classify; then, in a block of one button whose title isn't sure and whose
+    style group says another run of its lines is its title (_verdicts), that run fixed as the block's title -- grown
+    through the hard rules first: a line above carrying on into it or ending in a colon (Spider-Man 2's "Peter Parker
+    and" / "Mary Jane Watson", its first line in other lettering), lines it carries on into -- and classify run again,
+    its own rules judging the rest against it (Order of the Phoenix's "Trailing Tonks", classify's heading over its
+    sentence, the sentence its name). Each round's state kept: the same again, settled; one seen before, a cycle, and
+    classify's own names kept (SETTLE_CYCLES). SETTLE_ROUNDS at most. Returns (names, rest, the verdicts for them
+    or None): its last verdicts, for restyle to take as they are, where the names are still those they were worked
+    out for (most pages: nothing to fix)."""
+    first = _classify(image, lines, groups, rects, disc_rects, st=st)
+    names, rest = first
+    if len(lines) < 3:
+        return names, rest, None
+    seen, fixed = [_state(names)], {}
+    block_of = {i: k for k, b in enumerate(groups) for i in b}
+    # (classify's hard rules for a title: a colon, a line carrying on, and a line touching the one under it in its
+    # colour, no empty rows between -- Abbott and Costello's "BONUS" / "MATERIALS", "BONUS" all wide letters)
+    touching = lambda a, b: column_gap(lines[a][1], lines[b][1]) < HEADING_GAP * min(lines[a][1]["h"], lines[b][1]["h"]) \
+        and colours_match(st[a], st[b])
+    tied = lambda a, b: lines[a][0].rstrip().endswith(":") or carries_on(lines[a][0], lines[b][0]) or touching(a, b)
+    v = None
+    for _ in range(SETTLE_ROUNDS):
+        v = _verdicts(lines, groups, rects, names, st, sg)
+        if v is None:
+            break
+        word, confident, owner, order = v["word"], v["confident"], v["owner"], v["order"]
+        new = dict(fixed)
+        for n, nv in names.items():
+            title = list(nv.get("idx") or [])
+            if not title or confident.get(title[0]) or word(title[0]) == "title":
+                continue
+            gi = block_of.get(title[0])
+            if gi is None or gi in new or len({owner[i] for i in groups[gi] if owner[i] is not None}) != 1:
+                continue
+            mine = sorted((i for i in groups[gi] if owner[i] in (n, None)), key=order)
+            run = []
+            for i in mine:
+                if word(i) == "title":
+                    run.append(i)
+                elif run:
+                    break
+            while run and mine.index(run[0]) > 0 and tied(mine[mine.index(run[0]) - 1], run[0]):
+                run.insert(0, mine[mine.index(run[0]) - 1])
+            while run and mine.index(run[-1]) + 1 < len(mine) and tied(run[-1], mine[mine.index(run[-1]) + 1]):
+                run.append(mine[mine.index(run[-1]) + 1])
+            if run and run != title:
+                new[gi] = run
+        if new == fixed:
+            return names, rest, v       # (nothing more to fix: its verdicts are these names')
+        fixed = new
+        names, rest = _classify(image, lines, groups, rects, disc_rects, st=st, fixed=fixed)
+        state = _state(names)
+        if state == seen[-1]:
+            return names, rest, v       # (the same again: the verdicts were worked out for this state)
+        if state in seen:               # (a cycle: classify's own names, and the page noted)
+            SETTLE_CYCLES.append(tuple(t for t, _ in lines))
+            return first[0], first[1], None
+        seen.append(state)
+    return names, rest, None
+
+
+# ---- the page's style dictionary, a second look at what classify isn't sure of (the user's design, 2026-11-19;
+# demo temp/style_demo.py, benched on 15 keyed pages: titles 291 -> 297, descriptions 299 -> 306, the bench's
+# Blu-ray titles 312 -> 316, none lost, no time to speak of) ----
+
+STYLE_MOST = 0.6        # of the pairs across two groups alike, at least: one style group (OCR's box height left out)
+GROUP_FIRST = 0.6       # of a group's buttons in which its line comes first, at least: a title group
+GROUP_AFTER = 0.6       # ... in which it comes after another group's: a description group (with SENTENCE_SHARE)
+SENTENCE_SHARE = 0.3    # of its lines reading as sentences, at least: a description group (or smaller lettering)
+GROUP_FREE = 0.6        # of its lines no button's, at least: another group (headings, the page's own text)
+VERDICT_SHARE = 0.7     # of a group's placement evidence one way, at least: its word on its lines' role
+VOTES_LEAST = 3         # confident lines, at least, for their roles alone to speak for their group (and 0.8 of them)
+
+
+def style_groups(st, n):
+    """The page's lines grouped by style, by agreement across a group, never by a chain of pairs: two groups join
+    while STYLE_MOST of the pairs across them are alike (same_style, OCR's box height left out: noisy on short lines),
+    the most alike first. st: each line's style; n: how many lines. [[line, ...], ...]."""
+    alike = lambda a, b: same_style(dict(a, box=1), dict(b, box=1))
+    ok = [[alike(st[i], st[j]) if i != j else True for j in range(n)] for i in range(n)]
+    groups = [[i] for i in range(n)]
+    while True:
+        best, pair = STYLE_MOST, None
+        for x in range(len(groups)):
+            for y in range(x + 1, len(groups)):
+                share = sum(ok[i][j] for i in groups[x] for j in groups[y]) / (len(groups[x]) * len(groups[y]))
+                if share >= best and (pair is None or share > best):
+                    best, pair = share, (x, y)
+        if pair is None:
+            return groups
+        x, y = pair
+        groups[x] += groups.pop(y)
+
+
+def _sentence(text):
+    return bool(re.search(r"[.!?]['\")]?\s*$", text)) or len(text.split()) >= 5
+
+
+def restyle(lines, groups, rects, names, st, sg=None, verdicts=None):
+    """A second look at classify's names, by the page's style groups (the user's design): lines that look alike do
+    alike. First, each line classify named, CONFIDENT or not by how its own signs agree -- a title first of its
+    button's lines, in the page's item lettering, short (under 5 words, no full stop); a description after its
+    button's title, smaller than it, reading as a sentence (or a wrap). Then each style group's word on its lines,
+    from two kinds of evidence apart -- where its own lines sit (a title group first in its buttons, a description
+    group after another in them and reading as sentences or smaller, another group mostly no button's) and its
+    confident lines' roles (an unsure line has no say: it can't poison its group) -- a word when they agree, or one
+    is clear and the other silent, none on a conflict. Then, within a button, never a confident line, never past a
+    hard rule (a colon, a line carrying on, an inline piece stays with its title; a cut never parts them, the run
+    moved may hang together itself):
+      a title's end -> its description   its group's word description (all of the title only if a title-word line
+                                         of the button's above it takes its place)
+      a description's start -> its title its group's word title
+      an unused line -> its title        the button's, above its title or between a colon and the line after it
+      unused lines -> its description    the button's, close under its last line -- and only where confident lines
+                                         of its group are descriptions too: a backdrop's print read as words
+                                         (DA502D7E's newspaper) has no say in it
+    Order of the Phoenix's "The Hidden Secrets of / Harry Potter" over its sentence (classify had the sentence for
+    its title), "Harry Potter: / The Magic of Editing" (its colon had bound the description's first line), the
+    descriptions Azkaban's interviews lost. names: classify's, changed in place; sg: the page's style groups, if
+    worked out already (style_groups); verdicts: _verdicts' for these names, if worked out already (_settle's).
+    (Moves change the names; restyle's own verdicts are of the names before them, as they always were.)"""
+    v = verdicts if verdicts is not None else _verdicts(lines, groups, rects, names, st, sg)
+    if v is None:
+        return
+    order, word, confident, by_button, evidence, group_of = (v[k] for k in ("order", "word", "confident", "by_button",
+                                                                            "evidence", "group_of"))
+
+    def tied(a, b):
+        """b can't be parted from a, the line before it: a colon, a line carrying on, an inline piece."""
+        return lines[a][0].rstrip().endswith(":") or carries_on(lines[a][0], lines[b][0]) or \
+            bool(lines[b][1].get("inline")) or bool(lines[a][1].get("inline"))
+    _moves(lines, names, order, word, confident, by_button, evidence, group_of, tied)
+
+
+def _verdicts(lines, groups, rects, names, st, sg=None):
+    """restyle's and the settle loop's look at a page: each line classify named, confident or not; each style group's
+    evidence; and word(line), its group's word on its role. {"order", "word", "confident", "by_button", "owner",
+    "evidence", "group_of"}, or None for a page with too little on it."""
+    if not names or len(lines) < 3:
+        return None
+    order = lambda i: (lines[i][1]["top"], lines[i][1]["left"])
+    held = {i: _holder(rects, lines[i][1]) for i in range(len(lines))}
+    owner = dict(held)                  # (a line no box holds, in a block only one button's lines are in: its)
+    for b in groups:
+        mine = {held[i] for i in b if held[i] is not None}
+        if len(mine) == 1:
+            for i in b:
+                if owner[i] is None:
+                    owner[i] = next(iter(mine))
+    block_of = {i: k for k, b in enumerate(groups) for i in b}
+    ref = item_style(lines, st, held)
+    by_button = {}
+    for i in sorted(owner, key=order):
+        if owner[i] is not None:
+            by_button.setdefault(owner[i], []).append(i)
+    role, confident = {}, {}
+    for n, v in names.items():
+        title = list(v.get("idx") or [])
+        for i in title:
+            role[i] = "title"
+            confident[i] = bool(by_button.get(n)) and by_button[n][0] == i and ref is not None and \
+                same_style(st[i], ref) and not _sentence(lines[i][0])
+        for k, i in enumerate(v.get("desc_idx") or []):
+            role[i] = "description"
+            above = [j for j in title if order(j) < order(i)]
+            confident[i] = bool(above) and smaller(st[i], st[above[0]]) and (_sentence(lines[i][0]) or k > 0)
+    sg = sg if sg is not None else style_groups(st, len(lines))
+    group_of = {i: k for k, g in enumerate(sg) for i in g}
+    evidence = []
+    for k, g in enumerate(sg):
+        place = None
+        if len(g) >= 2:
+            buttons = {owner[i] for i in g if owner[i] is not None}
+            free = sum(1 for i in g if owner[i] is None) / len(g)
+            first = sum(1 for n in buttons if group_of[by_button[n][0]] == k) / max(len(buttons), 1)
+            after = sum(1 for n in buttons if group_of[by_button[n][0]] != k) / max(len(buttons), 1)
+            wraps = lambda i: any(j != i and block_of.get(j) == block_of.get(i) and order(j) < order(i) for j in g)
+            sentence = sum(1 for i in g if _sentence(lines[i][0]) or wraps(i)) / len(g)
+            over = [st[by_button[n][0]]["size"] for n in buttons if group_of[by_button[n][0]] != k]
+            small = bool(over) and statistics.median(st[i]["size"] for i in g) < 0.9 * statistics.median(over)
+            if free >= GROUP_FREE:
+                place = "other"
+            elif len(buttons) >= 2 and first >= GROUP_FIRST:
+                place = "title"
+            elif len(buttons) >= 2 and after >= GROUP_AFTER and (sentence >= SENTENCE_SHARE or small):
+                place = "description"
+        votes = {}
+        for i in g:
+            if confident.get(i):
+                votes[role[i]] = votes.get(role[i], 0) + 1
+        evidence.append((votes, place))
+
+    def word(i):
+        """Its group's word on line i's role, or None."""
+        votes, place = evidence[group_of[i]]
+        top = max(votes, key=votes.get) if votes else None
+        if top and place and top != place:
+            return None                                 # (a conflict: no word)
+        if place:
+            return place
+        if top and votes[top] >= VOTES_LEAST and votes[top] / sum(votes.values()) >= 0.8:
+            return top
+        return None
+    return {"order": order, "word": word, "confident": confident, "by_button": by_button, "owner": owner,
+            "evidence": evidence, "group_of": group_of}
+
+
+def _moves(lines, names, order, word, confident, by_button, evidence, group_of, tied):
+    """restyle's moves, by the page's verdicts (_verdicts): names changed in place."""
+    used = {i for v in names.values() for i in list(v.get("idx") or []) + list(v.get("desc_idx") or [])}
+    for n, v in names.items():
+        title, desc = list(v.get("idx") or []), list(v.get("desc_idx") or [])
+        if not title:
+            continue
+        mine = by_button.get(n, [])
+        lead = [i for i in mine if i not in used and order(i) < order(title[0]) and word(i) == "title" and lines[i][0].strip()]
+        between = lambda a, b: [m for m in mine if m not in used and order(a) < order(m) < order(b) and word(m) == "title"]
+        before = (list(title), list(desc))
+        cut = len(title)
+        while cut > 0 and not confident.get(title[cut - 1]) and word(title[cut - 1]) == "description":
+            cut -= 1
+        while 0 < cut < len(title) and tied(title[cut - 1], title[cut]) and not (
+                lines[title[cut - 1]][0].rstrip().endswith(":") and between(title[cut - 1], title[cut])):
+            cut += 1
+        if cut == 0 and not lead:
+            cut = 1 if len(title) > 1 else len(title)
+        if cut < len(title):
+            mids = between(title[cut - 1], title[cut]) if cut else []
+            used.update(mids)
+            desc, title = title[cut:] + desc, title[:cut] + mids
+        if not title and lead:
+            title = lead
+            used.update(lead)
+        while desc and title and not confident.get(desc[0]) and word(desc[0]) == "title" and order(desc[0]) > order(title[-1]):
+            title.append(desc.pop(0))
+        last = (desc or title)[-1]
+        for i in mine:
+            if i in used or order(i) <= order(last) or word(i) != "description" or \
+                    not evidence[group_of[i]][0].get("description"):
+                continue
+            a, b = lines[last][1], lines[i][1]
+            if column_gap(a, b) >= JOIN_BELOW * max(a["h"], b["h"]) * 1.5:
+                break
+            desc.append(i)
+            used.add(i)
+            last = i
+        if (title, desc) != before:
+            used.update(title + desc)
+            v.update(name=" ".join(lines[i][0] for i in title), lines=[lines[i] for i in title], idx=title,
+                     description=" ".join(lines[i][0] for i in desc), description_lines=[lines[i] for i in desc],
+                     desc_idx=desc)
 
 
 def placement(lines, rects, owner, names, group_of, st, trimmed=None):
@@ -899,8 +1487,9 @@ def placement(lines, rects, owner, names, group_of, st, trimmed=None):
         mine = sorted((i for i in range(len(lines)) if owner.get(i) == n),
                       key=lambda i: (lines[i][1]["top"], lines[i][1]["left"]))
         sib_firsts = [names[m]["idx"][0] for m in sib_ids]
-        anchor = next((i for i in mine if fits(place(i, rects[n])) and any(same_style(st[i], st[j]) for j in sib_firsts)),
-                      None)
+        # (never its own description: a title traded for the line under it, Chuck S2 D1's b16, said twice)
+        anchor = next((i for i in mine if i not in (v.get("desc_idx") or ()) and fits(place(i, rects[n]))
+                       and any(same_style(st[i], st[j]) for j in sib_firsts)), None)
         if anchor is None:
             continue
         below = [i for i in v["idx"] if lines[i][1]["top"] > lines[anchor][1]["top"]
@@ -908,7 +1497,10 @@ def placement(lines, rects, owner, names, group_of, st, trimmed=None):
         dropped = [i for i in v["idx"] if i != anchor and i not in below]
         if dropped:
             seq = sorted(dropped + [anchor], key=lambda i: (lines[i][1]["top"], lines[i][1]["left"]))
-            if any(lines[a][0].rstrip().endswith(":") or carries_on(lines[a][0], lines[b][0])
+            # (nor a line touching the next, in its colour: one title -- Buck Privates' "BONUS / MATERIALS")
+            touch = lambda a, b: column_gap(lines[a][1], lines[b][1]) < HEADING_GAP * min(lines[a][1]["h"], lines[b][1]["h"]) \
+                and colours_match(st[a], st[b])
+            if any(lines[a][0].rstrip().endswith(":") or carries_on(lines[a][0], lines[b][0]) or touch(a, b)
                    for a, b in zip(seq, seq[1:]) if a in dropped):
                 continue
         changed[n] = [anchor] + below
@@ -930,15 +1522,15 @@ def empty_buttons_blocks(lines, groups, rects, boxes, reach):
     (Spider-Man's hidden buttons). That block is its text, whole, whatever its lettering ("MEN IN / BLACK / II", a
     logo's sizes); several such buttons nearest lines of one block share it out, each line to the nearest of them
     (27F0BF0E's "THEATRICAL TRAILER / SNEAK PEEKS", an icon by each). {button: [index]}, in reading order."""
-    inside = lambda i, r: _holds(r, lines[i][1])
-    empty = [n for n, r in rects.items() if not any(inside(i, r) for i in range(len(lines)))]
+    whose = [_holder(rects, lines[i][1]) for i in range(len(lines))]
+    empty = [n for n in rects if n not in whose]
     if not empty or not lines:
         return {}
     import statistics
     spot = lambda i: (lines[i][1]["left"], lines[i][1]["top"], lines[i][1]["right"], lines[i][1]["bottom"])
     # (held by a button that does something: a decoration's box holds no one's text -- Chuck's episodes page, its
     # names under decorations' boxes)
-    held = [any(inside(i, r) for r in rects.values()) for i in range(len(lines))]
+    held = [w is not None for w in whose]
     mid = lambda b: ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
     gap = lambda n, i: _gap(rects[n], spot(i))
     nearest = {}
@@ -967,6 +1559,48 @@ def empty_buttons_blocks(lines, groups, rects, boxes, reach):
             if not held[i]:
                 out.setdefault(min(mine, key=lambda n: cost(n, i)), []).append(i)
     return {n: sorted(idx, key=lambda i: (lines[i][1]["top"], lines[i][1]["left"])) for n, idx in out.items()}
+
+
+def hull(points):
+    """The convex hull of [(x, y)], clockwise from the leftmost (fewer than three points: as they are)."""
+    pts = sorted(set((float(x), float(y)) for x, y in points))
+    if len(pts) < 3:
+        return pts
+    cross = lambda o, a, b: (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    lower, upper = [], []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def line_shape(text, box, corners):
+    """A line's four corners as RapidOCR found them (its slant), in its box's pixels; a piece of a line read whole
+    (split off it: its own text not RapidOCR's) its stretch of that line's slanted band; none known, its box."""
+    x0, y0, x1, y1 = box
+    c = corner_of(corners, text, box)
+    if c:
+        return [tuple(p) for p in c[1]]
+    mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+    whole = next((c for c in corners or () if min(p[0] for p in c[1]) <= mx <= max(p[0] for p in c[1])
+                  and min(p[1] for p in c[1]) <= my <= max(p[1] for p in c[1]) and text in c[0]), None)
+    if whole:
+        (tlx, tly), (trx, try_), (brx, bry), (blx, bly) = [tuple(p) for p in whole[1]]
+        top = lambda x: tly + (try_ - tly) * (x - tlx) / max(trx - tlx, 1e-6)
+        bottom = lambda x: bly + (bry - bly) * (x - blx) / max(brx - blx, 1e-6)
+        return [(x0, top(x0)), (x1, top(x1)), (x1, bottom(x1)), (x0, bottom(x0))]
+    return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+
+def reading_shape(lines, corners):
+    """The one outline round a reading's lines (its name's and its description's), following their slant: the convex
+    hull of their corners (line_shape) -- Spider-Man's Oscorp screens, WALL-E's tilted list, not an upright box."""
+    return hull([p for t, b, _ in lines for p in line_shape(t, b, corners)])
 
 
 def corner_of(corners, text, box):
@@ -1027,7 +1661,7 @@ def join_rows(image, lines, corners=None):
     return out, corners
 
 
-def page_names(image, lines, rects, corners=None, boxes=None, reach=None):
+def page_names(image, lines, rects, corners=None, boxes=None, reach=None, level=False, shapes=None, owners=None):
     """Each button's name lines on a menu page, by its text's grouping: {button: [(text, box, sure)]}, the page's
     own lines (whole, or the part of one split off) in reading order; a button with none left out.
     image: the page's picture; lines: the page read whole ([(text, box, sure)], its pixels); rects: {button: box}
@@ -1040,11 +1674,14 @@ def page_names(image, lines, rects, corners=None, boxes=None, reach=None):
         return {}
     boxes = boxes or rects
     lines, corners = join_rows(image, lines, corners)
-    measured = rejoin(measure(image, lines, corners), boxes)
+    measured = slant_holders(box_cut(rejoin(measure(image, lines, corners), boxes), rects), rects, every=level,
+                             shapes=shapes)
+    for text, ik in measured:           # (owners: {a line's text: its button}, as worked out before -- on the page)
+        if owners and owners.get(text) in rects:
+            ik["held_by"] = owners[text]
     rgb = image.convert("RGB")
     st = {i: style(rgb, measured[i][0], measured[i][1]) for i in range(len(measured))}
-    ref = item_style(measured, st, {i: next((n for n, r in rects.items() if _holds(r, measured[i][1])), None)
-                                    for i in range(len(measured))})
+    ref = item_style(measured, st, {i: _holder(rects, measured[i][1]) for i in range(len(measured))})
     groups = split_at_headings(measured, blocks(measured, boxes), st, ref)
     paired = empty_buttons_blocks(measured, groups, rects, boxes, 60 * image.width / 720 if reach is None else reach)
     trimmed = trim_overflow(rects, measured, groups)
@@ -1056,12 +1693,12 @@ def page_names(image, lines, rects, corners=None, boxes=None, reach=None):
     out = {}
     for n, v in names.items():
         got = Named()
-        for text, ik in v.get("lines") or []:
+        for text, ik in slant_order(v.get("lines") or []):
             sure = lines[ik["src"]][2]
             got.append((text, (float(ik["left"]), float(ik["top"]), float(ik["right"] + 1), float(ik["bottom"] + 1)), sure))
         got.heading = v.get("heading") or ""
         got.description = [(text, (float(ik["left"]), float(ik["top"]), float(ik["right"] + 1), float(ik["bottom"] + 1)),
-                            lines[ik["src"]][2]) for text, ik in v.get("description_lines") or []]
+                            lines[ik["src"]][2]) for text, ik in slant_order(v.get("description_lines") or [])]
         if got:
             out[n] = got
     return out
@@ -1073,3 +1710,4 @@ class Named(list):
     by its menu takes its heading's name, the user's."""
     heading = ""
     description = ()
+    alts = ()               # (its lines as read turned level, a page at a slant's: menus._page_names)

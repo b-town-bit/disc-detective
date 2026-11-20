@@ -1921,7 +1921,7 @@ def test_the_menu_button_that_plays_a_title(gui, tmp_path, monkeypatch):
     assert not hasattr(v, "head") and v.path.winfo_manager() and v.path.cget("style") == "DeskFind.TLabel"
     # (the words as read set apart the same way, not the line round them)
     assert v.words.cget("style") == "DeskFind.TLabel" and v.said.cget("style") == "DeskSub.TLabel"
-    assert v.said.cget("text") == "Detect titles read it as " and v.words.cget("text") == "“Odette Reads”"
+    assert v.said.cget("text") == "Detect titles read it as " and v.words.cget("text") == "Odette Reads"
     assert v.trail == "Main Menu › Bonus Features › Odette's Friends › Jean-Bob"
     assert str(v.path.cget("text")) == v.trail                   # (room for it all: no ellipsis)
     # too long for the window: cut short, the whole on hover
@@ -2428,7 +2428,7 @@ def test_a_menu_picture_shows_the_words_read_on_demand(tmp_path):
         v.show("00052.mpls", {"image": small, "rect": [0, 0, 120, 40], "button": [0, 0, 120, 40], "text": "Meville's Cactus",
                               "alone": True, "read_as": "Meville's Cactus", "name": "Neville's Cactus"})
         root.update()
-        assert v.fixed.winfo_manager() and v.fixed.cget("text") == "“Neville's Cactus”"
+        assert v.fixed.winfo_manager() and v.fixed.cget("text") == "Neville's Cactus"     # (bold, no quotes)
         assert v.fix_text == "Read as “Meville's Cactus”, corrected to “Neville's Cactus”"
         assert not v.fix_note.winfo_manager()
         v.fixed.event_generate("<Button-1>")
@@ -2455,6 +2455,46 @@ def test_a_menu_picture_shows_the_words_read_on_demand(tmp_path):
         v.show("Title 44", {"image": path, "rect": [385, 382, 622, 456], "button": [385, 382, 622, 456], "text": ""})
         v._pointer(ev(*v.hot[:2]))
         assert v.photo is v.photos[0] and "point at it" not in v.read.cget("text")
+        # a setting on the same page pressed first (WALL-E's commentary "ON"): it's ringed and numbered on the picture
+        # as it is, pointing or not, and the help says to press them in order; without one, nothing of the kind
+        plain = {"image": path, "rect": [295, 274, 425, 287], "button": [222, 268, 471, 292], "text": "Garbage Airlock"}
+        v.show("Title 83", plain)
+        root.update()
+        k = v.photos[0].width() / 720
+        on_ring = (round(322 * k), round(206 * k))       # (where ON's ring goes, by its left edge: plain menu now)
+        before, said_before = v.photos[0].get(*on_ring), "in order" in v.read.cget("text")
+        v.show("Title 82", dict(plain, pressed=[{"rect": [322, 194, 350, 218]}]))
+        root.update()
+        assert "Press the numbered buttons in order" in v.read.cget("text") and not said_before
+        near = [v.photos[0].get(on_ring[0] - d, on_ring[1]) for d in range(0, round(12 * k))]
+        assert any(px != before for px in near) and v.photos[1].get(*on_ring) == v.photos[0].get(*on_ring)
+    finally:
+        root.destroy()
+
+
+def test_a_menu_pictures_description_has_its_own_wrapped_line(tmp_path):
+    """A title's description, read under its name (Order of the Phoenix's run long), shown on a line of its own under
+    the name, wrapped, never on the name's line running off the window; none, no such line."""
+    from PIL import Image
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display")
+    root.withdraw()
+    try:
+        path = str(tmp_path / "page.png")
+        Image.new("RGB", (720, 480), (40, 60, 90)).save(path)
+        v = dd_app.MenuPicture(root)
+        said = ("Director David Yates and Editor Mark Day show us what a difference a good edit makes and allow you "
+                "to edit a scene.")
+        v.show("00032.mpls", {"image": path, "rect": [400, 100, 600, 200], "button": [400, 100, 600, 200],
+                              "text": "Harry Potter: The Magic of Editing", "description": said})
+        root.update()
+        assert v.words.cget("text") == "Harry Potter: The Magic of Editing"
+        assert v.described.winfo_manager() and v.described.cget("text") == said and int(str(v.described.cget("wraplength"))) == 640
+        v.show("00033.mpls", {"image": path, "rect": [400, 100, 600, 200], "button": [400, 100, 600, 200], "text": "Additional Scenes"})
+        root.update()
+        assert not v.described.winfo_manager()
     finally:
         root.destroy()
 
@@ -3804,3 +3844,15 @@ def test_a_newer_version_shows_on_the_about_link_and_inside(gui, monkeypatch):
     root.update()
     assert "Working offline: not looking for a newer version." in texts() and not looked
     app.about_win.top.destroy()
+
+
+def test_the_main_movies_and_episodes_anchored_for_the_menus_search():
+    """anchored_titles: the disc's main movies and episodes, by their labels where they have one (MainMovie, Episode),
+    else by the scan (the film and its other cuts; episodes); a DVD crawl's by title number."""
+    rep = {"titles": [{"id": "Title 1", "role": "feature"}, {"id": "Title 2", "role": "version"},
+                      {"id": "Title 3", "role": "extra"}, {"id": "Title 4", "role": "episode"},
+                      {"id": "Title 5", "role": "feature"}],
+           "labels": {"Title 3": {"type": "MainMovie"}, "Title 5": {"type": "Extra"}}}
+    assert dd_app.anchored_titles(rep, number=True) == {1: "main", 2: "main", 3: "main", 4: "episode"}
+    bd = {"titles": [{"id": "00030.mpls", "role": "extra"}, {"id": "00059.mpls", "role": "feature"}], "labels": {}}
+    assert dd_app.anchored_titles(bd) == {"00059.mpls": "main"}

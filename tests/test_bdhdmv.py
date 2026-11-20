@@ -117,6 +117,17 @@ def counting(names):
     return read
 
 
+def test_a_reads_steps_are_timed_in_the_log(library, tmp_path):
+    """Where a slow scan's time went, the user's: the disc opened and unlocked, its menus worked out, its menus loaded
+    -- each a line in the log with its seconds."""
+    said = []
+    bdhdmv.read("E:/", TITLES, str(tmp_path), log=said.append, aacs="libaacs.dll", read_words=counting([]))
+    for start in ("hdmv-menus: the disc opened and unlocked in ", "hdmv-menus: its menus worked out in ",
+                  "hdmv-menus: its menus loaded in "):
+        line = next((m for m in said if m.startswith(start)), None)
+        assert line is not None and re.search(r"\d+\.\d s", line), start
+
+
 def test_a_discs_hdmv_menus_named_by_their_buttons_and_what_they_play(library, tmp_path):
     seen, told = [], []
     got = bdhdmv.read("E:/", TITLES, str(tmp_path), log=lambda m: None, aacs="libaacs.dll", read_words=counting(seen),

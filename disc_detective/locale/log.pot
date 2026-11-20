@@ -10,7 +10,7 @@ msgstr ""
 "Project-Id-Version: Disc Detective 0.4.dev0\n"
 "Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
 "\n"
-"POT-Creation-Date: 2026-11-17 12:15-0600\n"
+"POT-Creation-Date: 2026-11-19 14:48-0600\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -251,6 +251,10 @@ msgid "the film's credits: {count} words of names"
 msgstr ""
 
 #: disc_detective/app.py
+msgid "the film's credits couldn't be read"
+msgstr ""
+
+#: disc_detective/app.py
 #, python-brace-format
 msgid "the menus say: {settles}"
 msgstr ""
@@ -486,6 +490,16 @@ msgstr ""
 
 #: disc_detective/bdhdmv.py
 #, python-brace-format
+msgid "hdmv-menus: the disc opened and unlocked in {seconds:.1f} s"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid "hdmv-menus: its menus worked out in {seconds:.1f} s ({count} menus)"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
 msgid ""
 "hdmv-menus: the first play goes on to Java (title {title}, JAR {jar}): "
 "BD-J menus"
@@ -512,6 +526,11 @@ msgstr ""
 
 #: disc_detective/bdhdmv.py
 msgid "not reached"
+msgstr ""
+
+#: disc_detective/bdhdmv.py
+#, python-brace-format
+msgid "hdmv-menus: its menus loaded in {seconds:.1f} s"
 msgstr ""
 
 #: disc_detective/bdhdmv.py

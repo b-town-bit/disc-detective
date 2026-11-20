@@ -600,6 +600,52 @@ def test_the_button_to_show_for_each_title(tmp_path):
     assert menus.title_pictures(out, str(tmp_path))[1]["rect"] == [10, 10, 200, 40]   # the first: Play
 
 
+def test_a_main_movies_and_episodes_page_nearest_the_menu_is_read_whatever_else_names_it():
+    """The search (the user's, 2026-11-19): the greedy plan as ever, and each main movie's and episode's page nearest
+    the first menu (anchor_pages) read too, first, the pages on the way with it, though another page in the plan names
+    its title -- an episode's nearest that isn't a Play All starting at it, a Play All's only if that's all."""
+    holds = {"deep": {1, 2}, "main": {1}}
+    assert menus.plan_pages(holds, {}) == ["deep"]                                # (greedy: one page names both)
+    assert menus.plan_pages(holds, {}, must=["main"]) == ["main", "deep"]
+    assert menus.plan_pages(holds, {"main": ["root"]}, must=["main"]) == ["root", "main", "deep"]   # (and its way)
+    assert menus.plan_pages({"main": {1}}, {}, must=["main"]) == ["main"]                   # (its title not sought again)
+    cands = [(1, "main", 0, False), (1, "scenes", 2, False),                     # the film: its Play on the main menu
+             (5, "episodes", 1, False), (5, "menu", 0, True),                   # an episode: not its Play All's copy
+             (6, "menu", 0, True),                                              # ... unless that's all there is
+             (9, "menu", 0, False)]                                             # (an extra: not anchored)
+    assert menus.anchor_pages({1: "main", 5: "episode", 6: "episode"}, cands) == ["main", "menu", "episodes"]
+
+
+def test_an_episodes_picture_is_its_nearest_button_not_a_play_alls(tmp_path):
+    """An episode's picture: its nearest button that isn't a Play All starting at it (one starting part way in, or
+    saying Play All), a Play All's only when that's all there is; any other title read alike, its nearest."""
+    page = lambda n, depth, buttons: {"domain": "bd", "page": n, "program": 1, "depth": depth, "route": [],
+                                      "image": "p%d.png" % n, "buttons": buttons}
+    near = page(1, 0, [{"n": 1, "rect": [0, 0, 10, 10], "text": "Play All", "plays": {"title": "00010.mpls", "chapter": 3}}])
+    far = page(2, 1, [{"n": 2, "rect": [0, 20, 10, 30], "text": "Chuck Versus the Ex", "plays": {"title": "00010.mpls", "chapter": 1}}])
+    pic = menus.title_pictures({"pages": [near, far]}, str(tmp_path), {"00010.mpls": "episode"})["00010.mpls"]
+    assert pic["image"].endswith("p2.png")
+    pic = menus.title_pictures({"pages": [near]}, str(tmp_path), {"00010.mpls": "episode"})["00010.mpls"]
+    assert pic["image"].endswith("p1.png")                              # (only its Play All's: that, then)
+    a = page(1, 0, [{"n": 1, "rect": [0, 0, 10, 10], "text": "Bloopers", "plays": {"title": "00020.mpls", "chapter": 1}}])
+    b = page(2, 1, [{"n": 2, "rect": [0, 20, 10, 30], "text": "Bloopers", "plays": {"title": "00020.mpls", "chapter": 1}}])
+    assert menus.title_pictures({"pages": [b, a]}, str(tmp_path))["00020.mpls"]["image"].endswith("p1.png")
+
+
+def test_a_long_extras_picture_is_its_read_copy_not_an_unread_one_nearer_the_menu(tmp_path):
+    """A title long enough to be a film but not the disc's film found (Order of the Phoenix's 44-minute "The Hidden
+    Secrets of Harry Potter"), its button on two copies of a page: the copy read is its picture, though the other is
+    nearer the first menu -- never "couldn't read its words" for a name read. The disc's own film keeps the copy
+    nearest the menu (the test above)."""
+    near = {"domain": 1, "page": 1, "program": 1, "route": [], "image": "page_1_1_1.png",
+            "buttons": [{"n": 30, "rect": [10, 10, 200, 40], "text": "", "plays": {"title": 30, "chapter": 1, "seconds": 2635}}]}
+    far = {"domain": 1, "page": 2, "program": 1, "route": [{"page": 1, "program": 1, "button": 9}], "image": "page_1_2_1.png",
+           "buttons": [{"n": 33, "rect": [10, 50, 200, 80], "text": "The Hidden Secrets of Harry Potter",
+                        "plays": {"title": 30, "chapter": 1, "seconds": 2635}}]}
+    pic = menus.title_pictures({"pages": [near, far], "found": {"feature": 1}}, str(tmp_path))[30]
+    assert pic["image"].endswith("page_1_2_1.png") and pic["text"] == "The Hidden Secrets of Harry Potter"
+
+
 def test_a_titles_picture_outlines_the_words_read(tmp_path):
     """The outline on a title's picture: where its name was read, as the reading handed it on
     ("words": Enchanted's tall button areas, the lines in them), never looked for again; not known
@@ -2501,3 +2547,182 @@ def test_a_titles_picture_has_its_description_inside_its_one_outline(tmp_path):
     assert menus.tv_pictures(tv, "d")["00005.mpls"]["rect"] == [330, 104, 700, 128]
     w = pickle.loads(pickle.dumps(menus.Words("Name", [1, 2, 3, 4], description="Its words.", described=[1, 5, 3, 8])))
     assert (w.description, w.described) == ("Its words.", [1, 5, 3, 8])
+
+
+def test_a_readings_slanted_outline_reaches_its_picture(tmp_path):
+    """Where a reading kept its outline following its lines' slant (Words.shape), the crawl's button and its
+    picture keep it, a film's and a TV reading's alike; kept through a copy (pickle)."""
+    import pickle
+    w = pickle.loads(pickle.dumps(menus.Words("Set Up", [10, 10, 60, 30], shape=[(10, 20), (60, 10), (60, 25), (10, 35)])))
+    assert w.shape == [[10, 20], [60, 10], [60, 25], [10, 35]]
+    shape = [[400, 300], [560, 260], [560, 290], [400, 330]]
+    out = {"pages": [{"domain": 1, "page": 8, "program": 7, "route": [], "image": "page_7_8_1.png",
+                      "buttons": [{"n": 4, "rect": [380, 250, 600, 340], "text": "SET UP", "words": [400, 260, 560, 330],
+                                   "shape": shape, "plays": {"title": 4, "chapter": 1}}]}]}
+    assert menus.title_pictures(out, str(tmp_path))[4]["shape"] == shape
+    tv = {"readings": [{"title": 4, "image": "p.png", "rect": [380, 250, 600, 340], "words": [400, 260, 560, 330],
+                        "text": "SET UP", "shape": shape}]}
+    assert menus.tv_pictures(tv, "d")[4]["shape"] == shape
+
+
+def test_a_title_reached_by_a_setting_on_its_own_page_has_it_pressed_first():
+    """A title its button plays once a setting on the same page is pressed (WALL-E's deleted scenes: "ON", the
+    commentary, coming back to the same menu): its picture names that button, where its words were read, to be
+    numbered before the title's own; one pressed on a page before (The Swan Princess's friend) isn't on this
+    picture; the title as it plays without the setting has none."""
+    page = {"domain": 7, "page": 25, "program": 1, "image": "page_7_25_1.png", "route": [],
+            "buttons": [{"n": 1, "rect": [309, 187, 351, 221], "text": "ON", "words": [322, 194, 350, 218]},
+                        {"n": 4, "rect": [222, 268, 471, 292], "text": '"Garbage Airlock"', "words": [295, 274, 425, 287],
+                         "plays": {"title": 83, "chapter": 1,
+                                   "others": [{"title": 82, "chapter": 1, "by": [[7, 8, 1, 3], [7, 21, 1, 4], [7, 25, 1, 1]]}]}}]}
+    out = {"pages": [{"domain": 7, "page": 8, "program": 1, "buttons": [{"n": 3, "rect": [0, 0, 9, 9], "text": "BONUS FEATURES",
+                                                                       "goes_to": [7, 21, 1]}]},
+                     {"domain": 7, "page": 21, "program": 1, "route": [{"page": 8, "program": 1, "button": 3}],
+                      "buttons": [{"n": 4, "rect": [0, 0, 9, 9], "text": "Deleted Scenes", "goes_to": [7, 25, 1]}]}, page]}
+    pics = menus.title_pictures(out, "d")
+    assert pics[82]["pressed"] == [{"rect": [322, 194, 350, 218]}] and "pressed" not in pics[83]
+    assert menus.pressed_first(page, page["buttons"][1], [[7, 8, 1, 3], [7, 21, 1, 4]]) == []
+    assert menus.pressed_first(page, page["buttons"][1], [[7, 25, 1, 4]]) == []         # (its own button: not first)
+
+
+def _corners_at(k, boxes):
+    """Lines [(text, (x0, y0, x1, y1) as drawn level)] turned by slope k about the origin: RapidOCR's corners."""
+    import math
+    a = math.atan(k)
+    turn = lambda x, y: (x * math.cos(a) - y * math.sin(a), x * math.sin(a) + y * math.cos(a))
+    return [(t, tuple(turn(x, y) for x, y in ((b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3]))), 0.99)
+            for t, b in boxes]
+
+
+def test_a_menu_drawn_at_a_slant_is_one_region_perspective_none(monkeypatch):
+    """_slant_regions: a menu's lines of one slope near each other (WALL-E's, about -16 degrees) are one region, its
+    level HUD text left out; a page whose slants run steadily from level to steep (Spider-Man's Oscorp monitor in
+    perspective) has none; nor an upright page."""
+    monkeypatch.setattr(menus, "_keystone", lambda image: None)
+    menu = _corners_at(-0.29, [("PLAY", (300, 200, 380, 230)), ("SCENE SELECTION", (260, 250, 440, 280)),
+                               ("BONUS FEATURES", (330, 300, 510, 330)), ("SET UP", (380, 350, 470, 380)),
+                               ("SNEAK PEEKS", (420, 400, 560, 430))])
+    hud = [("zoom lock", ((560, 240), (610, 240), (610, 252), (560, 252)), 0.99)]
+    got = menus._slant_regions(None, menu + hud)
+    assert len(got) == 1 and got[0]["idx"] == [0, 1, 2, 3, 4] and abs(got[0]["slope"] + 0.29) < 0.01
+    steady = [(t, c, s) for k, y in ((0.0, 100), (-0.03, 160), (-0.05, 220), (-0.08, 280), (-0.12, 340), (-0.14, 400))
+              for t, c, s in _corners_at(k, [("Trailer %d" % y, (100, y, 300, y + 20))])]
+    assert menus._slant_regions(None, steady) == []
+    assert menus._slant_regions(None, _corners_at(0.0, [("PLAY MOVIE", (100, 100, 300, 130)),
+                                                        ("SCENE SELECTIONS", (100, 150, 340, 180))])) == []
+
+
+def test_a_slanted_menu_is_grouped_level_not_by_its_upright_boxes(monkeypatch):
+    """_page_names: a menu drawn at a slant, its logo's big "SPACE" ending just short of "SUBTITLES" a row lower
+    (Muppets from Space's main menu): by their upright boxes on the page, one row -- grouped turned level, the logo
+    is no part of SUBTITLES' name; the page's own text kept, its level reading beside it to put it right by."""
+    import math
+    from PIL import Image, ImageDraw, ImageFont
+    k = -0.2
+    font = lambda n: ImageFont.load_default(size=n)
+    level = Image.new("RGB", (800, 520), (10, 10, 40))
+    dr = ImageDraw.Draw(level)
+    drawn = [("SPACE", (150, 60), 70), ("SUBTITLES", (460, 150), 30), ("AUDIO SET-UP", (150, 200), 30),
+             ("SPECIAL FEATURES", (460, 200), 30)]
+    level_lines = []
+    for text, (x, y), size in drawn:
+        dr.text((x, y), text, font=font(size), fill=(250, 200, 60))
+        b = dr.textbbox((x, y), text, font=font(size))
+        level_lines.append((text, b))
+    a = math.atan(k)                    # (PIL turns counter-clockwise: the lines rise to the right, moved down 200)
+    page_img = level.rotate(-math.degrees(a), expand=False, fillcolor=(10, 10, 40), center=(0, 0), translate=(0, 200))
+    to_page = lambda x, y: (x * math.cos(a) - y * math.sin(a), x * math.sin(a) + y * math.cos(a) + 200)
+    to_level = lambda x, y: (x * math.cos(a) + (y - 200) * math.sin(a), -x * math.sin(a) + (y - 200) * math.cos(a))
+    pcorners = [(t, tuple(to_page(x, y) for x, y in ((b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3]))), 0.99)
+                for t, b in level_lines]
+    pcorners[-1] = ("SPECIAL EATURES",) + pcorners[-1][1:]          # (the page read misreads one)
+    plines = [(t, (min(q[0] for q in c), min(q[1] for q in c), max(q[0] for q in c), max(q[1] for q in c)), s)
+              for t, c, s in pcorners]
+    lcorners = [(t, ((b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])), 0.99) for t, b in level_lines]
+    monkeypatch.setattr(menus, "_level_read", lambda image, region: (level, [(t, b, 0.99) for t, b in level_lines],
+                                                                     lcorners, to_level, to_page))
+    monkeypatch.setattr(menus, "_keystone", lambda image: None)
+    box_of = lambda t: next(b for tt, b, _ in plines if tt == t)
+
+    def button(t):                      # (a highlight's box: the words' own size, upright, round their middle)
+        lb = next(b for tt, b in level_lines if tt == t)
+        mx, my = to_page((lb[0] + lb[2]) / 2, (lb[1] + lb[3]) / 2)
+        return (mx - (lb[2] - lb[0]) / 2, my - (lb[3] - lb[1]) / 2, mx + (lb[2] - lb[0]) / 2, my + (lb[3] - lb[1]) / 2)
+    names = {1: button("SUBTITLES"), 2: button("AUDIO SET-UP"), 3: button("SPECIAL FEATURES")}
+    assert box_of("SPACE")[3] > box_of("SUBTITLES")[1]          # (on the page, their upright boxes share rows)
+    got = menus._page_names(page_img, plines, names, pcorners, dict(names))
+    assert [t for t, _, _ in got[1]] == ["SUBTITLES"]
+    assert [t for t, _, _ in got[3]] == ["SPECIAL EATURES"] and got[3].alts == [("SPECIAL FEATURES", 0.99)]
+    assert [t for t, _, _ in got[2]] == ["AUDIO SET-UP"]
+
+
+def test_a_name_in_capitals_is_title_cased_letter_by_letter():
+    """nice_name's recasing (the user's rule): a letter's a capital where the one before it isn't a letter -- after a
+    bracket, a hyphen, an ellipsis too (Muppets from Space's outtakes) -- not after an apostrophe inside a word, nor
+    straight after a digit; the small words small but first, last, after a colon; known forms and Roman numerals as
+    they are."""
+    assert menus.nice_name("THIS ELEVATOR IS GOING DOWN...WAY DOWN (VERSION 1,2 & 3)") == \
+        "This Elevator Is Going Down...Way Down (Version 1,2 & 3)"
+    assert menus.nice_name("RIZZO'S BIGGEST-FAN") == "Rizzo's Biggest-Fan" and menus.nice_name("I'M WEIRD FOR YOU") == "I'm Weird for You"
+    assert menus.nice_name("MIND IF I DROP IN") == "Mind If I Drop In"
+    assert menus.nice_name("PINOCCHIO 70TH ANNIVERSARY PLATINUM EDITION") == "Pinocchio 70th Anniversary Platinum Edition"
+    assert menus.nice_name("IN TOO DEEP: THE SECOND TASK") == "In Too Deep: The Second Task"
+    assert menus.nice_name("MEN IN BLACK II") == "Men in Black II" and menus.nice_name("SPIDER-MAN") == "Spider-Man"
+    assert menus.nice_name("DVD-ROM ONLINE FEATURES") == "DVD-ROM Online Features" and menus.nice_name("TV SPOTS") == "TV Spots"
+    assert menus.nice_name("BLU-RAY DISC") == "Blu-ray Disc" and menus.nice_name("O'BRIEN'S STORY") == "O'Brien's Story"
+    assert menus.nice_name("Close Encounters (of the Third Kind)") == "Close Encounters (of the Third Kind)"   # (mixed: kept)
+    # (after an apostrophe a capital, the user's, but a contraction's end small)
+    assert [menus.nice_name(t) for t in ("L'OREAL", "D'ARTAGNAN", "YOU'RE ON", "WE'VE GOT IT", "THEY'LL COME", "FIVE O'CLOCK")] ==         ["L'Oreal", "D'Artagnan", "You're On", "We've Got It", "They'll Come", "Five O'clock"]
+    # (a quote at either end kept where it pairs with one in the name, else dropped as a speck)
+    assert menus.nice_name('MUSIC VIDEO- "SHINING STAR"') == 'Music Video- "Shining Star"'
+    assert menus.nice_name('"HERO" BY CHAD KROEGER') == '"Hero" by Chad Kroeger' and menus.nice_name('DUMPED!"') == "Dumped!"
+
+
+def test_initials_stay_capitals_and_a_name_after_mc_has_its_own_capital():
+    """The recasing's known forms take the initials menus print (Spider-Man's Blu-ray: "HBO MAKING OF SPIDER-MAN",
+    "CGI SPIDER-MAN"), and a name after "Mc" its own capital ("BONE SAW MCGRAW"); a short word that only starts so
+    as it was."""
+    assert menus.nice_name("HBO MAKING OF SPIDER-MAN") == "HBO Making of Spider-Man"
+    assert menus.nice_name("CGI SPIDER-MAN") == "CGI Spider-Man" and menus.nice_name("IMAX: THE STORY") == "IMAX: The Story"
+    assert menus.nice_name("BONE SAW MCGRAW") == "Bone Saw McGraw" and menus.nice_name("DR. MCCOY'S") == "Dr. McCoy's"
+    assert menus.nice_name("MC HAMMER") == "Mc Hammer"
+
+
+def test_a_description_in_small_capitals_reads_as_a_sentence():
+    """A description as OCR reads a menu's small capitals (Order of the Phoenix's): its words small, but names as the
+    film's people have them (a whole name; a single one no dictionary has), the film's title as it is, a role before a
+    name ("Editor Mark Day") and its first word a capital; its words put right first (fix: the credits' "Mark" for
+    "Iark"); one written as a sentence already as it is."""
+    people = ["David Yates", "Mark Day", "Natalia Tena", "Daniel Radcliffe"]
+    is_word = lambda w: w.lower() in {"day", "mark", "director", "editor", "difference", "good", "edit", "scene", "spend",
+                                      "actress", "tour", "stages", "movies", "harry", "potter", "order", "phoenix", "mat"}
+    fix = lambda t: t.replace("iark day", "Mark Day")
+    said = menus.nice_description("Director David Yates and Editor Iark Day show us what A DIFFERENCE A GOOD EDIT MAKES AND "
+                                  "ALLOW YOU TO EDIT A SCENE.", people, is_word, fix=fix)
+    assert said == "Director David Yates and Editor Mark Day show us what a difference a good edit makes and allow you to " \
+                   "edit a scene."
+    said = menus.nice_description("Spend a day with Actress Mat Tena AnD RECEiVE A VERY PERSONAL tour of the Harry Potter And "
+                                  "The Order of the Phoenix Stages.", people, is_word, "Harry Potter and the Order of the Phoenix")
+    assert said == "Spend a day with Actress Mat Tena and receive a very personal tour of the Harry Potter and the Order of " \
+                   "the Phoenix stages."
+    assert menus.nice_description("Morgan and Lester ponder their end.", people, is_word) == "Morgan and Lester ponder their end."
+    # (and as correct_names hands an extra on: its name put right as ever, its description made a sentence)
+    got = menus.correct_names({"extras": [{"title": 32, "name": "Harry Potter: The Magic of Editing",
+                                           "description": "SHOW US WHAT A GOOD EDIT MAKES."}]}, people, is_word)
+    assert got["extras"][0]["description"] == "Show us what a good edit makes."
+
+
+def test_ocrs_slips_in_numbers_are_put_right_but_codes_are_left_alone():
+    """number_slips (the user's): only words already holding a digit, each fix one a number there must be -- an item
+    number at the start (Muppets from Space's "1O."), an ordinal whose ending fits, a year, O between digits, a
+    dictionary word run into a number (WALL-E's "PINOCCHIO7OTH"); codes, which keep clear of O, I and l, as read."""
+    is_word = lambda w: w.lower() in {"pinocchio", "anniversary", "season", "this", "elevator", "dalmatians", "the"}
+    fix = lambda t: menus.number_slips(t, is_word)
+    assert fix("1O. THIS ELEVATOR") == "10. THIS ELEVATOR" and fix("I0) PEPE") == "10) PEPE"
+    assert fix("PINOCCHIO7OTH ANNIVERSARY") == "PINOCCHIO 70TH ANNIVERSARY" and fix("SEASON9") == "SEASON 9"
+    assert fix("THE 2OTH ANNIVERSARY") == "THE 20TH ANNIVERSARY" and fix("1ITH HOUR") == "11TH HOUR"
+    assert fix("THE 2OND FILM") == "THE 2OND FILM"                      # (20nd: no such ordinal, left)
+    assert fix("COPYRIGHT 2OO7") == "COPYRIGHT 2007" and fix("1O1 DALMATIANS") == "101 DALMATIANS"
+    for code in ("SN124B", "SN12O4B", "UNIT 4O7B", "OO7", "1OO", "T-1000", "PG-13", "MP3", "R2-D2", "CX.00013", "4K", "1080P"):
+        assert fix(code) == code, code
+    assert menus.number_slips("SE7EN", lambda w: w.lower() in {"se7en", "seven"}) == "SE7EN"   # (a word it knows)

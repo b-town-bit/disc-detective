@@ -176,3 +176,20 @@ def test_lines_under_a_heading_are_no_item_before_it(named):
     p.text((60, 242), "our discs.", size=22)
     got = named(p, [(40, 56, 500, 82), (40, 82, 500, 108), (40, 108, 500, 134)])
     assert got[3] == "Sword Skills"
+
+
+def test_a_marker_with_no_text_found_reads_the_plate_beside_it(named):
+    """Spider-Man's Oscorp trailers: a marker beside each white plate; the page's reading passed one plate's small
+    packed lines by. A button that does something left with no name has the plate within reach of it read on its own
+    -- "STAN LEE'S MUTANTS" -- the page then grouped again with its lines."""
+    from PIL import ImageDraw
+    p = page()
+    d = ImageDraw.Draw(p.image)
+    d.rectangle((60, 60, 250, 130), fill=(235, 235, 235))
+    p.text((80, 70), "SPIDER-MAN", size=24, colour=(20, 20, 20))
+    d.rectangle((60, 200, 250, 290), fill=(235, 235, 235))
+    p.text((80, 212), "STAN LEE'S", size=22, colour=(20, 20, 20), line=False)    # (not in the page's reading)
+    p.text((80, 236), "MUTANTS", size=22, colour=(20, 20, 20), line=False)
+    got = named(p, [(256, 80, 272, 110), (256, 230, 272, 260)])
+    assert got[1] == "SPIDER-MAN"
+    assert got[2] == "STAN LEE'S MUTANTS"

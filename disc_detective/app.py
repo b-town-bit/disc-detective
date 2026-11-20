@@ -198,6 +198,50 @@ def clean(s):
     return re.sub(r'[<>"/\\|?*]', "", re.sub(r"\s*:\s*", " - ", s or "")).strip()
 
 
+def grown(points, by):
+    """A convex outline pushed out by `by` pixels from its middle, every corner along its own direction: clear of
+    the text it goes round, as the upright box's gap is."""
+    cx = sum(p[0] for p in points) / len(points)
+    cy = sum(p[1] for p in points) / len(points)
+    out = []
+    for x, y in points:
+        d = max(((x - cx) ** 2 + (y - cy) ** 2) ** 0.5, 1e-6)
+        out.append((x + (x - cx) / d * by, y + (y - cy) / d * by))
+    return out
+
+
+def anchored_titles(rep, number=False):
+    """The disc's main movies and episodes, for the menus' search and pictures (the user's, 2026-11-19): {title:
+    "main" or "episode"}, each one's button nearest the first menu read and shown. By its label where it has one
+    (yours, TheDiscDB's: MainMovie, Episode), else by the scan (the film and its other cuts; a show's episodes).
+    number: a DVD crawl's keys, its title numbers ("Title 3": 3); else the titles' own ids ("00030.mpls")."""
+    labels = rep.get("labels") or {}
+    out = {}
+    for t in rep.get("titles") or []:
+        kind = (labels.get(t["id"]) or {}).get("type")
+        if kind:
+            got = "main" if kind == Type.MAIN_MOVIE else "episode" if kind == Type.EPISODE else None
+        else:
+            got = "main" if t.get("role") in (Role.FEATURE, Role.VERSION) else "episode" if t.get("role") == Role.EPISODE else None
+        if not got:
+            continue
+        key = t["id"]
+        if number:
+            m = re.match(r"Title (\d+)$", str(key))
+            if not m:
+                continue
+            key = int(m.group(1))
+        out[key] = got
+    return out
+
+
+def described(name, description):
+    """An extra's file name with the words its menu prints under it, in brackets, as Plex shows it ("Sc. 22 (Big
+    Mike talks to Herd)": the user's, 2026-11-17, tried in Plex): no full stop at its end; none, the name alone."""
+    said = clean(description).rstrip(" .")
+    return "%s (%s)" % (name, said) if name and said else name
+
+
 def short_reads(short):
     """What the lab read short, said plainly: one title by its name and seconds, else how many."""
     if len(short) == 1:
@@ -841,11 +885,11 @@ def plan_rip(rep, mk_titles, include_extras, selected=None):
             dest = episode_dest(base, show, item["season"], item["episode"], item.get("title"))
         elif role in (Role.PLAY_ALL, Role.PROMO) and item.get("title") and item.get("type") not in (None, "", Type.PROMO):
             # ticked by hand, but labelled (yours, or TheDiscDB's): saved as the label says
-            dest = extra_dest(item, clean(item["title"]), episodes, base, season_level)
+            dest = extra_dest(item, described(clean(item["title"]), item.get("description")), episodes, base, season_level)
         elif t and t["title_id"] in names and not (my and role == Role.EXTRA):
             dest = names[t["title_id"]]
         elif role == Role.EXTRA:
-            label = clean(item.get("title")) or clean((t or {}).get("special_name")) or \
+            label = described(clean(item.get("title")), item.get("description")) or clean((t or {}).get("special_name")) or \
                 "%s - %s" % (show, (t["title_id"] if t else m["source"]).replace(".", "_"))
             dest = extra_dest(item, label, episodes, base, season_level)
         elif role == Role.EPISODE:
@@ -2845,6 +2889,8 @@ class App:
                 from . import menus
                 entries, texts = bdmenus.wb_film(drive, lambda image: " ".join(
                     t for t, _x, _x in (menus.rapid_lines(image) or [])))
+            if not entries:               # (a menu template in plain text files: Spider-Man's)
+                entries, texts = bdmenus.template_film(drive)
             if not entries:
                 return
             film = naming_film(rep)
@@ -3562,7 +3608,7 @@ class App:
                                   tv=rep.get("kind") == "tv",
                                   # (a quick crawl, each title's best button; every one, if Settings ask)
                                   scope="language" if self.settings.get("menu_every_title") else "titles",
-                                  is_word=di.word_checker(self.scan_args().imdb_dir))
+                                  is_word=self._crawl_words(rep, self.scan_args()), anchored=anchored_titles(rep))
             except (menus.Cancelled, menus.Unsupported):
                 raise                    # (called off; a Java menu after all)
             except Exception:
@@ -3579,9 +3625,9 @@ class App:
         log(i18n.log("reading the menus of {root} with VLC {vlc}", root=root, vlc=vlc))
         args = self.scan_args()
         # (the IMDb index as a dictionary: which of Windows OCR's two readings has real words)
-        result = menus.crawl(root, vlc, structure, out, log=log, is_word=di.word_checker(args.imdb_dir),
+        result = menus.crawl(root, vlc, structure, out, log=log, is_word=self._crawl_words(rep, args),
                              tv=rep.get("kind") == "tv", every_title=bool(self.settings.get("menu_every_title")),
-                             progress=progress)
+                             progress=progress, anchored=anchored_titles(rep, number=True))
         result["suspects"] = sum(1 for p in result["pages"] for b in p["buttons"] if "chain" in b)
         return result
 
@@ -3599,16 +3645,28 @@ class App:
         found = raw["found"]
         match = rep.get("match") or {}
         # (and by the words read well elsewhere in the menus: "Iagic" by "Magic")
-        found = menus.correct_names(found, names, is_word, lambda t: di.title_fix(titles, t, match.get("year")),
-                                    seen=menus.disc_words(raw, is_word, names))
+        ad_fix = self._ad_fix(rep, titles)
+        found = menus.correct_names(found, names, is_word, ad_fix,
+                                    seen=menus.disc_words(raw, is_word, names), film=naming_film(rep))
         found = menus.plain_names(found, is_word)
         # the well-known films trailers are named for (Spider-Man's xXx, Mr. Deeds...): for the namer to judge
         # other films' trailers by (menus.name_extras, when labelled: detected_for)
         if titles is not None:
-            found = menus.known_films(found, lambda n: di.known_film(titles, n), naming_film(rep))
+            found = menus.known_films(found, lambda n: di.known_film(titles, n), naming_film(rep), ad_fix)
         for line in menus.found_text(found).splitlines():
             log(line)
         return dict(found, suspects=raw.get("suspects", 0))
+
+    @staticmethod
+    def _ad_fix(rep, titles):
+        """How an ad's reading is put right as the film or show it's for, any disc's (core.title_fix: a reading and
+        its other readings), or None without the IMDb index: up to a year past the disc's mastering, else its
+        film's or show's year."""
+        if titles is None:
+            return None
+        match = rep.get("match") or {}
+        year = int(rep["mastered"][:4]) if str(rep.get("mastered") or "")[:4].isdigit() else match.get("year")
+        return lambda t, also=(): di.title_fix(titles, t, year, also)
 
     @staticmethod
     def _menu_dictionary(rep, args, log):
@@ -3619,9 +3677,20 @@ class App:
             is_word = di.title_words(titles)
         except Exception:
             titles = is_word = None
-        # the film's or show's people (its characters, cast and crew: extras are named after them,
-        # "Hogarth Hughes"): names no title has, words too; and names to put misreadings right by
+        names, people = App._film_people(rep, args)
+        if is_word and people:
+            log(i18n.log("the show's credits: {count} words of names", count=len(people)) if rep.get("kind") == "tv" else i18n.log("the film's credits: {count} words of names", count=len(people)))
+            is_word = (lambda known: lambda w: w.lower() in people or known(w))(is_word)
+        return titles, is_word, names
+
+    @staticmethod
+    def _film_people(rep, args):
+        """The film's or show's people (its characters, cast and crew: extras are named after them, "Hogarth
+        Hughes"): names no title has, words too; and names to put misreadings right by. ([names], {their words}),
+        none for a disc not known yet."""
         match = rep.get("match") or {}
+        if not match.get("imdb_id"):
+            return [], set()
         lib = di.library_open(args.db)
         try:
             credits = di.film_credits(lib, match.get("imdb_id"), args.tmdb_key, args.imdb_dir,
@@ -3629,11 +3698,25 @@ class App:
         finally:
             lib.close()
         names = [x for r in credits for x in r[:2] if x]
-        people = {w for n in names for w in re.findall(r"[^\W\d_]{2,}", n.lower())}
-        if is_word and people:
-            log(i18n.log("the show's credits: {count} words of names", count=len(people)) if rep.get("kind") == "tv" else i18n.log("the film's credits: {count} words of names", count=len(people)))
-            is_word = (lambda known: lambda w: w.lower() in people or known(w))(is_word)
-        return titles, is_word, names
+        return names, {w for n in names for w in re.findall(r"[^\W\d_]{2,}", n.lower())}
+
+    @staticmethod
+    def _crawl_words(rep, args):
+        """The stakeout's dictionary (is_word, for any thread: di.word_checker), the film's or show's people's words
+        with the titles' when the disc's known already -- "Nathaniel", Enchanted's, a word as the namer has it, not
+        a misreading to read again (the user's). None without the IMDb index."""
+        is_word = di.word_checker(args.imdb_dir)
+        if is_word is None:
+            return None
+        try:
+            people = App._film_people(rep, args)[1]
+        except Exception:                # (the credits not to be had: the titles' words alone)
+            di.logger.exception(i18n.log("the film's credits couldn't be read"))
+            people = set()
+        if not people:
+            return is_word
+        di.logger.info(i18n.log("the film's credits: {count} words of names", count=len(people)))
+        return lambda w: w.lower() in people or is_word(w)
 
     def _name_episodes(self, raw, rep, args, log, is_word=None, names=(), titles=None):
         """A TV disc's stakeout: the menus' words read against the show's episode list; the rest, its
@@ -3657,8 +3740,11 @@ class App:
         # (the titles the scan already has as episodes: what's too short for one, when the menus name none)
         found = menus.tv_found(tv, (got or {}).get("picks"),
                                [t.get("duration") for t in rep.get("titles") or [] if t.get("role") == Role.EPISODE])
+        # (its ads' films, and its trailers' for other films, put right as a film's disc's are)
+        ad_fix = self._ad_fix(rep, titles)
+        found = menus.fix_promos(found, ad_fix)
         if titles is not None:
-            found = menus.known_films(found, lambda n: di.known_film(titles, n), naming_film(rep))
+            found = menus.known_films(found, lambda n: di.known_film(titles, n), naming_film(rep), ad_fix)
         for line in menus.found_tv_text(found).splitlines():
             log(line)
         settles = self._tv_settles(rep, tv["readings"], got, args, tv.get("disc"))
@@ -5531,7 +5617,7 @@ class MenuPicture:
         th.Tooltip(self.path, lambda: self.trail if str(self.path.cget("text")) != self.trail else "")
         # what it was read as: the name, a link when it was put right (read as, put right as: pointed at,
         # or clicked), then how to look at it
-        said = ttk.Frame(body, style="Desk.TFrame")
+        said = self.said_row = ttk.Frame(body, style="Desk.TFrame")
         said.pack(anchor="w", pady=(4, 0))
         # (only the words as read set apart: "Detect titles read it as" and its full stop as the help text is)
         self.said = ttk.Label(said, text="", style="DeskSub.TLabel")
@@ -5540,6 +5626,9 @@ class MenuPicture:
         self.fixed = th.link(said, "", self._toggle_fix, style="DeskFindLink.TLabel")
         self.said_end = ttk.Label(said, text="", style="DeskSub.TLabel")
         th.Tooltip(self.fixed, lambda: self.fix_text)
+        # (its description, read under its name: a line of its own, wrapped -- Order of the Phoenix's run long, and
+        # beside the name on one line they ran off the window)
+        self.described = ttk.Label(body, text="", style="DeskFind.TLabel", wraplength=640, justify="left")
         self.fix_note = ttk.Label(body, text="", style="DeskSub.TLabel", wraplength=640, justify="left")
         self.fix_text = ""
         self.read = ttk.Label(body, text="", style="DeskSub.TLabel", wraplength=640, justify="left")
@@ -5570,6 +5659,7 @@ class MenuPicture:
         self.fixed.pack_forget()
         self.words.pack_forget()
         self.said_end.pack_forget()
+        self.described.pack_forget()
         fixed = bool(name and read_as and name != read_as)
         self.fix_text = _("Read as “{read}”, corrected to “{name}”", read=read_as, name=name) if fixed else ""
         self.fix_note.config(text=self.fix_text + "." if fixed else "")
@@ -5579,10 +5669,14 @@ class MenuPicture:
         before, _x, after = lead.partition("{words}")      # (the name: its own label, a link when put right)
         self.said.config(text=before)
         shown = self.fixed if fixed else self.words
-        shown.config(text=_("“{words}”", words=join_title(name, pic.get("description")) if fixed else words))
+        # (set apart by its bold alone, no quotes round it: the user's)
+        shown.config(text=name if fixed else words)
         shown.pack(side="left")
         self.said_end.config(text=after)
         self.said_end.pack(side="left")
+        if pic.get("description"):
+            self.described.config(text=pic["description"])
+            self.described.pack(anchor="w", after=self.said_row)
 
     def _toggle_fix(self):
         """A click on the corrected name: its reading shown, or hidden again."""
@@ -5602,8 +5696,8 @@ class MenuPicture:
         # (a picture kept before the way there was: its page's name, as its heading had it; the first menu's, Main Menu)
         self.trail = menu_trail(pic.get("page_trail")) or menu_name(pic.get("page_from"))
         fit_label(self.path, self.trail, "DeskFind.TLabel")
-        # (what was read: the name, and the words under it describing it, as the title box has them)
-        words = join_title((pic.get("text") or "").strip(), pic.get("description"))
+        # (what was read: the name; the words under it describing it on their own line, _said)
+        words = (pic.get("text") or "").strip()
         if pic.get("alone"):                      # (only the button: the disc's own image of it)
             self._said(_("Read as {words}."), pic, words)
             self.read.config(text=_("Its button in the disc's menu, as the disc has it."))
@@ -5620,12 +5714,16 @@ class MenuPicture:
             return
         button = list(pic.get("button") or pic["rect"])
         shown = list(pic["rect"])                 # (the words read, its description's too, or the button's area)
+        # (and their outline following the lines' slant, where the reading kept it: else that box)
+        shape = [tuple(p) for p in pic.get("shape") or []] if len(pic.get("shape") or []) >= 3 else None
         # (the picture: the page with this button selected (a Blu-ray's, a DVD subpicture page's), else the page read
         # without its subpicture, no highlight on any button -- never another button's highlight)
         self._said(_("Detect titles read it as {words}."), pic, words)
         said = [] if words else [_("Detect titles couldn't read its words.")]
         said.append(_("The gold dashed box is the button on the menu; point at it, or click it, to see the words it "
                       "was read from (in red).") if words else _("The gold dashed box is the button on the menu."))
+        if pic.get("pressed"):
+            said.append(_("Press the numbered buttons in order: the last is this title's."))
         self.read.config(text=" ".join(said))
         # (a Blu-ray's page photographed over its video, where it was: as a player shows it; else as it was read)
         from . import menus
@@ -5637,8 +5735,22 @@ class MenuPicture:
         # words) as they are, so the eye finds them
         dim = ImageEnhance.Brightness(ImageEnhance.Color(im).enhance(self.PALER)).enhance(self.DARKER)
         lit = Image.new("L", im.size, 0)
-        for x0, y0, x1, y1 in (shown, button):
+        for x0, y0, x1, y1 in ([button] if shape else [shown, button]):
             ImageDraw.Draw(lit).rectangle((x0 * sx, y0 * sy, x1 * sx, y1 * sy), fill=255)
+        if shape:
+            ImageDraw.Draw(lit).polygon([(x * sx, y * sy) for x, y in shape], fill=255)
+        # (and the buttons on this page pressed first on the way to it, a setting coming back to the same menu:
+        # WALL-E's commentary "ON", menus.pressed_first -- lit and numbered in the order pressed, no ring: the
+        # red outline is only ever the words read, the user's)
+        pressed = [q for q in pic.get("pressed") or [] if q.get("rect")]
+        rings = []
+        for q in pressed:
+            qs = [tuple(v) for v in q.get("shape") or []]
+            if len(qs) < 3:
+                x0, y0, x1, y1 = q["rect"]
+                qs = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+            ImageDraw.Draw(lit).polygon([(x * sx, y * sy) for x, y in qs], fill=255)
+            rings.append(qs)
         base = Image.composite(im, dim, lit).convert("RGBA")
         w = max(3, round(im.width / 180))
         # the button's area as the disc draws it: gold, dashed (a dark edge under it: seen on light
@@ -5651,16 +5763,30 @@ class MenuPicture:
         dashed_box(draw, area, (0, 0, 0, 90), thin + 2, dash=round(8 * sx), gap=round(5 * sx))
         dashed_box(draw, area, tuple(int(th.BRASS_400[i:i + 2], 16) for i in (1, 3, 5)) + (235,), thin,
                    dash=round(8 * sx), gap=round(5 * sx))
-        plain = Image.alpha_composite(base, marks)
+        gap = w + 3
+        red = tuple(int(th.WAX[i:i + 2], 16) for i in (1, 3, 5)) + (190,)
+        steps = Image.new("RGBA", im.size, (0, 0, 0, 0))     # (the numbers, over everything)
+        if rings:                       # (each pressed first numbered by its words, the title's last)
+            ring_of = lambda qs: grown([(x * sx, y * sy) for x, y in qs], gap + w)
+            mine = ring_of(shape) if shape else ring_of([(shown[0], shown[1]), (shown[2], shown[1]),
+                                                           (shown[2], shown[3]), (shown[0], shown[3])])
+            for n, r in enumerate([ring_of(qs) for qs in rings] + [mine], 1):
+                step_badge(ImageDraw.Draw(steps), min(q[0] for q in r), min(q[1] for q in r), n, round(12 * sx),
+                           red[:3] + (240,))
+        plain = Image.alpha_composite(Image.alpha_composite(base, marks), steps)
         # and the words read, outlined clear of them: a gap, then the line, half see-through, so
         # the text under it (a neighbour's) still reads
         draw = ImageDraw.Draw(marks)
-        x0, y0, x1, y1 = shown
-        gap = w + 3
-        box = (x0 * sx - gap - w, y0 * sy - gap - w, x1 * sx + gap + w, y1 * sy + gap + w)
-        draw.rectangle(box, outline=(255, 255, 255, 120), width=w + 2)
-        draw.rectangle(box, outline=tuple(int(th.WAX[i:i + 2], 16) for i in (1, 3, 5)) + (190,), width=w)
-        read = Image.alpha_composite(base, marks)
+        if shape:                                 # (round the lines' own slant, a gap clear of them)
+            ring = grown([(x * sx, y * sy) for x, y in shape], gap + w)
+            draw.line(ring + ring[:1], fill=(255, 255, 255, 120), width=w + 2, joint="curve")
+            draw.line(ring + ring[:1], fill=red, width=w, joint="curve")
+        else:
+            x0, y0, x1, y1 = shown
+            box = (x0 * sx - gap - w, y0 * sy - gap - w, x1 * sx + gap + w, y1 * sy + gap + w)
+            draw.rectangle(box, outline=(255, 255, 255, 120), width=w + 2)
+            draw.rectangle(box, outline=red, width=w)
+        read = Image.alpha_composite(Image.alpha_composite(base, marks), steps)
         k = th.SCALE * min(1.0, 900 / im.width)
 
         def photo(img):
@@ -5702,6 +5828,18 @@ class MenuPicture:
             self.photo = want
             self.pic.config(image=want)
         self.pic.config(cursor="hand2" if self.over else "")
+
+
+def step_badge(draw, x, y, n, radius, colour):
+    """A numbered badge centred on (x, y): the order buttons are pressed in (the picture window's)."""
+    from PIL import ImageFont
+    try:
+        font = ImageFont.load_default(size=round(radius * 1.3))
+    except TypeError:                   # (a Pillow older than 10.1: its one small font)
+        font = ImageFont.load_default()
+    draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=colour, outline=(255, 255, 255, 230),
+                 width=max(1, radius // 6))
+    draw.text((x, y), str(n), font=font, fill=(255, 255, 255, 255), anchor="mm")
 
 
 def dashed_box(draw, box, colour, width, dash=8, gap=5):

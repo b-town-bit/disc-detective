@@ -200,6 +200,46 @@ def test_a_reading_is_put_right_word_by_word_never_cut_short():
     assert menus.correct_words([("STUART LITTLE", None, 0.97)], [("STUART LITTLE 2", 0.95)], is_word) == "STUART LITTLE"
 
 
+def test_a_re_read_holding_the_description_puts_only_the_name_right():
+    """A button's own picture read again holds its description under its name (a Blu-ray's: Prisoner of Azkaban's):
+    the description's taken off before the name's put right by it, never put into the name; a reading without it,
+    or of other words at its end, stays as it is."""
+    said = "Interview with David Thewlis and Gary Oldman."
+    reading = "Professor Lupin and Sirius Black Interview with David Thewlis and Gary 0ldman."
+    assert menus.less_said(reading, said) == "Professor Lupin and Sirius Black"
+    assert menus.less_said("Professor Lupin and Sirius Black", said) == "Professor Lupin and Sirius Black"
+    assert menus.less_said("Behind the Story: The Making of the Film", said) == "Behind the Story: The Making of the Film"
+    assert menus.less_said(reading, "") == reading
+    is_word = lambda w: w.lower() in {"professor", "lupin", "and", "sirius", "black", "interview", "with", "david",
+                                      "thewlis", "gary", "oldman"}
+    lines = [("Professor Lupin and", None, 0.952), ("ir s Blach", None, 0.844)]
+    assert menus.correct_words(lines, [(menus.less_said(reading.replace("0", "O"), said), 0.982)], is_word) == \
+        "Professor Lupin and Sirius Black"
+
+
+def test_a_word_ocr_split_is_put_back_whole():
+    """correct_words: a word read in two pieces ("Revelat ion"), a second reading having it whole, is the whole word,
+    no piece of it left over (10C0944E's "Nathaniel's Revelation"); a shorter reading of other letters still only
+    swaps the misread word ("Destiny" for "Dostiny", nothing cut)."""
+    is_word = lambda w: w.lower() in {"nathaniel's", "nathaniel", "revelation", "destiny", "cutdown", "spot"}
+    assert menus.correct_words([("5. Nathaniel's Revelat ion", None, 0.96)], [("5. Nathaniel's Revelation", 0.97)],
+                               is_word) == "5. Nathaniel's Revelation"
+    assert menus.correct_words([("TV Spot: Dostiny Cutdown", None, 0.99)], [("Destiny", 0.95)],
+                               is_word) == "TV Spot: Destiny Cutdown"
+
+
+def test_a_re_read_spaced_better_is_taken_though_a_word_still_looks_odd():
+    """correct_words: words OCR ran together ("PINOCCHIO7OTHANNIVERSARY", WALL-E's sneak peek), a second reading the
+    same letters spaced otherwise ("PINOCCHIO7OTH ANNIVERSARY"): its spacing, though "PINOCCHIO7OTH" still looks
+    misread -- moving spaces can't make a name worse; a re-spacing with more odd words than before isn't taken."""
+    is_word = lambda w: w.lower() in {"pinocchio", "anniversary", "platinum", "edition", "the", "great", "escape"}
+    lines = [("PINOCCHIO7OTHANNIVERSARY", None, 0.974), ("PLATINUM EDITION", None, 0.96)]
+    assert menus.correct_words(lines, [("PINOCCHIO7OTH ANNIVERSARY PLATINUM EDITION", 0.952)], is_word) == \
+        "PINOCCHIO7OTH ANNIVERSARY PLATINUM EDITION"
+    assert menus.correct_words([("Thegreat Escape", None, 0.97)], [("Thegr eat Escape", 0.95)], is_word) == \
+        "Thegreat Escape"
+
+
 def test_a_name_no_dictionary_has_is_read_again_and_stands_if_read_alike():
     """A line with a word no dictionary has is read again however sure (a misread can be sure: "Dostiny", 0.99): a
     known word read in its place puts it right; read the same (a person's name, "Sprouse"), it stands."""
@@ -217,6 +257,25 @@ def test_a_name_no_dictionary_has_is_read_again_and_stands_if_read_alike():
     alone = lambda: [(menus.Words("Meet Destiny"), 0.97)]
     got, _, _ = menus.name_button(p.image, rects[0], rects, (720, 480), lines=p.lines, alone=alone, is_word=known)
     assert got == "Meet Destiny"
+
+
+def test_a_name_read_right_again_surely_is_read_no_further(monkeypatch):
+    """A name with a word no dictionary has ("Revelat ion") read again surely, every word right or read alike by the
+    page (a name no dictionary has, "Nathaniel"): that's it -- its plate isn't read (the page at twice the size was,
+    for the grouping), and it's as sure as the two readings (10C0944E's "Nathaniel's Revelation")."""
+    p = Page()
+    p.text((60, 60), "Nathaniel Revelation", size=24)
+    p.text((60, 140), "Photo Gallery", size=24)
+    rects = [[40, 50, 560, 110], [40, 130, 560, 180]]
+    p.lines[0] = ("Nathaniel Revelat ion", p.lines[0][1], 0.959)
+    known = lambda w: w.lower() in {"revelation", "photo", "gallery"}
+    further = []
+    monkeypatch.setattr(menus, "_plate_round", lambda *a: further.append("plate"))
+    monkeypatch.setattr(menus, "read_alone", lambda *a, **k: [(menus.Words("Nathaniel Revelation"), 0.968)])
+    menus._groupings.clear()
+    got, sure, _ = menus.name_button(p.image, rects[0], rects, (720, 480), lines=p.lines, is_word=known)
+    assert got == "Nathaniel Revelation" and sure == 0.959
+    assert not further
 
 
 def test_empty_buttons_by_a_list_each_take_their_own_line_and_a_hidden_one_none():
@@ -302,3 +361,273 @@ def test_ocrs_lines_a_word_apart_on_one_row_are_one_line_and_others_stay_apart()
     assert "Play" in texts and "Scenes" in texts and "The Making Of" in texts and "Detective" in texts
     left, right = corners[0][1], corners[1][1]          # (its corners: the first's left ends, the second's right)
     assert textblocks.corner_of(got_corners, *got[0][:2])[1] == (left[0], right[1], right[2], left[3])
+
+
+def test_a_buttons_title_in_the_pages_title_lettering_is_no_heading_over_its_description():
+    """One button's block, its title in the lettering the page's other titles are in, its description under it
+    ending in a comma, not a full stop (Chuck S2 D1's "Chuck Versus the Cougars Sc. 33" / "Chuck at Sarah's high
+    school reunion,"): the title is its name, the line under it its description -- never the description named and
+    the title taken for a heading."""
+    p = Page()
+    for k, (title, said) in enumerate((("The Break-Up Sc. 27", "Morgan and Lester ponder their end."),
+                                       ("The Cougars Sc. 33", "Chuck at the high school reunion,"),
+                                       ("The Ex Sc. 10", "Chuck gets prepped for the mission."))):
+        p.text((60, 60 + 110 * k), title, size=26)
+        p.text((60, 96 + 110 * k), said, size=16, colour=GREY, bold=False)
+    rects = {1: (40, 50, 600, 160), 2: (40, 160, 600, 270), 3: (40, 270, 600, 380)}
+    got = textblocks.page_names(p.image, p.lines, rects)
+    assert {n: " ".join(t for t, _, _ in v) for n, v in got.items()} == {1: "The Break-Up Sc. 27", 2: "The Cougars Sc. 33",
+                                                                        3: "The Ex Sc. 10"}
+    assert " ".join(t for t, _, _ in got[2].description) == "Chuck at the high school reunion,"
+
+
+def test_a_line_carrying_on_into_a_title_under_it_is_part_of_it_whatever_its_size():
+    """A title over two lines, its first measured bigger than the page's other titles (Spider-Man 2's "Peter Parker
+    and" / "Mary Jane Watson"): a line ending in "and" carries on into the title under it, in its colour -- no
+    heading."""
+    p = Page()
+    for k, title in enumerate(("Costume Design", "Comic-Con Q&A", "J. Jonah Jameson")):
+        p.text((60, 60 + 50 * k), title, size=22)
+    p.text((60, 210), "Peter Parker and", size=30)
+    p.text((60, 250), "Mary Jane Watson", size=22)
+    rects = {1: (40, 50, 600, 100), 2: (40, 100, 600, 150), 3: (40, 150, 600, 200), 4: (40, 200, 600, 290)}
+    got = {n: " ".join(t for t, _, _ in v) for n, v in textblocks.page_names(p.image, p.lines, rects).items()}
+    assert got[4] == "Peter Parker and Mary Jane Watson"
+
+
+def test_a_line_touching_the_title_under_it_is_part_of_it_however_its_lettering_measures():
+    """Abbott and Costello's "BONUS / MATERIALS": "BONUS", all wide letters, measured as other lettering than the
+    page's titles, but touching the line under it, no empty rows between, in its colour and its button's box -- no
+    heading (a heading has space under it), so part of the name; nor dropped to start it where its siblings start
+    theirs."""
+    p = Page()
+    p.text((60, 60), "PLAY", size=24)
+    p.text((60, 110), "SCENES", size=24)
+    p.text((300, 50), "BONUS", size=34)
+    p.text((300, 82), "MATERIALS", size=24)
+    p.text((300, 140), "LANGUAGES", size=24)
+    p.text((300, 190), "MENU", size=24)
+    rects = {1: (40, 50, 250, 100), 2: (40, 100, 250, 150), 3: (280, 40, 560, 120), 4: (280, 130, 560, 180),
+             5: (280, 180, 560, 230)}
+    got = {n: " ".join(t for t, _, _ in v) for n, v in textblocks.page_names(p.image, p.lines, rects).items()}
+    assert got[3] == "BONUS MATERIALS"
+
+
+def test_a_readings_outline_follows_its_lines_slant():
+    """A name over two lines on a screen at an angle (WALL-E's tilted list): one outline round both, by RapidOCR's
+    corners for them -- not the upright box round them. A piece of a line (split off it) takes that line's slant."""
+    lines = [("SCENE", (100.0, 100.0, 200.0, 140.0), 0.98), ("SELECTION", (110.0, 125.0, 300.0, 175.0), 0.98)]
+    corners = [("SCENE", ((100, 120), (200, 100), (200, 120), (100, 140)), 0.98),
+               ("SELECTION", ((110, 155), (300, 125), (300, 145), (110, 175)), 0.98)]
+    shape = textblocks.reading_shape(lines, corners)
+    assert (100.0, 120.0) in shape and (300.0, 125.0) in shape and (110.0, 175.0) in shape
+    assert (100.0, 100.0) not in shape                  # (the upright box's corner: off the slanted text)
+    whole = [("BONUS FEATURES", ((100, 220), (400, 160), (400, 190), (100, 250)), 0.98)]
+    part = textblocks.line_shape("FEATURES", (250.0, 160.0, 400.0, 250.0), whole)
+    assert part[0] == (250.0, 190.0) and part[1] == (400.0, 160.0)   # (its stretch of the slanted band)
+
+
+def test_a_shorter_reading_puts_a_misread_word_right_and_cuts_nothing():
+    """A reading of fewer words than the name (a plate's or a word's own: "Destiny") puts right only the misread
+    word it's spelt like -- never the name for less."""
+    known = {"spot", "destiny", "cutdown"}
+    is_word = lambda w: w.lower() in known
+    assert menus.correct_words([("TV Spot: Dostiny Cutdown", (0, 0, 1, 1), 0.99)], [("Destiny", 0.95)], is_word) == \
+        "TV Spot: Destiny Cutdown"
+    assert menus.correct_words([("TV Spot: Dostiny Cutdown", (0, 0, 1, 1), 0.99)], [("Gallery", 0.95)], is_word) == \
+        "TV Spot: Dostiny Cutdown"                          # (nothing spelt like it: as read)
+
+
+def test_a_line_read_across_two_buttons_is_cut_between_them():
+    """Small lettering on a slanted screen, two names side by side read as one line (Spider-Man's TV SPOTS:
+    "Blockbustor Cutdown" across two names): a marker by each name says where one stops -- the line cut at its
+    widest ink gap between them, however narrow, each marker its own part."""
+    p = Page()
+    a = p.text((60, 100), "Countdown", size=20, line=False)
+    b = p.text((a[2] + 6, 100), "Cutdown", size=20, line=False)
+    p.lines.append(("Countdown Cutdown", (a[0] - 3.0, a[1] - 3.0, b[2] + 3.0, b[3] + 3.0), 0.95))
+    rects = {1: (a[2] - 30, a[1] - 4, a[2] - 18, a[3] + 4), 2: (b[2] - 30, b[1] - 4, b[2] - 18, b[3] + 4)}
+    got = {n: " ".join(t for t, _, _ in v) for n, v in textblocks.page_names(p.image, p.lines, rects).items()}
+    assert got == {1: "Countdown", 2: "Cutdown"}
+
+
+def test_a_slanted_line_belongs_to_the_button_by_its_own_start():
+    """A page drawn at a slant (WALL-E's main menu): each line's button the one whose box its lettering's band covers
+    most of, not the one nearest its upright box's middle -- PLAY's by its start, SCENE SELECTION's under it by its own
+    start, though PLAY's box is nearer its middle; an upright line as before, by its middle."""
+    def slanted(left, right, cy, k=-0.28, h=30):
+        cx = (left + right) / 2
+        rise = abs(k) * (right - left)
+        return {"left": left, "right": right, "top": cy - rise / 2 - h / 2, "bottom": cy + rise / 2 + h / 2,
+                "cx": cx, "cy": cy, "k": k, "straight": h, "h": h + int(rise)}
+    play = ("PLAY", slanted(346, 432, 184))
+    scene = ("SCENE SELECTION", slanted(293, 482, 226))
+    level = ("Languages", {"left": 100, "right": 200, "top": 400, "bottom": 420, "h": 20})
+    rects = {1: (247, 177, 366, 236), 2: (269, 238, 356, 273), 3: (90, 395, 210, 425)}
+    textblocks.slant_holders([play, scene, level], rects)
+    assert play[1]["held_by"] == 1 and scene[1]["held_by"] == 2 and "held_by" not in level[1]
+    assert textblocks._holder(rects, scene[1]) == 2 and textblocks._holder(rects, level[1]) == 3
+    assert textblocks._holder({1: rects[1]}, scene[1]) is None      # (its button not among these: by its middle)
+
+
+def test_a_slanted_names_lines_read_in_order_along_the_slant():
+    """A name in two slanted lines (Muppets from Space's main menu, "SPECIAL / FEATURES" rising to the right): the
+    longer lower line's upright box starts higher, but along the slant the upper line comes first; side by side on
+    one slanted line, left to right; upright lines as they came."""
+    def slanted(left, right, cy, k=-0.2, h=26):
+        rise = abs(k) * (right - left)
+        return {"left": left, "right": right, "top": cy - rise / 2 - h / 2, "bottom": cy + rise / 2 + h / 2,
+                "cx": (left + right) / 2, "cy": cy, "k": k, "straight": h, "h": h + int(rise)}
+    special, features = ("SPECIAL", slanted(440, 573, 247)), ("FEATURES", slanted(485, 657, 250))
+    assert features[1]["top"] < special[1]["top"]
+    assert [t for t, _ in textblocks.slant_order([features, special])] == ["SPECIAL", "FEATURES"]
+    play, all_ = ("PLAY", slanted(100, 160, 200)), ("ALL", slanted(170, 210, 200 - 0.2 * 55))
+    assert [t for t, _ in textblocks.slant_order([all_, play])] == ["PLAY", "ALL"]
+    up = [("B", {"left": 0, "right": 9, "top": 50, "bottom": 60, "h": 10}), ("A", {"left": 0, "right": 9, "top": 10, "bottom": 20, "h": 10})]
+    assert textblocks.slant_order(up) == up
+    # (a logo's words each at its own slant, "THE" tipped over a level "JUNGLE": as they came, not along one)
+    logo = [("JUNGLE", dict(slanted(320, 425, 226), k=0.0)), ("THE", slanted(326, 358, 211, k=-0.3))]
+    assert textblocks.slant_order(logo) == logo
+
+
+def described_page(entries, title_size=26):
+    """Buttons stacked, each a title over a description of two lines in smaller grey lettering (Order of the
+    Phoenix's, Azkaban's): (page, rects, measured lines, styles, blocks), as classify has them."""
+    p = Page(size=(720, 120 * len(entries) + 40))
+    rects = {}
+    for k, (title, said) in enumerate(entries):
+        y = 30 + 120 * k
+        for j, t in enumerate(title):
+            p.text((60, y + 36 * j), t, size=title_size)
+        y += 36 * len(title) + 4
+        for j, t in enumerate(said):
+            p.text((60, y + 22 * j), t, size=16, colour=GREY, bold=False)
+        rects[k + 1] = (40, 20 + 120 * k, 680, 20 + 120 * (k + 1))
+    measured = textblocks.measure(p.image, p.lines)
+    st = {i: textblocks.style(p.image, t, ik) for i, (t, ik) in enumerate(measured)}
+    return p, rects, measured, st, textblocks.blocks(measured, rects)
+
+
+def named(measured, title, said=()):
+    """A button's names entry as classify gives it: its title's and description's lines by their words."""
+    at = lambda t: next(i for i, (x, _) in enumerate(measured) if x == t)
+    return {"name": " ".join(title), "idx": [at(t) for t in title], "lines": [measured[at(t)] for t in title],
+            "description": " ".join(said), "desc_idx": [at(t) for t in said], "description_lines": [measured[at(t)] for t in said],
+            "heading": ""}
+
+
+PHOENIX = [(["Trailing Tonks"], ["Spend a day with the actress and", "receive a very personal tour."]),
+           (["The Thestral Flight"], ["A look at how the flight was filmed", "over the streets of London."]),
+           (["The Hidden Secrets of", "Harry Potter"], ["Take a thrilling look back through", "the previous films for clues."])]
+
+
+def test_a_description_classify_took_for_a_title_goes_back_to_its_title():
+    """The style dictionary's second look (the user's design): Order of the Phoenix's "The Hidden Secrets of / Harry
+    Potter" left over its sentence, the sentence taken for its title -- its lines' style group is the page's
+    descriptions (after another group's line in its buttons, reading as sentences), so it's the description, and the
+    unused lines above it, in the page's title lettering, the title."""
+    p, rects, measured, st, blocks = described_page(PHOENIX)
+    names = {1: named(measured, PHOENIX[0][0], PHOENIX[0][1]), 2: named(measured, PHOENIX[1][0], PHOENIX[1][1]),
+             3: named(measured, PHOENIX[2][1])}
+    textblocks.restyle(measured, blocks, rects, names, st)
+    assert names[3]["name"] == "The Hidden Secrets of Harry Potter"
+    assert names[3]["description"] == "Take a thrilling look back through the previous films for clues."
+    assert names[1]["name"] == "Trailing Tonks" and names[2]["name"] == "The Thestral Flight"
+
+
+def test_a_colon_binds_the_title_line_between_it_and_its_description():
+    """Order of the Phoenix's "Harry Potter: / The Magic of Editing": classify's colon bound the description's first
+    line, the title's own second line left out -- the colon's is the line between in the title lettering, and the
+    description's lines go back to it whole."""
+    entries = PHOENIX[:2] + [(["Harry Potter:", "The Magic of Editing"], ["Director and editor show us what", "a good edit makes of a scene."])]
+    p, rects, measured, st, blocks = described_page(entries)
+    names = {1: named(measured, entries[0][0], entries[0][1]), 2: named(measured, entries[1][0], entries[1][1]),
+             3: named(measured, ["Harry Potter:", "Director and editor show us what"], ["a good edit makes of a scene."])}
+    textblocks.restyle(measured, blocks, rects, names, st)
+    assert names[3]["name"] == "Harry Potter: The Magic of Editing"
+    assert names[3]["description"] == "Director and editor show us what a good edit makes of a scene."
+
+
+def test_a_description_classify_dropped_comes_back_from_its_style_group():
+    """Azkaban's interviews: a button's description left out though it's in the lettering its siblings' confident
+    descriptions are in, close under its title -- it's the button's description."""
+    p, rects, measured, st, blocks = described_page(PHOENIX[:2] + [(["The Paper Swallow"], ["A note that flies across the", "office from desk to desk."])])
+    names = {1: named(measured, PHOENIX[0][0], PHOENIX[0][1]), 2: named(measured, PHOENIX[1][0], PHOENIX[1][1]),
+             3: named(measured, ["The Paper Swallow"])}
+    textblocks.restyle(measured, blocks, rects, names, st)
+    assert names[3]["name"] == "The Paper Swallow"
+    assert names[3]["description"] == "A note that flies across the office from desk to desk."
+
+
+def test_text_under_titles_with_no_confident_description_in_its_group_isnt_added():
+    """The noise guard: new lines join a description only where confident lines of their group are descriptions --
+    a backdrop's print read as words (DA502D7E's newspaper) has none; and a page whose names classify got right is
+    left as it is."""
+    p, rects, measured, st, blocks = described_page(PHOENIX[:2])
+    names = {1: named(measured, PHOENIX[0][0]), 2: named(measured, PHOENIX[1][0])}
+    textblocks.restyle(measured, blocks, rects, names, st)
+    assert names[1]["description"] == "" and names[2]["description"] == ""
+    right = {1: named(measured, PHOENIX[0][0], PHOENIX[0][1]), 2: named(measured, PHOENIX[1][0], PHOENIX[1][1])}
+    textblocks.restyle(measured, blocks, rects, right, st)
+    assert right[1]["description"] == " ".join(PHOENIX[0][1]) and right[2]["name"] == "The Thestral Flight"
+
+
+def _settle_page(lines, words, answers, monkeypatch, blocks=None, owners=None):
+    """The settle loop alone, its classify and verdicts stood in for: lines' texts, 20 pixels apart (never touching);
+    words: {line: its group's word}, or a list of them, one per round; answers [(fixed, {button: (title lines,
+    description lines)})], classify's by the fixed titles it's asked with; blocks (default: one, all the lines) and
+    owners ({line: button}, default 1). Returns (names, the fixed titles classify was asked with)."""
+    measured = [(t, {"top": 20 * i, "bottom": 20 * i + 9, "left": 0, "right": 200, "h": 10}) for i, t in enumerate(lines)]
+    blocks = blocks or [list(range(len(lines)))]
+    owners = owners or {i: 1 for i in range(len(lines))}
+    rounds = words if isinstance(words, list) else None
+    asked, calls = [], []
+
+    def classify(image, lines_, groups, rects, disc_rects=None, st=None, fixed=None):
+        asked.append(fixed)
+        got = next(a for f, a in answers if (f or None) == (fixed or None))
+        return {n: {"name": " ".join(lines[i] for i in t), "idx": list(t), "desc_idx": list(d)} for n, (t, d) in got.items()}, []
+
+    def verdicts(*a):
+        w = rounds[min(len(calls), len(rounds) - 1)] if rounds else words
+        calls.append(1)
+        return {"word": w.get, "confident": {}, "owner": owners, "order": lambda i: i, "by_button": {}, "evidence": [],
+                "group_of": {}}
+    monkeypatch.setattr(textblocks, "_classify", classify)
+    monkeypatch.setattr(textblocks, "_verdicts", verdicts)
+    st = {i: {"size": 10, "width": 8, "box": 12, "colour": (200, 200, 200), "ring": None, "caps": None} for i in range(len(lines))}
+    names, _, _v = textblocks._settle(None, measured, blocks, {n: (0, 0, 9, 9) for n in set(owners.values())}, None, st, None)
+    return names, asked
+
+
+def test_the_settle_loop_fixes_a_blocks_title_and_classify_judges_the_rest_by_it(monkeypatch):
+    """The user's settle loop: classify had "Trailing Tonks" for the block's heading, its sentence for the name; its
+    style group says it's the title, so it's fixed as the block's title and classify runs again, the sentence then its
+    description -- and nothing more to fix: settled, in one round."""
+    lines = ["Trailing Tonks", "Spend a day with the actress", "on a personal tour", "of the stages."]
+    names, asked = _settle_page(lines, {0: "title", 1: "description", 2: "description", 3: "description"},
+                                [(None, {1: ([1, 2, 3], [])}), ({0: [0]}, {1: ([0], [1, 2, 3])})], monkeypatch)
+    assert asked == [None, {0: [0]}]
+    assert names[1]["idx"] == [0] and names[1]["desc_idx"] == [1, 2, 3]
+
+
+def test_the_settle_loops_fixed_title_grows_through_the_hard_rules(monkeypatch):
+    """Spider-Man 2's "Peter Parker and" / "Mary Jane Watson", its first line in other lettering, no title word of its
+    own: the run fixed grows up through a line carrying on into it, so the title's never cut short."""
+    lines = ["Peter Parker and", "Mary Jane Watson", "A look at the pair."]
+    names, asked = _settle_page(lines, {1: "title", 2: "description"},
+                                [(None, {1: ([2], [])}), ({0: [0, 1]}, {1: ([0, 1], [2])})], monkeypatch)
+    assert asked[1] == {0: [0, 1]} and names[1]["name"] == "Peter Parker and Mary Jane Watson"
+
+
+def test_a_settle_loop_coming_round_again_keeps_classifys_own_names(monkeypatch):
+    """A state seen before, not the last: a cycle -- classify's own names kept, the page noted (SETTLE_CYCLES). Two
+    blocks: the first fixed in one round, the second the next, and classify's answer then its first again."""
+    lines = ["Title One", "Words under it.", "Title Two", "More words."]
+    first = {1: ([1], []), 2: ([3], [])}
+    textblocks.SETTLE_CYCLES.clear()
+    names, asked = _settle_page(lines, [{0: "title", 1: "description"}, {0: "title", 2: "title", 3: "description"}],
+                                [(None, first), ({0: [0]}, {1: ([0], [1]), 2: ([3], [])}), ({0: [0], 1: [2]}, first)],
+                                monkeypatch, blocks=[[0, 1], [2, 3]], owners={0: 1, 1: 1, 2: 2, 3: 2})
+    assert asked == [None, {0: [0]}, {0: [0], 1: [2]}]
+    assert names[1]["idx"] == [1] and names[2]["idx"] == [3] and len(textblocks.SETTLE_CYCLES) == 1
