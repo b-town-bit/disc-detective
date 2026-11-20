@@ -3645,16 +3645,28 @@ class App:
         found = raw["found"]
         match = rep.get("match") or {}
         # (and by the words read well elsewhere in the menus: "Iagic" by "Magic")
-        found = menus.correct_names(found, names, is_word, lambda t: di.title_fix(titles, t, match.get("year")),
+        ad_fix = self._ad_fix(rep, titles)
+        found = menus.correct_names(found, names, is_word, ad_fix,
                                     seen=menus.disc_words(raw, is_word, names), film=naming_film(rep))
         found = menus.plain_names(found, is_word)
         # the well-known films trailers are named for (Spider-Man's xXx, Mr. Deeds...): for the namer to judge
         # other films' trailers by (menus.name_extras, when labelled: detected_for)
         if titles is not None:
-            found = menus.known_films(found, lambda n: di.known_film(titles, n), naming_film(rep))
+            found = menus.known_films(found, lambda n: di.known_film(titles, n), naming_film(rep), ad_fix)
         for line in menus.found_text(found).splitlines():
             log(line)
         return dict(found, suspects=raw.get("suspects", 0))
+
+    @staticmethod
+    def _ad_fix(rep, titles):
+        """How an ad's reading is put right as the film or show it's for, any disc's (core.title_fix: a reading and
+        its other readings), or None without the IMDb index: up to a year past the disc's mastering, else its
+        film's or show's year."""
+        if titles is None:
+            return None
+        match = rep.get("match") or {}
+        year = int(rep["mastered"][:4]) if str(rep.get("mastered") or "")[:4].isdigit() else match.get("year")
+        return lambda t, also=(): di.title_fix(titles, t, year, also)
 
     @staticmethod
     def _menu_dictionary(rep, args, log):
@@ -3728,8 +3740,11 @@ class App:
         # (the titles the scan already has as episodes: what's too short for one, when the menus name none)
         found = menus.tv_found(tv, (got or {}).get("picks"),
                                [t.get("duration") for t in rep.get("titles") or [] if t.get("role") == Role.EPISODE])
+        # (its ads' films, and its trailers' for other films, put right as a film's disc's are)
+        ad_fix = self._ad_fix(rep, titles)
+        found = menus.fix_promos(found, ad_fix)
         if titles is not None:
-            found = menus.known_films(found, lambda n: di.known_film(titles, n), naming_film(rep))
+            found = menus.known_films(found, lambda n: di.known_film(titles, n), naming_film(rep), ad_fix)
         for line in menus.found_tv_text(found).splitlines():
             log(line)
         settles = self._tv_settles(rep, tv["readings"], got, args, tv.get("disc"))

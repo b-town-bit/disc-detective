@@ -450,9 +450,15 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
     aacs = aacs or aacs_library()
     menus.readings_begin()              # (how sure of each reading: this stakeout's, as a DVD's)
     tell("setup")                       # (opening it: its files read, an encrypted disc unlocked)
+    # (each step timed in the log, the user's: where a slow scan's time went -- Order of the Phoenix's opening)
+    t_open = time.time()
     disc = hdmv_menus.Disc(root, aacs=aacs)
+    log(i18n.log("hdmv-menus: the disc opened and unlocked in {seconds:.1f} s", seconds=time.time() - t_open))
     tell("start")
+    t_plan = time.time()
     plan = disc.crawl(scope)
+    log(i18n.log("hdmv-menus: its menus worked out in {seconds:.1f} s ({count} menus)", seconds=time.time() - t_plan,
+                 count=len(plan["menus"])))
     if not plan["menus"]:
         # (its first play gone on to a Java title: its menus are BD-J, an HDMV menu stream of its own
         # elsewhere notwithstanding; Enchanted's, two intros then title 1, its JAR 00000)
@@ -476,6 +482,7 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
             if t and t not in [u["title"] for u in under_menu]:
                 under_menu.append({"title": t, "seconds": lengths.get(t)})
     loaded = {}                         # (clip, pid): the menu, decoded, what its buttons do, its pages' routes
+    t_menus = time.time()
     for n_menu, cm in enumerate(plan["menus"], 1):
         clip, pid = cm["stream"]["clip"], cm["stream"]["pid"]
         try:
@@ -493,6 +500,7 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
                                "outcome": own_titles(root, {(x["page"], x["button"]): x["outcome"] for x in cm["links"]}, titles,
                                                      playing=_playing(cm)),
                                "then": {(x["page"], x["button"]): x.get("then") or [] for x in cm["links"]}}
+    log(i18n.log("hdmv-menus: its menus loaded in {seconds:.1f} s", seconds=time.time() - t_menus))
     # playlists that are menu pages, not titles: playing one brings up a menu of its own, over its video (Harry
     # Potter 1's yearbook: 00090, then 00080, 00081..., one for each page turned; 00027, under the special
     # features). Signs that add up: it names a menu that's always on screen (not a pop-up over a film: that's the

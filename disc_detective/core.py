@@ -2623,37 +2623,238 @@ def imdb_credits_info(imdb_dir):
             "current": version >= IMDB_CREDITS_VERSION, "path": path, "mb": os.path.getsize(path) // 2 ** 20}
 
 
-AD_TITLE_SIM = 0.80     # how close an ad's reading must be to a known film's title to become it
+# an ad's reading matched to a well-known film (the user's trial, 2026-11-19: 31 of 53 readings right, none wrong)
+PROMO_ACCEPT = 0.75     # how close the reading's letters must be to the title's
+PROMO_MARGIN = 0.08     # and how far ahead of the next name
+PROMO_YEARS = 3         # a film this near the disc's year scores a little more (PROMO_NEAR)
+PROMO_NEAR = 0.05
+PROMO_NUMBER = 0.10     # a sequel's number only one of them has: a little less
+PROMO_VOTES = 1000
+PROMO_ONE_WORD = 0.82   # a reading of one word, how close it must be alone, before PROMO_NEAR ("NPLAINSIGHT": not InSight)
+# words an ad's logo carries that aren't its film's name
+PROMO_MARKETING = {"disney", "disneys", "pixar", "dreamworks", "sony", "warner", "special", "edition", "platinum",
+                   "diamond", "anniversary", "collectors", "collector", "dvd", "blu", "ray", "bluray", "hd", "sneak",
+                   "peek", "peeks", "preview", "previews", "trailer", "trailers", "coming", "soon", "now", "available",
+                   "only", "theaters", "acr", "tm"}
+_PROMO_STOP = {"the", "a", "an", "of", "and", "in", "on", "to"}
+_title_vocab = {}
 
 
-def title_fix(con, text, year=None):
-    """An ad's reading put right as the film it names, when it's close to one known title and
-    something in it isn't a word ("Ghost Riderm.": Ghost Rider; "TTTLEMERMAID ARIEL'S'
-    BEGINNING": The Little Mermaid: Ariel's Beginning). Well-known films (1000 votes) up to
-    the disc's year; a near tie, or nothing close enough (0.80: at 0.75 "THe GHRONICLES OF
-    PRINCE" went to The Chronicles of Riddick), and it stays as read. The menus' sneak peeks
-    only: an extra named for its film ("The Making of ...") isn't the film."""
+def title_vocabulary(con):
+    """The words well-known titles have, each with how many titles have it ({word: titles}, 3 or more), and the same
+    by length: the IMDb index's own word list (fts5vocab). Kept for the session, by the index's file. ({}, {})
+    without FTS5's vocabulary table."""
+    try:
+        path = next((r[2] for r in con.execute("PRAGMA database_list") if r[1] == "main"), "") or str(id(con))
+    except Exception:
+        return {}, {}
+    if path not in _title_vocab:
+        vocab = {}
+        try:
+            con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS temp.title_vocab USING fts5vocab(main, 'titles_fts', 'row')")
+            for term, docs in con.execute("SELECT term, doc FROM temp.title_vocab WHERE doc >= 3"):
+                if term.isalpha():
+                    vocab[term] = docs
+        except Exception:
+            vocab = {}
+        by_len = {}
+        for term in vocab:
+            by_len.setdefault(len(term), []).append(term)
+        _title_vocab[path] = (vocab, by_len)
+    return _title_vocab[path]
+
+
+def _near_title_word(w, vocab, by_len):
+    """The word titles have nearest w, a letter or two off (the most common of the nearest; its first letter
+    shared, or one lost or gained there), else w."""
     import difflib
+    if w in vocab:
+        return w
+    near = []
+    least = 0.8 if len(w) <= 4 else 0.75
+    for n in (len(w) - 1, len(w), len(w) + 1, len(w) + 2):
+        for t in by_len.get(n, ()):
+            if t[0] != w[0] and t[1:2] != w[:1] and t[:1] != w[1:2]:
+                continue
+            m = difflib.SequenceMatcher(None, w, t)
+            if m.real_quick_ratio() >= least and m.quick_ratio() >= least:
+                r = m.ratio()
+                if r >= least:
+                    near.append((r, vocab[t], t))
+    return max(near)[2] if near else w
+
+
+def _run_together(w, vocab, by_len):
+    """A long word that's two or three title words run together ("litlemermaid": little mermaid), each four
+    letters or more and a title word or one near it: the split with the fewest words, then the fewest put right.
+    None when it isn't."""
+    near = lambda x: x if x in vocab else (lambda got: got if got != x and len(got) >= 4 else None)(
+        _near_title_word(x, vocab, by_len))
+    best, n = None, len(w)
+    for i in range(4, n - 3):
+        a = near(w[:i])
+        if not a:
+            continue
+        b = near(w[i:])
+        if b:
+            best = min(best or ((9,), ""), ((2, (a != w[:i]) + (b != w[i:])), a + " " + b))
+        for j in range(i + 4, n - 3):
+            b, c = near(w[i:j]), near(w[j:])
+            if b and c:
+                best = min(best or ((9,), ""), ((3, (a != w[:i]) + (b != w[i:j]) + (c != w[j:])), " ".join((a, b, c))))
+    return best[1] if best else None
+
+
+def _title_word(w, vocab, by_len):
+    """A word read off an ad's logo as titles have it: as it is; a trademark sign read as letters cut off
+    ("mant", "riderm"); run together with others, split ("litlemermaid"); else the nearest title word."""
+    if w in vocab or len(w) < 3 or not w.isalpha():
+        return w
+    for cut in (1, 2):
+        if len(w) - cut >= 3 and w[:-cut] in vocab and w[-cut:] in ("t", "tm", "m", "w"):
+            return w[:-cut]
+    if len(w) >= 8:
+        split = _run_together(w, vocab, by_len)
+        if split:
+            return split
+    return _near_title_word(w, vocab, by_len)
+
+
+def _split_rare(w, vocab):
+    """A word titles have, but far fewer than two common ones it splits into ("tinkerbell": tinker bell)."""
+    if w in vocab and len(w) >= 8:
+        for i in range(3, len(w) - 2):
+            a, b = w[:i], w[i:]
+            if vocab.get(a, 0) > 5 * vocab[w] and vocab.get(b, 0) > 5 * vocab[w]:
+                return a + " " + b
+    return w
+
+
+DIGIT_LOOKS = {"O": "0", "o": "0", "I": "1", "l": "1"}     # letters OCR reads for digits
+NUMBER_READINGS = 8     # the most readings of one word number_readings gives
+
+
+def number_readings(word, most=NUMBER_READINGS):
+    """The ways a word holding a digit may really read, one at a time (the user's, 2026-11-19): each letter OCR reads
+    for a digit (DIGIT_LOOKS) in a run of them and digits -- beside a digit, or beside one beside a digit -- taken as
+    that digit, fewest taken first, then left to right ("PINOCCHIO7OTH": PINOCCHIO70TH, PINOCCHI07OTH, ...); at most
+    `most`. Not the word as it is; nothing for a word with no digit. Its caller says which reading is a number
+    (menus.number_slips) or names a title (promo_match)."""
+    slots = []
+    for m in re.finditer(r"[\dOoIl]+", word or ""):
+        if re.search(r"\d", m.group(0)):
+            slots += [m.start() + i for i, c in enumerate(m.group(0)) if not c.isdigit()]
+    given = 0
+    for k in range(1, len(slots) + 1):
+        for pick in itertools.combinations(slots, k):
+            chars = list(word)
+            for i in pick:
+                chars[i] = DIGIT_LOOKS[chars[i]]
+            yield "".join(chars)
+            given += 1
+            if given >= most:
+                return
+
+
+def _promo_scored(con, words, year):
+    """Well-known titles with any of words, each scored against their letters: [(score, title, votes)], best first,
+    one per name (the most voted of a name's several years). Up to a year past the disc's (year)."""
+    import difflib
+    letters = lambda x: re.sub(r"[^a-z0-9]", "", (x or "").lower())
+    read = letters(" ".join(words))
+    q = " OR ".join('"%s"' % w for w in words if w not in _PROMO_STOP and len(w) >= 3)
+    if len(read) < 3 or not q:
+        return []
+    rows = con.execute("SELECT t.title, t.year, r.votes FROM titles_fts f JOIN titles t ON t.id = f.rowid "
+                       "JOIN ratings r ON r.id = t.id WHERE titles_fts MATCH ? AND r.votes >= ? AND t.year <= ? "
+                       "AND t.type IN (%s) ORDER BY r.votes DESC LIMIT 300"
+                       % ",".join("'%s'" % k for k in IMDB_MOVIE_TYPES + IMDB_TV_TYPES),
+                       (q, PROMO_VOTES, (year or 2100) + 1)).fetchall()
+    nums = lambda x: {w for w in re.findall(r"[a-z0-9]+", x.lower())
+                      if (w.isdigit() and len(w) <= 2) or w in ("ii", "iii", "iv")}
+    mine = nums(" ".join(words))
+    best = {}
+    for title, ty, votes in rows:
+        tl = letters(title)
+        s = difflib.SequenceMatcher(None, read, tl).ratio()
+        if len(read) >= 10 and read in tl:          # (a logo's subtitle line read whole: "Ariel's Beginning")
+            s = max(s, 0.85)
+        if year and ty and abs(int(ty) - year) <= PROMO_YEARS:
+            s += PROMO_NEAR
+        if nums(title) != mine:
+            s -= PROMO_NUMBER
+        s = round(s, 3)
+        if tl not in best or (s, votes) > best[tl][::2]:
+            best[tl] = (s, title, votes)
+    return sorted(best.values(), key=lambda x: (x[0], x[2]), reverse=True)
+
+
+def promo_match(con, text, year=None):
+    """The well-known film an ad's reading names ("Spider-Mantm 2": Spider-Man 2; "Disney ANNAH ONTANA": Hannah
+    Montana; "Herbie FULLYOADED": Herbie: Fully Loaded), or None: its logo's words dropped (PROMO_MARKETING), each
+    other put right as titles have it (_title_word), the titles with any of them scored by letters (spaces aside),
+    the best PROMO_ACCEPT or more and PROMO_MARGIN ahead of the next name. {"title", "score", "plain": whether
+    the reading needed no word put right}. Tried too: a rare word read as two common ones ("TinkerBell"), and a
+    number's letters read as digits, each way number_readings gives, the fewest first ("3OROCK": 30 Rock)."""
+    if con is None or not text:
+        return None
+    vocab, by_len = title_vocabulary(con)
+    if not vocab:
+        return None
+    raw = [w.replace("'s", "") for w in re.findall(r"[a-z0-9']+", text.lower())]
+    raw = [w for w in raw if w and w not in PROMO_MARKETING]
+    fixed = " ".join(_title_word(w, vocab, by_len) if w.isalpha() else w for w in raw).split()
+    tries = [fixed]
+    split = " ".join(_split_rare(w, vocab) for w in fixed).split()
+    if split != fixed:
+        tries.append(split)
+    for i, w in enumerate(raw):
+        for reading in number_readings(w):          # (its number split from its letters: "30rock", 30 rock)
+            slips = raw[:i] + re.findall(r"\d+|[a-z']+", reading) + raw[i + 1:]
+            tries.append(" ".join(_title_word(x, vocab, by_len) if x.isalpha() else x for x in slips).split())
+    got = None
+    for words in tries:
+        scored = _promo_scored(con, words, year)
+        if scored and (got is None or scored[0][0] > got[0][0][0]):
+            got = (scored, words)
+    if not got:
+        return None
+    scored, words = got
+    second = scored[1][0] if len(scored) > 1 else 0
+    if scored[0][0] < PROMO_ACCEPT or scored[0][0] - second < PROMO_MARGIN:
+        return None
+    named = [w for w in words if w not in _PROMO_STOP]
+    if len(named) == 1:
+        import difflib
+        letters = lambda x: re.sub(r"[^a-z0-9]", "", (x or "").lower())
+        if difflib.SequenceMatcher(None, letters(named[0]), letters(scored[0][1])).ratio() < PROMO_ONE_WORD:
+            return None
+    return {"title": scored[0][1], "score": scored[0][0], "plain": words == raw}
+
+
+def title_fix(con, text, year=None, also=()):
+    """An ad's reading put right as the film it names (promo_match), its other readings (also: the same ad's
+    buttons elsewhere) tried as well, the best match kept: "Ghost Riderm." Ghost Rider; "PACIFIER" The Pacifier.
+    A reading already the film's name as read, words added or not ("Annie Special Anniversary Edition", "Hellboy DVD",
+    "Christmas With The Kranks"), stays as read; nothing matched, as read. Up to a year past the disc's year (year), a little more for films
+    near it. The menus' sneak peeks only: an extra named for its film ("The Making of ...") isn't the film."""
     if con is None or not text:
         return text
-    is_word = title_words(con)
-    toks = re.findall(r"[a-z]+", text.lower())
-    words = [w for w in toks if len(w) >= 3 and is_word and is_word(w)]
-    if not words or all(is_word(w) for w in toks if len(w) >= 3):
+    letters = lambda x: re.sub(r"[^a-z0-9]", "", (x or "").lower())
+    best = None
+    for reading in [text] + [a for a in also or () if a and a != text]:
+        hit = promo_match(con, reading, year)
+        if hit and (best is None or hit["score"] > best[0]["score"]):
+            best = (hit, reading)
+    if not best:
         return text
-    core = " ".join(w for w in toks if len(w) >= 3)
-    rows = con.execute("SELECT t.title FROM titles_fts f JOIN titles t ON t.id = f.rowid JOIN ratings r ON r.id = t.id "
-                       "WHERE titles_fts MATCH ? AND r.votes >= 1000 AND t.year <= ? AND t.type IN (%s) "
-                       "ORDER BY r.votes DESC LIMIT 400" % ",".join("'%s'" % k for k in IMDB_MOVIE_TYPES + IMDB_TV_TYPES),
-                       (" OR ".join('"%s"' % w for w in set(words)), (year or 2100) + 1)).fetchall()
-    plain = lambda t: " ".join(w for w in re.findall(r"[a-z0-9]+", t.lower()) if len(w) >= 3)
-    scored = sorted(((difflib.SequenceMatcher(None, core, plain(t)).ratio(), t) for (t,) in rows), reverse=True)
-    if scored and scored[0][0] >= AD_TITLE_SIM and (len(scored) < 2 or scored[0][0] - scored[1][0] > 0.03
-                                                   or scored[0][1] == scored[1][1]):
-        # (and what kind of clip it says it is: Muppets from Space's "Muppets Fromspace Teaser")
-        kinds = [w.capitalize() for w in toks if w in AD_CLIP_WORDS and w not in scored[0][1].lower()]
-        return " ".join([scored[0][1]] + kinds)
-    return text
+    hit, reading = best
+    if letters(hit["title"]) == letters(reading) or hit["plain"] and letters(hit["title"]) in letters(reading):
+        return reading
+    # (and what kind of clip it says it is: Muppets from Space's "Muppets Fromspace Teaser")
+    kinds = [w.capitalize() for w in re.findall(r"[a-z]+", reading.lower())
+             if w in AD_CLIP_WORDS and w not in hit["title"].lower()]
+    return " ".join([hit["title"]] + kinds)
 
 
 AD_CLIP_WORDS = ("teaser", "trailer", "spot", "featurette", "preview", "clip")

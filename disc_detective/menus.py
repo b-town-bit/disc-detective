@@ -5577,7 +5577,7 @@ def _unicon(text, icons):
     return text[m.end():] if m and m.group(1) in icons else text
 
 
-DIGIT_LOOKS = str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1"})   # letters OCR reads for digits
+from .core import number_readings  # noqa: E402  (each way a word's letters may be its digits)
 
 
 def _ordinal_fits(number, ending):
@@ -5590,19 +5590,17 @@ def _number_fixed(word):
     """A word holding a digit, put right where a slip makes it what a number there can't be: an ordinal ("7OTH": its
     ending fits it), a year ("2OO7": 19xx, 20xx), or a number with O, I or l between its digits ("1O1"). None for no
     fix -- a code with letters of its own is never touched ("SN12O4B", "4O7B": codes keep clear of O, I, l)."""
-    if not re.search(r"\d", word):
-        return None
-    m = re.fullmatch(r"([\dOoIl]+)([A-Za-z]{2})", word)
-    if m and re.search(r"[OoIl]", m.group(1)):
-        n = m.group(1).translate(DIGIT_LOOKS)
-        if n.isdigit() and _ordinal_fits(n, m.group(2)):
-            return n + m.group(2)
-    if re.fullmatch(r"[\dOoIl]{4}", word) and re.search(r"[OoIl]", word):
-        n = word.translate(DIGIT_LOOKS)
-        if n.isdigit() and 1900 <= int(n) <= 2099:
-            return n
-    if re.fullmatch(r"\d[\dOoIl]*\d", word) and re.search(r"[OoIl]", word):     # (only between real digits)
-        return word.translate(DIGIT_LOOKS)
+    ordinal = re.fullmatch(r"[\dOoIl]+[A-Za-z]{2}", word or "")
+    year = re.fullmatch(r"[\dOoIl]{4}", word or "")
+    between = re.fullmatch(r"\d[\dOoIl]*\d", word or "")         # (only between real digits)
+    for reading in number_readings(word):
+        m = re.fullmatch(r"(\d+)([A-Za-z]{2})", reading)
+        if ordinal and m and _ordinal_fits(m.group(1), m.group(2)) and m.group(2) == word[-2:]:
+            return reading
+        if year and reading.isdigit() and 1900 <= int(reading) <= 2099:
+            return reading
+        if between and reading.isdigit():
+            return reading
     return None
 
 
@@ -5615,8 +5613,9 @@ def number_slips(text, is_word=None):
     out = []
     for i, w in enumerate((text or "").split(" ")):
         m = re.fullmatch(r"([\dOoIl]{1,3})([.)])", w) if i == 0 else None
-        if m and re.search(r"\d", m.group(1)) and re.search(r"[OoIl]", m.group(1)) and m.group(1).translate(DIGIT_LOOKS).isdigit():
-            out.append(m.group(1).translate(DIGIT_LOOKS) + m.group(2))
+        item = next((r for r in number_readings(m.group(1)) if r.isdigit()), None) if m else None
+        if item:
+            out.append(item + m.group(2))
             continue
         lead, core, trail = re.fullmatch(r"(\W*)(.*?)(\W*)", w).groups()
         fixed = _number_fixed(core)
@@ -6143,14 +6142,25 @@ AD_NAMES = (("Sneak Peeks", r"\bsneak|\bpeeks?\b"), ("Coming Soon", r"\bcoming\s
 def ad_words(xs):
     """What the menus said of an ad (xs: its plays, each with the words that made it an ad, "via", and its
     button's): {"said": all those words, "own": its button's own words if they read as a name ("Hitch"; a
-    poster button says nothing: "")}. A reading, not a name: ad_name names it."""
+    poster button says nothing: ""), "reads": each button's that does, own's first (to match to a film by:
+    correct_names)}. A reading, not a name: ad_name names it."""
     said = " ".join([x.get("via") or "" for x in xs] + [x["text"] or "" for x in xs])
     # (less a trademark sign read into its last word: Spider-Man 2's "Spider-ManT", WALL-E's "ON BLU-RaY DISCTM")
     text = max((TRADEMARK_RE.sub("", x["text"] or "").strip() for x in xs), key=_wordy)
     # its own words, unless they're only the ad words ("PREVIEWS"): an ad can say what it is
     # ("Spider-Man: Friend or Foe Video Game Preview", Spider-Man 3)
-    rest = re.sub(r"\b(previews?|sneak|peeks?|coming|soon|trailers?|ads?|advertisements?)\b", " ", text, flags=re.I)
-    return {"said": said, "own": nice_name(text) if _wordy(text) > 0 and _wordy(rest) > 0 else ""}
+    named = lambda t: _wordy(t) > 0 and _wordy(re.sub(
+        r"\b(previews?|sneak|peeks?|coming|soon|trailers?|ads?|advertisements?)\b", " ", t, flags=re.I)) > 0
+    own = nice_name(text) if named(text) else ""
+    reads = [own] if own else []
+    # (and a number's letters run into its name, no word as read -- "3OROCK", 30 Rock: matched to a title only,
+    # never its name as read: fix_promos)
+    slipped = lambda t: bool(re.search(r"\d", t) and re.search(r"[A-Za-z]{2}", t)) and len(t.split()) <= 4
+    for x in xs:
+        t = TRADEMARK_RE.sub("", x["text"] or "").strip()
+        if (named(t) or slipped(t)) and nice_name(t) not in reads:
+            reads.append(nice_name(t))
+    return {"said": said, "own": own, "reads": reads}
 
 
 def promo_name(xs):
@@ -6433,7 +6443,8 @@ def correct_names(found, people, is_word, title_fix=None, seen=None, film=None):
     """found (menu_titles()) with its names put right where they can be: an extra's against the
     film's people (credit_fix), then the words read well elsewhere on the disc (seen_fix; seen:
     disc_words); an ad's against the films it may advertise (title_fix: a known title, closely,
-    "Ghost Riderm." for Ghost Rider). What was read is kept ("read"), to show."""
+    "Ghost Riderm." for Ghost Rider; its other buttons' readings handed on as well, the best match kept). What
+    was read is kept ("read"), to show."""
     if not found:
         return found
     extras = []
@@ -6445,27 +6456,51 @@ def correct_names(found, people, is_word, title_fix=None, seen=None, film=None):
                                     fix=lambda t: fix_reading(t, people, is_word, None, seen))
             e = dict(e, description=said) if said != e["description"] else e
         extras.append(e)
+    return fix_promos(dict(found, extras=extras), title_fix)
+
+
+def fix_promos(found, title_fix):
+    """found (menu_titles(), tv_found()) with each ad's own words put right as the film or show it's for (title_fix:
+    core.title_fix's, a reading and its other buttons' readings, "Ghost Riderm." Ghost Rider), any disc's: what was
+    read kept ("promo_read"), to show. As found without title_fix."""
+    if not found or not title_fix:
+        return found
     promo_said, promo_read = {}, dict(found.get("promo_read") or {})
     for t, ad in (found.get("promo_said") or {}).items():
         own = ad.get("own") or ""
-        fixed = (title_fix(own) or own) if own and title_fix else own
+        also = [r for r in ad.get("reads") or () if r != own]
+        if own:
+            fixed = (title_fix(own, also) if also else title_fix(own)) or own
+        elif also:                  # (no name as read, only readings no words: a title's name, if one matches)
+            got = title_fix(also[0], also[1:]) if also[1:] else title_fix(also[0])
+            fixed, own = (got, also[0]) if got and got not in also else ("", "")
+        else:
+            fixed = own
         promo_said[t] = dict(ad, own=fixed)
         if fixed != own:
             promo_read[t] = own
-    return dict(found, extras=extras, promo_said=promo_said, promo_read=promo_read)
+    return dict(found, promo_said=promo_said, promo_read=promo_read)
 
 
-def known_films(found, known_film, film=None):
+def known_films(found, known_film, film=None, title_fix=None):
     """found with each trailer's well-known film, where its name is one (known_film: core.known_film):
     "names_film", for name_extras to judge another film's trailer by. A trailer as name_extras has it
     (title_kind); not this disc's own film (film), nor a name of trailer words alone. A reading, looked up
-    off the Tk thread (the IMDb index); the judging is name_extras'."""
+    off the Tk thread (the IMDb index); the judging is name_extras'. A name known_film misses (a letter misread),
+    put right as an ad's is where it can be (title_fix: core.title_fix's, "Men In Blaek II")."""
     if not found or not known_film:
         return found
     extras = []
     for e in found.get("extras") or []:
         kind, name = title_kind(e.get("name"), e.get("kind"))
-        hit = known_film(name) if kind == Type.TRAILER and name and not _own_trailer(name, film) else None
+        other = kind == Type.TRAILER and name and not _own_trailer(name, film)
+        hit = known_film(name) if other else None
+        if other and not hit and title_fix:     # (its trailer words aside: the film's name alone)
+            bare = re.sub(r"\s+", " ", " ".join(w for w in name.split() if not _trailer_word(re.sub(r"[^a-z]", "", w.lower())))).strip()
+            fixed = title_fix(bare) if bare else None
+            if fixed and fixed != bare:     # (what was read kept, to show, as a name put right is: correct_names)
+                extras.append(dict(e, names_film=fixed, read=e.get("read") or e.get("name")))
+                continue
         extras.append(dict(e, names_film=hit) if hit else e)
     return dict(found, extras=extras)
 
@@ -6792,7 +6827,12 @@ def tv_titles(out):
             t = plays["title"]
             if ads or _ad_text(text):
                 promos.extend(x for x in [t] + list(plays.get("after") or []) if x not in promos)
-                promo_said.setdefault(t, ad_words([{"text": text, "via": via}]))
+                said = ad_words([{"text": text, "via": via}])
+                if t not in promo_said:
+                    promo_said[t] = said
+                else:                       # (another button for it: its reading, to match a film by too)
+                    reads = promo_said[t].setdefault("reads", [])
+                    reads.extend(r for r in said.get("reads") or () if r not in reads)
                 continue
             if PLAY_ALL_RE.search(text) or TV_PLAY_RE.search(text) or _play_text(text):
                 runs.append(t)
@@ -7046,6 +7086,9 @@ def detected_tv_labels(found, titles, keep=(), film=None):
                 out[tid].update(season=e["season"], episode=e["episode"], note="the menus: this episode's")
         elif tid in promos:
             out[tid] = {"type": Type.PROMO, "title": names.get(tid), "note": "the menus: an ad"}
+            read = {title_id(n): r for n, r in (found.get("promo_read") or {}).items()}.get(tid)
+            if read and names.get(tid):     # (its name put right: as read, to show, as an extra's is)
+                out[tid]["read"] = read
         elif tid in opening:
             out[tid] = {"type": Type.PROMO, "title": opening[tid],
                         "note": "plays before the menu on a player (VLC skips it): previews, as a rule"}
