@@ -71,7 +71,7 @@ from . import tools
 from .i18n import N_, N_log, Said, ui, ui_n
 from .kinds import Role, Type, join_title, no_mark, title_parts
 
-VERSION = "0.4.dev0"      # (between releases: the release's own, "0.4", set just before its tag)
+VERSION = "0.4"
 USER_AGENT = "disc-detective/" + VERSION
 # helper programs (ffmpeg, tesseract, git, makemkvcon) are console programs: on Windows each
 # would flash a console window from the app, so they start without one
