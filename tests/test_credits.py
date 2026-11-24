@@ -231,3 +231,103 @@ def test_disc_source_finds_the_entry_point():
     clip, off, delta, end = src.where(62.4)
     assert (clip, off, round(delta, 1)) == ("00002", 2 * 10 ** 6, 0.4)
     assert end >= 4 * 10 ** 6
+
+
+def _imdb(rows):
+    """An IMDb index holding these films: [(number, title, year, votes)]."""
+    import sqlite3
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE titles (id INTEGER PRIMARY KEY, type TEXT, title TEXT, year INT, runtime INT)")
+    con.execute("CREATE TABLE ratings (id INTEGER PRIMARY KEY, votes INT)")
+    for n, title, year, votes in rows:
+        con.execute("INSERT INTO titles VALUES (?, 'movie', ?, ?, 120)", (n, title, year))
+        con.execute("INSERT INTO ratings VALUES (?, ?)", (n, votes))
+    return con
+
+
+def _cand(n, name, score):
+    return {"kind": "movie", "imdb_id": "tt%07d" % n, "name": name, "year": 2000, "score": score, "why": "name",
+            "source": "IMDb"}
+
+
+def test_credits_winner_goes_first_and_probable():
+    """A credits winner the search didn't find goes first, far enough ahead to be probable."""
+    con = _imdb([(373889, "Harry Potter and the Order of the Phoenix", 2007, 600000)])
+    rep = {"candidates": [_cand(1, "Phoenix", 70), _cand(2, "Order", 62)]}
+    core.credits_seen(rep, {"winner": {"imdb_id": "tt0373889"}, "by": "the MPA card",
+                            "why": "its certificate number 43476 (2007)", "number": "43476"}, con)
+    assert rep["candidates"][0]["imdb_id"] == "tt0373889" and core.is_probable(rep["candidates"])
+    assert rep["candidates"][0]["why"] == "its certificate number 43476 (2007)"
+    assert [c["imdb_id"] for c in rep["candidates"][1:]] == ["tt0000001", "tt0000002"]
+
+
+def test_credits_close_films_raise_the_search_s_own():
+    """No winner: a candidate the close films hold too is raised over one they don't; the rest of them are
+    listed below, never probable on the credits alone."""
+    con = _imdb([(10, "Film A", 2001, 5000), (11, "Film B", 2002, 9000), (12, "Film C", 2003, 100)])
+    rep = {"candidates": [_cand(99, "Other", 64), _cand(10, "Film A", 60)]}
+    core.credits_seen(rep, {"winner": None, "by": None,
+                            "window": [{"imdb_id": "tt0000011"}, {"imdb_id": "tt0000010"}, {"imdb_id": "tt0000012"}]}, con)
+    ids = [c["imdb_id"] for c in rep["candidates"]]
+    assert ids[:2] == ["tt0000010", "tt0000099"]
+    assert set(ids[2:]) == {"tt0000011", "tt0000012"} and ids.index("tt0000011") < ids.index("tt0000012")
+    only = {"candidates": []}
+    core.credits_seen(only, {"winner": None, "window": [{"imdb_id": "tt0000011"}, {"imdb_id": "tt0000012"}]}, con)
+    assert not core.is_probable(only["candidates"])
+
+
+def test_credits_asked_only_when_nothing_is_sure():
+    """The scan reads credits for a Blu-ray film nothing named for sure, with the setting on (its default)."""
+    import types
+    from disc_detective import app
+    from disc_detective.kinds import Role
+    me = types.SimpleNamespace(settings={}, CREDITS_FORMATS=app.App.CREDITS_FORMATS)
+    feature = {"id": "00800.mpls", "role": Role.FEATURE, "duration": 7200}
+    rep = {"path": "E:\\", "format": "Blu-ray", "kind": "movie", "discdb": {"hit": None}, "titles": [feature],
+           "candidates": [_cand(1, "A", 62), _cand(2, "B", 58)]}
+    wanted = lambda r, **st: app.App.credits_wanted(types.SimpleNamespace(**dict(vars(me), settings=st)), r)
+    assert wanted(rep)
+    assert not wanted(rep, use_credits=False)
+    assert not wanted(dict(rep, candidates=[_cand(1, "A", 80)]))
+    assert not wanted(dict(rep, personal_hit=True))
+    assert not wanted(dict(rep, kind="tv"))
+    assert not wanted(dict(rep, format="DVD"))
+    assert app.App.credits_titles(rep) == [feature]
+    extra = {"id": "00001.mpls", "role": Role.EXTRA, "duration": 1200}
+    copy = {"id": "00002.mpls", "role": Role.DUPLICATE, "duration": 7200}
+    assert app.App.credits_titles(dict(rep, titles=[extra, copy])) == []
+    # (each title of type MainMovie: yours too, whatever the scan read it as)
+    both = dict(rep, titles=[feature, extra, copy], labels={"00001.mpls": {"type": "MainMovie"}})
+    assert app.App.credits_titles(both) == [feature, extra]
+
+
+def test_credits_of_several_films_together():
+    """Several titles' credits: the same film named (its cuts) is that film; different films, no winner, both
+    close."""
+    from disc_detective import app
+    a = {"winner": {"imdb_id": "tt1", "name": "A"}, "window": [{"imdb_id": "tt1"}], "by": "the MPA card"}
+    b = {"winner": {"imdb_id": "tt2", "name": "B"}, "window": [{"imdb_id": "tt2"}], "by": "the end credits"}
+    none_a = {"winner": None, "window": [{"imdb_id": "tt3"}, {"imdb_id": "tt1"}]}
+    assert app.credits_together([a]) is a
+    assert app.credits_together([a, dict(a, by="the end credits")])["winner"]["imdb_id"] == "tt1"
+    assert app.credits_together([none_a, a])["winner"]["imdb_id"] == "tt1"
+    two = app.credits_together([a, b])
+    assert two["winner"] is None and [f["imdb_id"] for f in two["window"]] == ["tt1", "tt2"]
+
+
+def test_credits_seen_or_none():
+    """Credits seen, film named or not: a rating card, an end crawl, a heading, or a few people read. None of
+    them (a sign naming one person at most): no credits."""
+    sc = credits.Scan.__new__(credits.Scan)
+    row = lambda text, got=(), head=None: {"text": text, "got": list(got), "head": head, "person": bool(got)}
+    sc.crawl_at, sc.frames = None, [{"rows": [row("Welcome to Springfield"), row("Mayor Joe Quimby", ["joe quimby"]),
+                                              row("char mayor", ["char mayor"])]}]
+    assert not sc.seen(None)["any"]
+    assert sc.seen(12.0)["any"] and sc.seen(12.0)["card"]
+    sc.crawl_at = 6100.0
+    assert sc.seen(None)["any"]
+    sc.crawl_at = None
+    sc.frames.append({"rows": [row("Burl Ives", ["burl ives"]), row("Romeo Muller", ["romeo muller"])]})
+    assert sc.seen(None)["names"] == 3 and sc.seen(None)["any"]
+    sc.frames = [{"rows": [row("Directed by", head="director")]}]
+    assert sc.seen(None)["any"]

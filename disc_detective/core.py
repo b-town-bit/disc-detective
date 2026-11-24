@@ -6809,6 +6809,17 @@ def identify(root, args):
             ask_gemini(rep, covers, args, kind)
         except Exception as exc:          # a bonus witness: never fail a scan over it
             rep["ai_error"] = str(exc)
+    answer = getattr(args, "credits_answer", None)        # (the film's own credits read: App._credits_seen)
+    if answer and not db["hit"] and not personal:
+        try:
+            ccon = imdb_open(args.imdb_dir, allow_download=False, log=lambda m: None)
+            if ccon is not None:
+                try:
+                    credits_seen(rep, answer, ccon)
+                finally:
+                    ccon.close()
+        except Exception as exc:
+            rep["candidates_error"] = "IMDb: %s" % exc
     if not db["hit"] and not personal and kind == "movie":
         # each film's own menu read (Detect titles): each title searched for by its own words
         df = None
@@ -7299,7 +7310,8 @@ STEPS = {
     "ai": (N_log("asking Gemini what the disc's picture shows"), N_("Calling in an expert witness")),
     "photos": (N_log("looking up posters and box art"), N_("Pinning photos to the evidence board")),
     "lab": (N_log("running MakeMKV on the disc"), N_("Sending the disc to the lab")),
-    "footage": (N_log("scanning the titles' video"), N_("Reviewing the security footage")),   # title scanning (to come)
+    "footage": (N_log("reading the film's own credits off the disc (nothing else named it for sure)"),
+                N_("Reviewing the security footage")),
 }
 
 
@@ -7478,6 +7490,51 @@ def disc_imdb_id(row):
 def strip_tags(text):
     """Your answer without its machine tags: "Hercules (1997) {imdb-tt0119282}" -> "Hercules (1997)"."""
     return " ".join(re.sub(r"\{imdb-tt\d+\}|\{films:[^}]*\}|\{extras:[^}]*\}", " ", text or "").split())
+
+
+CREDITS_LEAD = 15            # (a credits winner ahead of the next candidate by this at least: probable, is_probable)
+CREDITS_FLOOR = 90           # (and scoring this at least)
+CREDITS_CLOSE_BONUS = 20     # (a candidate the search found that the credits' close films hold too)
+CREDITS_CLOSE_SCORE = 50     # (a close film nothing else found: listed, never probable on the credits alone)
+
+
+def credits_seen(rep, answer, con):
+    """What the film's own credits say (credits.Scan's answer, read by App._credits_seen) put with the candidates
+    found otherwise. A winner (its MPA card's number, or its end or opening credits, clearly) goes first, far
+    enough ahead to be probable. No winner: its close films, those the search found too raised (the label's
+    guess and the credits agreeing), the rest listed below them, the better known first; never a winner on that
+    alone."""
+    cands = [dict(c) for c in rep.get("candidates") or []]
+    by_id = {c.get("imdb_id"): c for c in cands if c.get("imdb_id")}
+    how = answer.get("why") or answer.get("by") or "its credits"
+    win = answer.get("winner")
+    if win:
+        c = by_id.get(win["imdb_id"]) or imdb_by_id(con, win["imdb_id"])
+        if c is None:
+            return
+        others = [x for x in cands if x.get("imdb_id") != win["imdb_id"]]
+        top = max((x["score"] for x in others), default=0)
+        found = c["score"] if win["imdb_id"] in by_id else 0          # (imdb_by_id's own 100 not counted)
+        c = dict(c, score=round(max(CREDITS_FLOOR, top + CREDITS_LEAD, found), 1), why=how)
+        rep["candidates"] = [c] + others
+        rep["credits_named"] = {"imdb_id": c["imdb_id"], "by": answer.get("by"), "number": answer.get("number")}
+        return
+    close = [f for f in answer.get("window") or [] if f.get("imdb_id")]
+    if not close:
+        return
+    for k, f in enumerate(close):
+        c = by_id.get(f["imdb_id"])
+        if c is not None:
+            c["score"] = round(c["score"] + CREDITS_CLOSE_BONUS, 1)
+            c["why"] = "%s; among the %d close films its credits name" % (c.get("why") or "", len(close))
+            continue
+        c = imdb_by_id(con, f["imdb_id"])
+        if c is not None:
+            c.update(score=CREDITS_CLOSE_SCORE - k, why="its credits name it among %d close films" % len(close))
+            cands.append(c)
+            by_id[c["imdb_id"]] = c
+    rep["candidates"] = sorted(cands, key=lambda c: -c["score"])
+    rep["credits_named"] = {"close": [f["imdb_id"] for f in close], "by": answer.get("by")}
 
 
 def is_probable(c):

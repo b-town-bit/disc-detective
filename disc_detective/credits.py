@@ -32,6 +32,8 @@ import unicodedata
 from . import core, menus, tools
 
 MPA_FILE = "mpa_certs.json"                 # (beside the IMDb index: built with it, mpa_build)
+SEEN_NAMES = 3                              # (people read, at least, to be credits: a sign or a caption names fewer)
+CASTS_FILE = "tmdb_casts.json"              # (beside it too: TMDB's casts fetched, names only, Casts)
 
 # ---- reading a frame ------------------------------------------------------------------------------------------
 
@@ -138,7 +140,7 @@ class DiscSource(FileSource):
     menus have it open already), FFmpeg decoding them on to the time. One seek and about a second of video a
     frame; nothing ripped."""
 
-    def __init__(self, root, playlist, disc=None):
+    def __init__(self, root, playlist, disc=None, check=None):
         from . import bdhdmv
         bdmv = core.find_child(root, "BDMV") or os.path.join(root, "BDMV")
         name = "%05d.mpls" % playlist if isinstance(playlist, int) else os.path.basename(playlist)
@@ -161,7 +163,7 @@ class DiscSource(FileSource):
         if disc is None:
             import hdmv_menus
             disc = hdmv_menus.Disc(root, aacs=bdhdmv.aacs_library())
-        self.disc = disc
+        self.disc, self.check = disc, check      # (check: asked each frame; the disc taken out, it raises)
         self.grabs, self.grab_s, self.read_bytes = 0, 0.0, 0
         self.keyframes = False      # (on: a frame is the entry point's picture at or before its time, up to about a
                                     #  second early -- a third of the reading, for a straight read's steps)
@@ -181,6 +183,8 @@ class DiscSource(FileSource):
 
     def frame(self, t, small=False):
         import numpy as np
+        if self.check:
+            self.check()
         s = time.time()
         self.grabs += 1
         w, h = (960, self.h // 2) if small else (self.w, self.h)
@@ -866,7 +870,7 @@ class Scan:
     # (the film's state, fresh each scan)
     def _reset(self, src):
         self.src = src
-        self.sparse, self.first_crawl, self.head = [], None, None
+        self.sparse, self.first_crawl, self.head, self.crawl_at = [], None, None, None
         self.cast, self.cast_pts, self.frames = collections.Counter(), {}, []
         self.stopped, self.decided, self.years, self._yr = None, None, {}, {}
         self.why_of, self.tie_log = {}, []
@@ -1221,7 +1225,7 @@ class Scan:
                                         why[tt].add(k)
                                         self.cast[tt] += 1
                 if w:
-                    rowlog.append({"text": text, "got": got})
+                    rowlog.append({"text": text, "got": got, "head": rh, "person": bool(spans)})
             if back is not None:
                 if named:
                     state["first"], miss = here_t, 0
@@ -1567,6 +1571,7 @@ class Scan:
         """The end credits, read: (ranking, window, why it stopped); a window of one is the winner."""
         src = self.src
         start, speed = self.find_start()
+        self.crawl_at = start
         if start is None:
             self.log("no end credits found")
             return [], [], "no end credits"
@@ -1707,20 +1712,40 @@ class Scan:
         return {"imdb_id": x[6], "name": x[2], "year": x[3], "type": x[4], "runtime": x[5], "score": round(x[0], 1),
                 "names": len(self.people_of(x)), "by": by}
 
+    def seen(self, card_at):
+        """What of a title's credits was seen, whether or not they named a film: {"card": the rating card's logo,
+        "crawl": end credits found, "names": the different people read (named in IMDb's index, any film's),
+        "headings": rows a credit's heading, "any": any of it -- a card, a crawl, a heading, or SEEN_NAMES
+        names}. None of it: a title with no credits, most likely not a film (an extra), never by itself."""
+        names = {k for fr in self.frames for x in fr["rows"] if x.get("person") for k in x["got"]
+                 if not k.startswith("char ")}
+        heads = sum(1 for fr in self.frames for x in fr["rows"] if x.get("head"))
+        out = {"card": card_at is not None, "crawl": self.crawl_at is not None, "names": len(names), "headings": heads}
+        out["any"] = out["card"] or out["crawl"] or heads > 0 or len(names) >= SEEN_NAMES
+        return out
+
     def scan(self, src):
         """Identify a title by its credits: {"winner": a film or None, "window": [films], "by": "the MPA card" /
-        "the end credits" / "the opening credits" / None, "number", "years", "why", "grabs", "seconds", "steps"}.
+        "the end credits" / "the opening credits" / None, "number", "years", "why", "grabs", "seconds", "steps",
+        "seen": what of its credits was seen at all (seen)}.
         A film: {"imdb_id", "name", "year", "type", "runtime", "score", "names", "by"}."""
         t0 = time.time()
         self._reset(src)
         steps = []
 
+        card = [None]
+
         def done(winner, window, by, why):
+            seen = self.seen(card[0])
+            if not seen["any"]:
+                self.log("no credits seen: no rating card, no end crawl, no names")
             return {"winner": winner, "window": window, "by": by, "number": self.cert[1], "years": sorted(self.years),
-                    "why": why, "grabs": src.grabs, "seconds": round(time.time() - t0, 1), "steps": steps}
+                    "why": why, "grabs": src.grabs, "seconds": round(time.time() - t0, 1), "steps": steps,
+                    "seen": seen}
 
         # 1. the MPA card
         num, ys, reads, card_at = self.card_read()
+        card[0] = card_at
         self.years.update(ys)
         self.cert = [None, None, reads]
         votes = collections.Counter(reads)

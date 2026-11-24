@@ -436,6 +436,26 @@ def all_labels(rep):
     return dict(rep.get("detected") or {}, **(rep.get("labels") or {}))
 
 
+def credits_together(answers):
+    """The credits of each of a disc's films read (App._credits_seen: credits.Scan's answers) as one: one answer
+    as it is; several naming the same film (its cuts), that film, the first's; several films (a double feature),
+    no one winner, each film read close, the windows' others after them."""
+    if len(answers) == 1:
+        return answers[0]
+    wins = [a["winner"] for a in answers if a.get("winner")]
+    ids = {w["imdb_id"] for w in wins}
+    if len(ids) == 1 and all(a.get("winner") or not a.get("window") or
+                             any(f.get("imdb_id") in ids for f in a["window"]) for a in answers):
+        return next(a for a in answers if a.get("winner"))   # (a cut that named none, the film among its close)
+    close, seen = [], set()
+    for f in wins + [f for a in answers for f in a.get("window") or []]:
+        if f.get("imdb_id") and f["imdb_id"] not in seen:
+            seen.add(f["imdb_id"])
+            close.append(f)
+    return {"winner": None, "window": close, "by": None, "why": None,
+            "grabs": sum(a.get("grabs") or 0 for a in answers)}
+
+
 def discdb_items(hit):
     """TheDiscDB's word on each title of a disc (its index hit): {source, lower case: item}."""
     return {str(t.get("source") or "").lower(): t.get("item") or {} for t in (hit or {}).get("titles") or []}
@@ -2839,6 +2859,7 @@ class App:
                 self._files_saved(args, rep)
                 self._program_seen(rep, pmap)
                 self._bd_menus_seen(drive, args, rep)
+                rep = self._credits_seen(drive, args, rep)
             args.library.close()
             # (taken out once the disc's been read, a step left out for it: no answer shown for a disc that isn't in)
             if self.disc_gone(drive):
@@ -3163,6 +3184,101 @@ class App:
             rep["more_films"] = True
             di.logger.info(i18n.log("its titles are {films_apart} films' worth of video, one named: another film?", films_apart=rep["films_apart"]))
         return rep
+
+    CREDITS_FORMATS = ("Blu-ray",)       # (a DVD's frames: to come, through VLC)
+
+    def credits_wanted(self, rep):
+        """Whether the scan reads the film's own credits (Settings > Disc, "Use credits to help identify", on by
+        default): a film's disc nothing has named for sure (not yours, not TheDiscDB's, no probable candidate),
+        its feature read off the disc. Not a show's, nor a disc of extras."""
+        if not self.settings.get("use_credits", True) or not rep or rep.get("from_sample") or not rep.get("path"):
+            return False
+        if rep.get("format") not in self.CREDITS_FORMATS or rep.get("kind") == "tv" or rep.get("extras_disc"):
+            return False
+        if rep.get("personal_hit") or (rep.get("discdb") or {}).get("hit"):
+            return False
+        return not di.is_probable(rep.get("candidates"))
+
+    @staticmethod
+    def credits_titles(rep):
+        """The titles whose credits are read: each one whose type is MainMovie (title_word: yours, TheDiscDB's,
+        the menus', else the scan's reading -- the film, or another cut of it), copies left out, in disc order."""
+        mine, items, detected = rep.get("labels") or {}, discdb_items((rep.get("discdb") or {}).get("hit")),             rep.get("detected") or {}
+        return [t for t in rep.get("titles") or [] if t.get("role") not in (Role.DUPLICATE, Role.DECOY, Role.SEGMENT)
+                and title_word(t, mine, items, detected, {})[0].get("type") == Type.MAIN_MOVIE]
+
+    def _credits_seen(self, drive, args, rep):
+        """The film's own credits read off the disc (credits.Scan: its MPA card, its end credits, its opening),
+        when nothing else has named it for sure (credits_wanted), and the disc identified again with what they
+        say (core.credits_seen): a winner first, or its close films raised and listed. What the menus said is
+        kept. Off the Tk thread; never a reason for the scan to fail (a disc taken out still ends it)."""
+        if not self.credits_wanted(rep):
+            return rep
+        titles = self.credits_titles(rep)
+        if not titles:
+            return rep
+        if not di.imdb_credits_info(args.imdb_dir):
+            di.logger.info(i18n.log("the film's credits weren't read: IMDb's credits aren't downloaded yet"))
+            return rep
+        from . import credits
+        di.step("footage")
+        t0 = time.time()
+        say = lambda line: di.logger.info(i18n.log("credits: {line}", line=line))
+        answers = []
+        try:
+            ix = credits.Index(args.imdb_dir)
+            try:
+                casts = credits.Casts(args.tmdb_key if not args.offline else None,
+                                      os.path.join(args.imdb_dir, credits.CASTS_FILE))
+                certs, disc = credits.mpa_load(args.imdb_dir), None
+                for title in titles:
+                    src = credits.DiscSource(rep["path"], title["id"], disc=disc, check=self.gone_check(drive))
+                    if disc is None:
+                        say(i18n.log("the disc unlocked in {seconds:.1f} s", seconds=time.time() - t0))
+                    disc = src.disc                # (unlocked once for all its films)
+                    say(i18n.log("{title}:", title=title["id"]))
+                    answers.append(credits.Scan(ix, certs, casts, log=say).scan(src))
+            finally:
+                ix.close()
+        except SystemExit:
+            raise
+        except Exception:
+            di.logger.exception(i18n.log("reading the film's credits failed: the scan goes on without them"))
+            if not answers:
+                return rep
+        read = {}                            # (what of each title's credits was seen: none, likely an extra)
+        for title, a in zip(titles, answers):
+            seen = a.get("seen") or {}
+            read[title["id"]] = seen
+            if seen and not seen.get("any"):
+                di.logger.info(i18n.log("{title} shows no credits at all (no rating card, no end crawl, no names): "
+                                        "most likely an extra, not the film", title=title["id"]))
+        rep["credits_read"] = read
+        answer = credits_together(answers)
+        win, close = answer.get("winner"), answer.get("window") or []
+        if win:
+            di.logger.info(i18n.log("the credits name {film} ({year}), by {how}: {grabs} frames in {seconds:.0f} s",
+                                    film=win["name"], year=win.get("year"), how=answer.get("by"),
+                                    grabs=answer.get("grabs"), seconds=time.time() - t0))
+        elif close:
+            di.logger.info(i18n.log("the credits name no one film; close: {films} ({grabs} frames in {seconds:.0f} s)",
+                                    films=", ".join("%s (%s)" % (f["name"], f.get("year")) for f in close[:5]),
+                                    grabs=answer.get("grabs"), seconds=time.time() - t0))
+        else:
+            di.logger.info(i18n.log("the credits named nothing ({grabs} frames in {seconds:.0f} s)",
+                                    grabs=answer.get("grabs"), seconds=time.time() - t0))
+            return rep
+        args.credits_answer = answer
+        try:
+            again = di.identify(drive, args)
+        finally:
+            args.credits_answer = None
+        for k in ("menu_raw", "menu_found", "staked_out", "detected", "bd_project", "more_films", "credits_read"):
+            if k in rep and k not in again:
+                again[k] = rep[k]
+        if again.get("menu_raw"):           # (the menus' titles named for the film as it is now)
+            again["menu_found"] = self._name_titles(again["menu_raw"], again)
+        return again
 
     @staticmethod
     def more_films(rep):
@@ -7432,6 +7548,14 @@ class SettingsDialog:
         every.grid(row=r, column=0, columnspan=3, sticky="w", pady=(6, 0))
         self.every_btn = every
         r += 1
+        self.use_credits = tk.BooleanVar(value=st.get("use_credits", True))
+        ttk.Checkbutton(f, text=_("Use credits to help identify"), variable=self.use_credits).grid(
+            row=r, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        r += 1
+        ttk.Label(f, text=_("When nothing else names a Blu-ray's film for sure, the scan reads its rating card and "
+                          "credits off the disc (usually under a minute, a few minutes at most)."),
+                  style="Sub.TLabel", wraplength=420, justify="left").grid(row=r, column=0, columnspan=3, sticky="w")
+        r += 1
         self.detect.trace_add("write", lambda *a: self.show_in_scan())
         self.bluray_menus.trace_add("write", lambda *a: self.show_in_scan())
         self.show_in_scan()
@@ -7538,7 +7662,7 @@ class SettingsDialog:
         for var in self.paths.values():
             var.trace_add("write", lambda *a: self.refresh_tools())
         for var in (self.key, self.gkey, self.order, self.detect, self.bluray_menus, self.in_scan,
-                    self.every_title, *self.paths.values()):   # saved as you go
+                    self.every_title, self.use_credits, *self.paths.values()):   # saved as you go
             var.trace_add("write", lambda *a: self.save())
 
     def refresh_status(self):
@@ -7781,6 +7905,7 @@ class SettingsDialog:
         st["episode_order"] = self.order.get()
         st["detect_in_scan"] = self.in_scan.get()
         st["menu_every_title"] = bool(self.every_title.get())
+        st["use_credits"] = bool(self.use_credits.get())
         save_settings(st)
 
     def show_in_scan(self):
