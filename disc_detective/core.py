@@ -940,12 +940,18 @@ def parse_mpls(data):
         o += length + 2
     n_marks = u16(data, marks + 4)
     per_item = [0] * len(items)
+    starts, acc = [], 0
+    for _, t_in, t_out in items:
+        starts.append(acc)
+        acc += max(0, t_out - t_in)
+    times = []
     for i in range(n_marks):
         m = marks + 6 + i * 14
         if data[m + 1] == 1:
             ref = u16(data, m + 2)
             if ref < len(per_item):
                 per_item[ref] += 1
+                times.append((starts[ref] + u32(data, m + 4) - items[ref][1]) / 45000.0)
     duration = sum(max(0, t_out - t_in) for _, t_in, t_out in items) / 45000.0
     video = video or {}
     try:
@@ -954,7 +960,7 @@ def parse_mpls(data):
     except (IndexError, struct.error):
         pass
     return {"items": items, "chapters": sum(per_item), "item_chapters": per_item, "duration": duration,
-            "video": video}
+            "video": video, "chapter_times": sorted(times)}
 
 
 BD_VIDEO_FORMAT = {1: 480, 2: 576, 3: 480, 4: 1080, 5: 720, 6: 1080, 7: 576, 8: 2160}
@@ -1045,6 +1051,34 @@ def clpi_aspect(data):
             return {2: "4:3", 3: "16:9"}.get(data[o + 3] >> 4)
         o += 1 + ln
     return None
+
+
+def clpi_entry_points(data):
+    """A clip's entry points (its CPI's EP_map, the first stream's: the video's): [(seconds on the clip's clock,
+    byte offset in its .m2ts)], each where a picture can be decoded from. A fine entry's packet number is
+    added to its coarse entry's high bits (libbluray's way), carried on when the fine numbers wrap."""
+    if data[:4] != b"HDMV":
+        raise ValueError("not a CLPI clip info file")
+    em = u32(data, 16) + 6                    # (CPI: its length, then reserved bits and its type)
+    bits = int.from_bytes(data[em + 4:em + 14], "big")   # (PID first; then 10 reserved, 4 type, 16 coarse,
+    n_coarse, n_fine = (bits >> 50) & 0xFFFF, (bits >> 32) & 0x3FFFF      #  18 fine, 32 the table's address)
+    start = em + (bits & 0xFFFFFFFF)
+    fine_at = start + u32(data, start)
+    coarse = []
+    for i in range(n_coarse):
+        c = u32(data, start + 4 + i * 8)
+        coarse.append((c >> 14, c & 0x3FFF, u32(data, start + 8 + i * 8)))
+    out, last = [], -1
+    for k, (ref, pts_c, spn_c) in enumerate(coarse):
+        for j in range(ref, coarse[k + 1][0] if k + 1 < len(coarse) else n_fine):
+            f = u32(data, fine_at + j * 4)
+            pts = ((pts_c & ~0x01) << 19) + (((f >> 17) & 0x7FF) << 9)        # (90 kHz)
+            spn = (spn_c & ~0x1FFFF) + (f & 0x1FFFF)
+            while spn < last:
+                spn += 0x20000
+            last = spn
+            out.append((pts / 90000.0, spn * 192))   # (a source packet: 192 bytes)
+    return out
 
 
 def video_text(v):

@@ -191,3 +191,43 @@ def test_tilted_mark_found():
 def test_numbers_near_a_logo(rows, nums):
     """Beside a found logo, any 4-6 digit run counts (the table and the year decide), years apart."""
     assert credits.nums_near(rows) == nums
+
+
+def test_playlist_chapter_times():
+    """A playlist's chapter marks in its own seconds, each item's counted from where it starts in the playlist."""
+    from fixtures import _mpls, T45
+    p = core.parse_mpls(_mpls([("00001", T45 * 10, T45 * 70), ("00002", T45 * 5, T45 * 35)], 2))
+    assert p["chapter_times"] == [0.0, 30.0, 60.0, 75.0]
+
+
+def _clpi(points, spn_c=0x10000):
+    """A clip info file whose EP_map holds one coarse entry and these fine ones: [(90 kHz pts, packet number)]."""
+    import struct
+    fine = b"".join(struct.pack(">I", (((p >> 9) & 0x7FF) << 17) | (s & 0x1FFFF)) for p, s in points)
+    coarse = struct.pack(">II", (0 << 14) | (points[0][0] >> 19), spn_c)
+    table = struct.pack(">I", 4 + len(coarse)) + coarse + fine
+    bits = (1 << 66) | (1 << 50) | (len(points) << 32) | 14
+    ep = bytes([0, 1]) + struct.pack(">H", 0x1011) + bits.to_bytes(10, "big") + table
+    cpi = struct.pack(">I", 2 + len(ep)) + b"\x00\x01" + ep
+    return b"HDMV0200" + struct.pack(">IIIII", 0, 0, 40, 0, 0) + b"\x00" * 12 + cpi
+
+
+def test_clip_entry_points():
+    """A clip's entry points: seconds on its clock and byte offsets (192-byte packets), the fine packet numbers
+    carried on past their 17 bits."""
+    pts = [k * 45056 for k in range(4)]
+    spn = [0x10000 + k * 0x8000 for k in range(4)]                       # (0x20000 and on: past 17 bits)
+    got = core.clpi_entry_points(_clpi(list(zip(pts, spn))))
+    assert [round(t, 4) for t, _ in got] == [round(p / 90000, 4) for p in pts]
+    assert [o for _, o in got] == [s * 192 for s in spn]
+
+
+def test_disc_source_finds_the_entry_point():
+    """A time on a two-clip playlist: its clip, the entry point at or before it, the seconds on to it, and reading
+    on to an entry point past it."""
+    src = credits.DiscSource.__new__(credits.DiscSource)
+    src.items, src.starts = [("00001", 10.0), ("00002", 5.0)], [0.0, 60.0]
+    src.maps = {"00001": [(10.0 + k, k * 10 ** 6) for k in range(61)], "00002": [(5.0 + k, k * 10 ** 6) for k in range(31)]}
+    clip, off, delta, end = src.where(62.4)
+    assert (clip, off, round(delta, 1)) == ("00002", 2 * 10 ** 6, 0.4)
+    assert end >= 4 * 10 ** 6

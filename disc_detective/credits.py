@@ -109,6 +109,7 @@ class FileSource:
             sar = 1.0
         self.w, self.h = 1920, int(round(H * 1920 / (W * sar) / 2)) * 2
         self.grabs, self.grab_s = 0, 0.0
+        self.keyframes = False      # (a disc's: the picture at the entry point before a time; a file's always exact)
 
     def frame(self, t, small=False):
         import numpy as np
@@ -122,6 +123,87 @@ class FileSource:
         if len(out) < w * h * 3:
             return None
         return np.frombuffer(out[:w * h * 3], np.uint8).reshape(h, w, 3)
+
+
+DISC_AHEAD = 0.7                    # (s past the wanted time, read on to the entry point beyond it)
+DISC_READ_MIN, DISC_READ_MAX = 2 * 2 ** 20, 12 * 2 ** 20   # (bytes read for a frame: at least, and when the map ends)
+DISC_KEY_READ = 3 * 2 ** 19         # (bytes read for a keyframe alone: the entry point's picture; too few, the
+                                    #  exact way's read from there instead)
+
+
+class DiscSource(FileSource):
+    """A Blu-ray's playlist (a drive or a folder: "00800.mpls" or 800), its frames read off the disc itself: a time
+    to its clip and the entry point at or before it (the clip's EP_map), the bytes from there to just past it read
+    and decrypted by hdmv-menus' read_clip (the user's own MakeMKV library, the disc unlocked once: disc, when the
+    menus have it open already), FFmpeg decoding them on to the time. One seek and about a second of video a
+    frame; nothing ripped."""
+
+    def __init__(self, root, playlist, disc=None):
+        from . import bdhdmv
+        bdmv = core.find_child(root, "BDMV") or os.path.join(root, "BDMV")
+        name = "%05d.mpls" % playlist if isinstance(playlist, int) else os.path.basename(playlist)
+        pl = core.parse_mpls(core.read_file(os.path.join(core.find_child(bdmv, "PLAYLIST") or
+                                                         os.path.join(bdmv, "PLAYLIST"), name)))
+        clipinf = core.find_child(bdmv, "CLIPINF") or os.path.join(bdmv, "CLIPINF")
+        self.path, self.ffmpeg = "%s %s" % (root, name), tools.which("ffmpeg") or "ffmpeg"
+        self.items, self.starts, acc = [], [], 0.0
+        self.maps, aspect = {}, None
+        for clip, t_in, t_out in pl["items"]:
+            self.items.append((clip, t_in / 45000.0))
+            self.starts.append(acc)
+            acc += max(0, t_out - t_in) / 45000.0
+            if clip not in self.maps:
+                data = core.read_file(os.path.join(clipinf, clip + ".clpi"))
+                self.maps[clip] = core.clpi_entry_points(data)
+                aspect = aspect or core.clpi_aspect(data)
+        self.dur, self.chapters = pl["duration"], pl["chapter_times"]
+        self.w, self.h = 1920, 1440 if aspect == "4:3" else 1080
+        if disc is None:
+            import hdmv_menus
+            disc = hdmv_menus.Disc(root, aacs=bdhdmv.aacs_library())
+        self.disc = disc
+        self.grabs, self.grab_s, self.read_bytes = 0, 0.0, 0
+        self.keyframes = False      # (on: a frame is the entry point's picture at or before its time, up to about a
+                                    #  second early -- a third of the reading, for a straight read's steps)
+
+    def where(self, t):
+        """(clip, the entry point's byte offset at or before playlist time t, seconds on from it to t, the offset to
+        read to)."""
+        import bisect
+        i = max(0, bisect.bisect_right(self.starts, t) - 1)
+        clip, t_in = self.items[i]
+        ct = t_in + t - self.starts[i]
+        m = self.maps[clip]
+        k = max(0, bisect.bisect_right([p for p, _ in m], ct) - 1)
+        p0, off = m[k] if m else (ct, 0)
+        end = next((o for p, o in m[k + 1:] if p >= ct + DISC_AHEAD), off + DISC_READ_MAX)
+        return clip, off, max(0.0, ct - p0), max(end, off + DISC_READ_MIN)
+
+    def frame(self, t, small=False):
+        import numpy as np
+        s = time.time()
+        self.grabs += 1
+        w, h = (960, self.h // 2) if small else (self.w, self.h)
+        clip, off, delta, end = self.where(min(max(0.0, t), self.dur - 0.05))
+        out = self._decode(clip, off, DISC_KEY_READ, 0.0, w, h) if self.keyframes else b""
+        if len(out) < w * h * 3:
+            out = self._decode(clip, off, end - off, 0.0 if self.keyframes else delta, w, h)
+        self.grab_s += time.time() - s
+        if len(out) < w * h * 3:
+            return None
+        return np.frombuffer(out[:w * h * 3], np.uint8).reshape(h, w, 3)
+
+    def _decode(self, clip, off, length, delta, w, h):
+        """A clip's bytes from off read and decoded on delta s: the picture's raw bytes, or b""."""
+        try:
+            data = self.disc.read_clip(clip, off, length)
+        except (OSError, ValueError):
+            return b""
+        self.read_bytes += len(data)
+        return subprocess.run([self.ffmpeg, "-v", "error", "-f", "mpegts", "-i", "pipe:", "-ss", "%.3f" % delta,
+                               "-map", "0:v:0", "-frames:v", "1", "-vf", "scale=%d:%d" % (w, h), "-f", "rawvideo",
+                               "-pix_fmt", "bgr24", "pipe:"], input=data, capture_output=True,
+                              **core.NO_CONSOLE).stdout if data else b""
 
 
 # ---- the data: IMDb's credits, the MPA numbers, TMDB's casts --------------------------------------------------
@@ -1548,6 +1630,14 @@ class Scan:
         new card read in full into the same scoring and window; stops on the window holding one film for 3 cards, a
         certificate number naming one film with its year agreeing (or 2 of that film's names read), or the cards over (names read, past chapter 2,
         FRONT_QUIET picture frames in a row); FRONT_CAP s at most. (ranking, window, why it stopped)"""
+        src = self.src
+        src.keyframes = True              # (a straight read's steps: a disc's entry points will do, a third the reading)
+        try:
+            return self._front_scan()
+        finally:
+            src.keyframes = False
+
+    def _front_scan(self):
         src = self.src
         self.cast, self.sparse, self.head, self.decided, self.stopped = collections.Counter(), [], None, None, None
         self.years, self.cert = {}, [None, None, []]
