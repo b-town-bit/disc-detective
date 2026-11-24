@@ -2427,14 +2427,23 @@ class App:
         """IMDb's credits, behind the IMDb index a scan has refreshed: built again out of the way, the old
         ones used till it's done (1.1 GB read, so never in the middle of a scan). Tried again next time
         if it fails. The thread, or None if there's nothing to do."""
-        if not di.imdb_credits_stale(args.imdb_dir):
+        from . import credits
+        stale = di.imdb_credits_stale(args.imdb_dir)
+        mpa = credits.mpa_stale(args.imdb_dir) and not getattr(args, "offline", False)   # (fetched: not offline)
+        if not stale and not mpa:
             return None
 
         def work():
-            try:
-                di.imdb_credits_build(args.imdb_dir, log=di.logger.info)
+            if stale:
+                try:
+                    di.imdb_credits_build(args.imdb_dir, log=di.logger.info)
+                except Exception:
+                    di.logger.exception(i18n.log("refreshing IMDb's credits failed"))
+            try:                             # (the MPA numbers, beside them: credits.mpa_refresh)
+                if mpa:
+                    credits.mpa_refresh(args.imdb_dir, log=di.logger.info)
             except Exception:
-                di.logger.exception(i18n.log("refreshing IMDb's credits failed"))
+                di.logger.exception(i18n.log("refreshing the MPA certificate numbers failed"))
         thread = threading.Thread(target=work, daemon=True)
         thread.start()
         return thread

@@ -7,10 +7,10 @@
 #, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: Disc Detective 0.4.dev0\n"
+"Project-Id-Version: Disc Detective 0.5.dev0\n"
 "Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
 "\n"
-"POT-Creation-Date: 2026-11-18 11:02-0600\n"
+"POT-Creation-Date: 2026-11-23 21:20-0600\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -2806,6 +2806,13 @@ msgid "downloading IMDb dataset {name} ..."
 msgstr ""
 
 #: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"couldn't fetch the MPA certificate numbers ({error}): tried again next "
+"time"
+msgstr ""
+
+#: disc_detective/core.py
 msgid "indexing IMDb titles (one-time, takes a few minutes) ..."
 msgstr ""
 
@@ -3986,6 +3993,15 @@ msgstr[1] ""
 msgid ""
 "give a disc path, or one of --list, --to-submit, --to-improve, --corpus, "
 "--set-truth, --import-samples, --packet"
+msgstr ""
+
+#: disc_detective/credits.py
+msgid "fetching the MPA certificate numbers ..."
+msgstr ""
+
+#: disc_detective/credits.py
+#, python-brace-format
+msgid "MPA certificate numbers: {count}"
 msgstr ""
 
 #: disc_detective/tools.py

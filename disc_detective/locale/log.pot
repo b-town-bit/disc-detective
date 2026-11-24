@@ -7,10 +7,10 @@
 #, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: Disc Detective 0.4.dev0\n"
+"Project-Id-Version: Disc Detective 0.5.dev0\n"
 "Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
 "\n"
-"POT-Creation-Date: 2026-11-19 14:48-0600\n"
+"POT-Creation-Date: 2026-11-23 21:20-0600\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -71,6 +71,10 @@ msgstr ""
 
 #: disc_detective/app.py
 msgid "refreshing IMDb's credits failed"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "refreshing the MPA certificate numbers failed"
 msgstr ""
 
 #: disc_detective/app.py
@@ -632,6 +636,13 @@ msgid "downloading IMDb dataset {name} ..."
 msgstr ""
 
 #: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"couldn't fetch the MPA certificate numbers ({error}): tried again next "
+"time"
+msgstr ""
+
+#: disc_detective/core.py
 msgid "indexing IMDb titles (one-time, takes a few minutes) ..."
 msgstr ""
 
@@ -845,6 +856,33 @@ msgstr ""
 msgid ""
 "MakeMKV couldn't read the disc: using an older saved reading, which "
 "leaves out its shortest titles"
+msgstr ""
+
+#: disc_detective/credits.py
+#, python-format
+msgid "the card walk saw a crawl %d s before the end"
+msgstr ""
+
+#: disc_detective/credits.py
+msgid "no end credits found"
+msgstr ""
+
+#: disc_detective/credits.py
+#, python-format
+msgid "the end credits start at %s"
+msgstr ""
+
+#: disc_detective/credits.py
+msgid "the end credits are a restoration's, not the film's"
+msgstr ""
+
+#: disc_detective/credits.py
+msgid "fetching the MPA certificate numbers ..."
+msgstr ""
+
+#: disc_detective/credits.py
+#, python-brace-format
+msgid "MPA certificate numbers: {count}"
 msgstr ""
 
 #: disc_detective/makemkv.py

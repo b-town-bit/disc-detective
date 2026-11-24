@@ -2312,6 +2312,12 @@ def update_data(args, which=("discdb", "imdb"), force=False, log=say):
         if force or imdb_credits_stale(args.imdb_dir):
             imdb_credits_build(args.imdb_dir, log=log)
         done["credits"] = imdb_credits_info(args.imdb_dir)
+        # (and the MPA certificate numbers the credits witness reads off a film's end card: credits.mpa_build)
+        from . import credits
+        try:
+            credits.mpa_refresh(args.imdb_dir, log=log, force=force)
+        except Exception as exc:
+            log(Said("couldn't fetch the MPA certificate numbers ({error}): tried again next time", error=exc))
     return done
 
 
@@ -2482,9 +2488,9 @@ def word_checker(imdb_dir):
     return is_word
 
 
-# The IMDb credits index (Settings: IMDb credits, off by default): who's in the well-known titles,
-# and as whom; to search a film by the names in its credits (frames of a disc's end credits read
-# by OCR), and words for reading menus. title.principals and name.basics (1.1 GB together) are
+# The IMDb credits index (part of the IMDb download, built after its index): who's in the well-known
+# titles, and as whom; to search a film by the names in its credits (credits.py: a disc's end and
+# opening credits read by OCR), and words for reading menus. title.principals and name.basics (1.1 GB together) are
 # read as they download, never kept: only titles with CREDIT_VOTES votes or more, and these jobs
 IMDB_CREDITS_DB = "imdb_credits.sqlite"
 IMDB_CREDIT_FILES = ("title.principals.tsv.gz", "name.basics.tsv.gz")

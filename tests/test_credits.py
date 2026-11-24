@@ -1,0 +1,193 @@
+"""The credits witness's reading rules (credits.py): years and certificate numbers off a film's cards, the close
+window, the number's pick, and the MPA numbers' table against a small IMDb index of its own."""
+import json
+import sqlite3
+
+import pytest
+
+from disc_detective import core, credits
+
+
+@pytest.mark.parametrize("row, years", [
+    ("COPYRIGHT © 1989 by UNIVERSAL CITY STUDIOS, INC.", {1989}),
+    ("Copyright©199I TriStar Pictures. Inc.", {1991}),            # (I for 1)
+    ("©L999 Warner Bros.", {1999}),                                # (L for 1)
+    ("COPYRIGHT MCMXLI BY UNIVERSAL PICTURES COMPANY, INC.", {1941}),
+    ("© MMI New Line Productions", {2001}),                        # (a short Roman year: MM...)
+    ("OMM Disney", {2000}),                                        # (the © read as O)
+    ("This motion picture is protected", set()),
+])
+def test_row_years(row, years):
+    assert credits.row_years(row) == years
+
+
+def test_copyright_rows():
+    assert credits.copyright_row("© 1994 WARNER BROS. AND ICON DISTRIBUTION, INC.")
+    assert credits.copyright_row("COPYRIGNT MCMXLI BY UNIVERSAL PICTURES")      # (a misread "copyright")
+    assert not credits.copyright_row("©2005 WARNER-OLIVE MUSIC, LLC")            # (a song's, not the film's)
+    assert not credits.copyright_row("DOLBY logo used with permission")
+    assert credits.company_row("2008 DISNEY ENTERPRISES, INC.")
+
+
+@pytest.mark.parametrize("rows, nums", [
+    (["MOTION PICTURE ASSOCIATION OF AMERICA", "No. 42055"], ["42055"]),
+    (["CERTIFICATE NO. 29589"], ["29589"]),
+    (["APPROVED N0.21531"], ["21531"]),                           # (0 for O)
+    (["N.42616"], ["42616"]),                                     # (the o of "No." not read)
+    (["33124"], ["33124"]),                                       # (a bare number beside the logo)
+    (["NO ANIMALS WERE HARMED. (AHD 09769)"], []),                # (the American Humane's number)
+    (["1994"], []),                                               # (a year, not a number)
+])
+def test_numbers(rows, nums):
+    assert credits.nums_in(rows) == nums
+
+
+def test_norm():
+    assert credits.norm("Renée Stock-Poynton, O'Brien") == ["renee", "stock", "poynton", "o", "brien"]
+
+
+def test_clear_lead():
+    assert credits.clear(10, 4)          # (6 ahead: half of 10)
+    assert not credits.clear(10, 6)
+    assert not credits.clear(3, 1.5)     # (2 ahead at least)
+
+
+class FakeIndex:
+    """titles: {id: (title, year, type, runtime, votes)}"""
+
+    def __init__(self, titles):
+        self.t = titles
+
+    def title(self, i):
+        return self.t[i][:4]
+
+    def votes(self, i):
+        return self.t[i][4]
+
+
+def scan_with(titles, certs):
+    sc = credits.Scan(FakeIndex(titles), certs)
+    sc._reset(None)
+    return sc
+
+
+def test_number_needs_its_year():
+    sc = scan_with({36763: ("The Sixth Sense", 1999, "movie", 107, 1000000)}, {"36763": [36763]})
+    sc.cert = [{36763}, "36763", ["36763"]]
+    assert sc.number_pick() == (None, "no year read")
+    sc.years = {2000: 1.0}                   # (Shanghai Noon's card reused: its year, 2000)
+    assert sc.number_pick()[0] is None
+    sc.years = {1999: 1.0}
+    assert sc.number_pick() == (36763, None)
+    sc.years = {1998: 1.0}                   # (made one year, out the next)
+    assert sc.number_pick() == (36763, None)
+
+
+def test_window():
+    sc = scan_with({1: ("A", 1990, "movie", 90, 5000), 2: ("B", 1991, "movie", 90, 9000), 3: ("C", 1992, "movie", 90, 100)}, {})
+    r = [(10.0, 5, "A", 1990, "movie", 90, "tt0000001"), (4.0, 2, "B", 1991, "movie", 90, "tt0000002")]
+    sc.why_of = {"A": ["ann one", "bob two", "cat three"], "B": ["ann one"]}
+    assert [x[2] for x in sc.window_of(r)] == ["A"]                       # (a clear lead)
+    r = [(10.0, 5, "A", 1990, "movie", 90, "tt0000001"), (7.0, 4, "B", 1991, "movie", 90, "tt0000002")]
+    assert [x[2] for x in sc.window_of(r)] == ["A", "B"]                  # (close: both)
+    # (a clear lead on two names another film has too: more evidence needed)
+    r = [(10.0, 2, "A", 1990, "movie", 90, "tt0000001"), (3.0, 2, "C", 1992, "movie", 90, "tt0000003")]
+    sc.why_of = {"A": ["ann one", "bob two"], "C": ["ann one", "bob two"]}
+    assert [x[2] for x in sc.window_of(r)] == ["A", "C"]
+
+
+def test_mpa_build(tmp_path):
+    ti = sqlite3.connect(tmp_path / core.IMDB_DB)
+    ti.execute("create table titles (id integer primary key, title text, alt text, year int, type text, runtime int)")
+    ti.executemany("insert into titles values (?, ?, ?, ?, ?, ?)", [
+        (1, "3 Ninjas", None, 1992, "movie", 84), (2, "Red Dawn", None, 2012, "movie", 93),
+        (3, "Red Dawn", None, 2011, "short", 10), (4, "The Great American Escape", None, 1971, "movie", 90)])
+    ti.commit()
+    ti.close()
+    n, shared = credits.mpa_build(str(tmp_path), [("40839", "tt0368008")],
+                                  [("32001", "Three Ninjas", "1992"), ("47700", "Red Dawn", "2011"),
+                                   ("12345", "Great American Escape, The", "1970")])
+    table = json.load(open(tmp_path / credits.MPA_FILE))
+    assert table["40839"] == [368008]                     # (Wikidata's, by IMDb id)
+    assert table["32001"] == [1]                          # (number words as digits)
+    assert table["47700"] == [2]                          # (the feature, a year on: not the 2011 short)
+    assert table["12345"] == [4]                          # ("Title, The"; a year on)
+    assert credits.mpa_load(str(tmp_path)) == table
+    assert not credits.mpa_stale(str(tmp_path))
+
+
+def test_drawn_mark_found():
+    """The drawn mark (no film's picture) is found in a frame that shows it, at any size, light on dark or dark
+    on light, and not in a frame of plain shapes."""
+    import numpy as np
+    import cv2
+    for w, inv in ((120, False), (60, False), (90, True)):
+        frame = np.zeros((540, 960), np.uint8)
+        mark = credits.draw_logo(w)
+        frame[300:300 + mark.shape[0], 400:400 + w] = mark
+        if inv:
+            frame = 255 - frame
+        sc, box = credits.find_logo(cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR))
+        assert sc >= credits.LOGO_MIN and abs(box[0] - 400 / 960) < 0.03
+    frame = np.zeros((540, 960), np.uint8)
+    cv2.rectangle(frame, (100, 100), (300, 180), 255, -1)
+    cv2.ellipse(frame, (600, 300), (100, 40), 0, 0, 360, 255, 4)
+    assert credits.find_logo(cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR))[0] < credits.LOGO_MIN
+
+
+def boxed_card(w, h):
+    """A test boxed card (DreamWorks' kind): the plain drawn mark's lines, dark on a light box w x h."""
+    import numpy as np
+    import cv2
+    p = credits.LOGO_SHAPE
+    S = 8
+    big = np.full((h * S, w * S), 255, np.uint8)
+    cx, cy, ry, rx = w / 2 * S, h * 0.445 * S, h * 0.277 * S, w * 0.446 * S
+    t = max(1, int(ry * 0.145))
+    P = lambda x, y: (int(x), int(y))
+    cv2.ellipse(big, P(cx, cy), P(rx, ry), 0, 0, 360, 0, t, cv2.LINE_AA)
+    cv2.ellipse(big, P(cx, cy), P(rx * p["iw"] / p["ow"], ry), 0, 0, 360, 0, t, cv2.LINE_AA)
+    cv2.line(big, P(cx - rx, cy), P(cx + rx, cy), 0, t, cv2.LINE_AA)
+    cv2.circle(big, P(cx, cy), int(ry * 0.712), 255, -1, cv2.LINE_AA)
+    cv2.circle(big, P(cx, cy), int(ry * 0.712), 0, t, cv2.LINE_AA)
+    return cv2.resize(big, (w, h), interpolation=cv2.INTER_AREA)
+
+
+def test_boxed_mark_found_plain_box_not():
+    """The boxed card (the mark in dark lines on a light box) is found; a plain filled box, or a box of other
+    content, isn't."""
+    import numpy as np
+    import cv2
+    frame = np.zeros((540, 960), np.uint8)
+    w, h = 150, 96
+    box = boxed_card(w, h)
+    frame[200:200 + h, 300:300 + w] = box
+    cv2.rectangle(frame, (600, 200), (750, 296), 255, -1)                       # (a plain box)
+    cv2.rectangle(frame, (600, 350), (750, 446), 255, -1)                       # (a box of lettering)
+    cv2.putText(frame, "AVID", (612, 420), cv2.FONT_HERSHEY_SIMPLEX, 1.6, 0, 6)
+    sc, where = credits.find_logo(cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR))
+    assert sc >= credits.LOGO_MIN and abs(where[0] - 300 / 960) < 0.03
+    frame[200:200 + h, 300:300 + w] = 0                                          # (the mark gone: the boxes alone)
+    assert credits.find_logo(cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR))[0] < credits.LOGO_MIN
+
+
+def test_tilted_mark_found():
+    """A mark printed a few degrees off level (a scrapbook-style card's) is found by turning it level."""
+    import numpy as np
+    import cv2
+    frame = np.zeros((540, 960), np.uint8)
+    mark = credits.draw_logo(140)
+    frame[250:250 + mark.shape[0], 400:540] = mark
+    R = cv2.getRotationMatrix2D((470, 250 + mark.shape[0] / 2), 5, 1.0)
+    frame = cv2.warpAffine(frame, R, (960, 540))
+    assert credits.find_logo(cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR))[0] >= credits.LOGO_MIN
+
+
+@pytest.mark.parametrize("rows, nums", [
+    (["N.42616"], ["42616"]), (["MPAA #32795"], ["32795"]), (["No.45254"], ["45254"]),
+    (["CERTIFICATE NO. 29589"], ["29589"]), (["(AHA 01057)", "No. 42582"], ["1057", "42582"]),
+    (["Copyright 2002 DreamWorks"], []), (["SOUND"], []), (["4I8O3"], ["41803"]),
+])
+def test_numbers_near_a_logo(rows, nums):
+    """Beside a found logo, any 4-6 digit run counts (the table and the year decide), years apart."""
+    assert credits.nums_near(rows) == nums
