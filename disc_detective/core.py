@@ -3477,6 +3477,11 @@ def films_apart(titles):
     another, which share most of it; nor its copies in another picture, picture_copy): two or
     more, it may hold several films (Abbott and Costello's One Night in the Tropics and Buck
     Privates, a label naming neither)."""
+    return len(apart_titles(titles))
+
+
+def apart_titles(titles):
+    """films_apart's titles: each feature-length title of its own video, the longest first."""
     kept = []
     for t in sorted((t for t in titles if t.get("duration", 0) >= SEVERAL_FILMS_MIN and t.get("segments")
                      and t.get("role") in (Role.FEATURE, Role.VERSION, Role.LONGEST, Role.EXTRA) and not picture_copy(t)),
@@ -3484,7 +3489,7 @@ def films_apart(titles):
         if not any(max(shared_video(t, k)[0], shared_video(k, t)[0]) >= SEVERAL_FILMS_SHARED or
                    presentations(t, k) for k in kept):
             kept.append(t)
-    return len(kept)
+    return kept
 
 
 def presentations(a, b):
@@ -3686,7 +3691,7 @@ def films_by_title(con, titles, title_phrases, facts, cands=(), cast=None, leads
         except Exception:
             return False
         return len(stars & people) >= 2
-    pairs, missing = [], []
+    pairs, missing, sure = [], [], []
     for tid, phrases in sorted(title_phrases.items(), key=lambda x: _natural(x[0])):
         t = byid.get(tid)
         if not t:
@@ -3722,6 +3727,8 @@ def films_by_title(con, titles, title_phrases, facts, cands=(), cast=None, leads
                          for k, (sc, c) in enumerate(ranked)), key=lambda x: -x[0])
         best = ranked[0][1] if ranked else None
         (pairs.append((t, best)) if best else missing.append(t))
+        if best:
+            sure.append(fit(best) >= SEVERAL_FILMS_SURE)
     if not pairs:
         return None
     for t in missing:                    # (its menu said nothing that names it: the scan's guesses, by length)
@@ -3739,7 +3746,9 @@ def films_by_title(con, titles, title_phrases, facts, cands=(), cast=None, leads
         return None
     if missing:
         return films_on_disc(titles, pairs, "films named by their own menus, the rest by length", 95.5)
-    return films_on_disc(titles, pairs, "each film named by its own menu", 96.0)
+    df = films_on_disc(titles, pairs, "each film named by its own menu", 96.0)
+    df["sure"] = all(sure)             # (each title's own words name its film clearly: probable, as credits would)
+    return df
 
 
 def special_on_disc(con, queries, titles, facts):
@@ -6366,7 +6375,9 @@ def identify(root, args):
     number_episodes(titles)
     rep["titles"] = [{k: v for k, v in t.items() if k not in ("segments", "in_play_all", "item_chapters", "play_order")}
                      for t in titles]
-    rep["films_apart"] = films_apart(titles)
+    apart = apart_titles(titles)
+    rep["films_apart"] = len(apart)
+    rep["apart_ids"] = [t["id"] for t in apart]   # (which: the report's titles keep no segments to tell)
 
     eps = [t for t in titles if t["role"] == Role.EPISODE]
     feats = [t for t in titles if t["role"] == Role.FEATURE]
@@ -6810,6 +6821,7 @@ def identify(root, args):
         except Exception as exc:          # a bonus witness: never fail a scan over it
             rep["ai_error"] = str(exc)
     answer = getattr(args, "credits_answer", None)        # (the film's own credits read: App._credits_seen)
+    before_credits = list(rep["candidates"])              # (the scan's own guesses: credits_films' film it had)
     if answer and not db["hit"] and not personal:
         try:
             ccon = imdb_open(args.imdb_dir, allow_download=False, log=lambda m: None)
@@ -6830,10 +6842,23 @@ def identify(root, args):
                 try:
                     df = films_by_title(tcon, titles, per_title, facts, rep["candidates"], cast=film_people(args),
                                         leads=lambda iid: lead_words(args.imdb_dir, iid))
+                    if df and df.pop("sure", False):     # (ahead of any one film: probable, the credits' way)
+                        df["score"] = round(max(df["score"], max((c.get("score", 0) for c in rep["candidates"]),
+                                                                 default=0) + CREDITS_LEAD), 1)
                 finally:
                     tcon.close()
             except Exception as exc:
                 rep["candidates_error"] = "IMDb: %s" % exc
+        per_credits = getattr(args, "credits_per_title", None)
+        if per_credits:                   # (each title's own credits: App._credits_seen)
+            cf = credits_films(titles, per_credits, before_credits)
+            if cf:                        # (ahead of the film the credits named alone: probable as the disc's films)
+                cf["score"] = round(max(cf["score"], max((c.get("score", 0) for c in rep["candidates"]), default=0)
+                                        + CREDITS_LEAD), 1)
+                df = cf
+            cuts = credits_cuts(titles, per_credits)
+            if cuts:
+                rep["credits_cuts"] = cuts
         df = df or double_feature(titles, rep["candidates"])
         if df:
             rep["candidates"].insert(0, df)
@@ -7196,7 +7221,8 @@ def best_guess(rep):
     if rep["status"].startswith(("probable", "best guess")) and c and c[0]["kind"] == "collection":
         return "%s: %s" % (c[0]["name"], ", ".join("%s (%s)" % (i["name"], i["year"]) for i in c[0]["items"])), \
             ("IMDb short films" if c[0].get("shorts") else
-             "each film's own menu + IMDb" if (c[0].get("why") or "").startswith("each film named by its own menu")
+             "IMDb, each film by its menus" if (c[0].get("why") or "").startswith("each film named by its own menu")
+             else "IMDb, each film by its credits" if "by its own title's credits" in (c[0].get("why") or "")
              else "IMDb, each film by its length" if c[0].get("source") == "IMDb" else "the label + IMDb")
     if rep["status"].startswith(("probable", "best guess")) and c:
         g = "%s (%s)" % (c[0]["name"], c[0]["year"])
@@ -7535,6 +7561,55 @@ def credits_seen(rep, answer, con):
             by_id[c["imdb_id"]] = c
     rep["candidates"] = sorted(cands, key=lambda c: -c["score"])
     rep["credits_named"] = {"close": [f["imdb_id"] for f in close], "by": answer.get("by")}
+
+
+CREDITS_FILM_TYPES = {"movie", "tvMovie"}   # (a second film its credits name: a feature, not a video or special --
+                                            #  Rudolph's documentary of its makers isn't the disc's second film)
+CREDITS_FILMS_SCORE = 95.0
+
+
+def credits_films(titles, per_title, cands):
+    """A disc's films as each title's own credits name them (App._credits_seen read them a title at a time:
+    {title id: credits.Scan's answer}): two or more different films, the disc's films (a collection candidate,
+    films_on_disc), with a film the scan already had for a title it didn't read (In the Navy, named by its menus,
+    and Hold That Ghost, by its credits). A second film only a feature (CREDITS_FILM_TYPES), as long as its title
+    (SEVERAL_FILMS_FIT), of its own video. None otherwise."""
+    if not per_title:
+        return None
+    by_id = {t["id"]: t for t in titles}
+    named = [(by_id[tid], a["winner"]) for tid, a in per_title.items() if tid in by_id and (a or {}).get("winner")]
+    fits = lambda t, f: not f.get("runtime") or abs(f["runtime"] - t["duration"] / 60) <= SEVERAL_FILMS_FIT
+    pairs = [(t, f) for t, f in named if f.get("type") in CREDITS_FILM_TYPES and fits(t, f)]
+    top = cands[0] if cands and cands[0].get("kind") == "movie" and is_probable(cands) else None
+    if top and top.get("imdb_id") not in {f["imdb_id"] for _, f in pairs}:
+        read = {t["id"] for t, _ in pairs} | set(per_title)
+        rest = [t for t in apart_titles(titles) if t["id"] not in read and fits(t, top)]
+        if rest:
+            pairs.append((min(rest, key=lambda t: abs((top.get("runtime") or 0) - t["duration"] / 60)), top))
+    films = {}
+    for t, f in sorted(pairs, key=lambda p: p[0]["duration"], reverse=True):
+        films.setdefault(f["imdb_id"], (t, f))
+    pairs = list(films.values())
+    if len(pairs) < 2 or any(max(shared_video(a, b)[0], shared_video(b, a)[0]) >= SEVERAL_FILMS_SHARED
+                             for (a, _), (b, _) in itertools.combinations(pairs, 2)):
+        return None
+    return films_on_disc(titles, pairs, "%d films, each named by its own title's credits or the scan" % len(pairs),
+                         CREDITS_FILMS_SCORE)
+
+
+def credits_cuts(titles, per_title):
+    """One film its credits name on two or more titles of different lengths: its cuts, confirmed (the scan only
+    supposes them). {"imdb_id", "name", "titles": [title ids]} or None."""
+    by_id = {t["id"]: t for t in titles}
+    seen = {}
+    for tid, a in (per_title or {}).items():
+        w = (a or {}).get("winner")
+        if w and tid in by_id:
+            seen.setdefault((w["imdb_id"], w["name"]), []).append(tid)
+    for (iid, name), tids in seen.items():
+        if len(tids) >= 2 and len({round(by_id[t]["duration"]) for t in tids}) >= 2:
+            return {"imdb_id": iid, "name": name, "titles": sorted(tids, key=lambda x: _title_num(by_id[x]))}
+    return None
 
 
 def is_probable(c):

@@ -3211,18 +3211,19 @@ class App:
     CREDITS_FORMATS = ("Blu-ray", "DVD")  # (a DVD's frames through your VLC: credits.DvdSource)
 
     def credits_wanted(self, rep):
-        """Whether the scan reads the film's own credits (Settings > Disc, "Use credits to help identify", on by
-        default): a film's disc nothing has named for sure (not yours, not TheDiscDB's, no probable candidate),
-        its feature read off the disc. Not a show's, nor a disc of extras."""
+        """Whether the scan reads the disc's own credits (Settings > Disc, "Use credits to help identify", on by
+        default): a disc nothing has named for sure (not yours, not TheDiscDB's, no probable candidate) -- a
+        film's or a show's -- or one film named whose titles hold another film's worth of video (more_films:
+        In the Navy, and Hold That Ghost beside it). Not a disc of extras."""
         if not self.settings.get("use_credits", True) or not rep or rep.get("from_sample") or not rep.get("path"):
             return False
-        if rep.get("format") not in self.CREDITS_FORMATS or rep.get("kind") == "tv" or rep.get("extras_disc"):
+        if rep.get("format") not in self.CREDITS_FORMATS or rep.get("extras_disc"):
             return False
         if rep.get("format") == "DVD" and not self.credits_vlc():
             return False
         if rep.get("personal_hit") or (rep.get("discdb") or {}).get("hit"):
             return False
-        return not di.is_probable(rep.get("candidates"))
+        return not di.is_probable(rep.get("candidates")) or rep.get("kind") != "tv" and App.more_films(rep)
 
     def credits_vlc(self):
         """VLC's folder, for a DVD's frames (its decryption, the film's sectors scrambled), or None."""
@@ -3231,11 +3232,32 @@ class App:
 
     @staticmethod
     def credits_titles(rep):
-        """The titles whose credits are read: each one whose type is MainMovie (title_word: yours, TheDiscDB's,
-        the menus', else the scan's reading -- the film, or another cut of it), copies left out, in disc order."""
+        """The titles whose credits are read, in disc order, copies left out. A show's disc: its first episode
+        (the show's the same on every one). A film's: each title whose type is MainMovie (title_word: yours,
+        TheDiscDB's, the menus', else the scan's reading -- the film, or another cut of it); and, the disc holding
+        another film's worth of video (more_films), each feature-length title of its own video (core.apart_titles)
+        but the one the probable film fits, when it's the only one (In the Navy and Hold That Ghost, 86 minutes
+        each: both read)."""
         mine, items, detected = rep.get("labels") or {}, discdb_items((rep.get("discdb") or {}).get("hit")),             rep.get("detected") or {}
-        return [t for t in rep.get("titles") or [] if t.get("role") not in (Role.DUPLICATE, Role.DECOY, Role.SEGMENT)
-                and title_word(t, mine, items, detected, {})[0].get("type") == Type.MAIN_MOVIE]
+        titles = [t for t in rep.get("titles") or [] if t.get("role") not in (Role.DUPLICATE, Role.DECOY, Role.SEGMENT)]
+        typed = lambda t: title_word(t, mine, items, detected, {})[0].get("type")
+        if rep.get("kind") == "tv":
+            return [t for t in titles if typed(t) == Type.EPISODE][:1]
+        out, more = [t for t in titles if typed(t) == Type.MAIN_MOVIE], []
+        if App.more_films(rep):
+            ids = {t["id"] for t in out}
+            apart = set(rep.get("apart_ids") or [t["id"] for t in di.apart_titles(titles)])   # (the report's own
+            more = [t for t in titles if t["id"] in apart and t["id"] not in ids]               #  titles: no segments)
+            out += more
+            cands = rep.get("candidates") or []
+            top = cands[0] if di.is_probable(cands) and cands[0].get("runtime") else None
+            fit = [t for t in out if top and abs(top["runtime"] - t["duration"] / 60) <= di.SEVERAL_FILMS_FIT]
+            if len(fit) == 1 and len(out) > 1:     # (several as long as it: which is its, unknown -- all read)
+                out = [t for t in out if t is not fit[0]]
+        order = {t["id"]: k for k, t in enumerate(rep.get("titles") or [])}
+        # (the film's titles first, the others it may be after: the main answer sooner -- Legend's 51-minute
+        #  documentary, three minutes of its own, read last)
+        return sorted(out, key=lambda t: (t in more, order.get(t["id"], 0)))
 
     def _credits_seen(self, drive, args, rep):
         """The film's own credits read off the disc (credits.Scan: its MPA card, its end credits, its opening),
@@ -3250,6 +3272,7 @@ class App:
         if not di.imdb_credits_info(args.imdb_dir):
             di.logger.info(i18n.log("the film's credits weren't read: IMDb's credits aren't downloaded yet"))
             return rep
+        want = "episode" if rep.get("kind") == "tv" else "film"     # (what each title's thought to be)
         from . import credits
         di.step("footage")
         t0 = time.time()
@@ -3272,7 +3295,7 @@ class App:
                         src = credits.DiscSource(rep["path"], title["id"], disc=disc, check=self.gone_check(drive))
                     say(i18n.log("{title}:", title=title["id"]))
                     try:
-                        answers.append(credits.Scan(ix, certs, casts, log=say).scan(src))
+                        answers.append(credits.Scan(ix, certs, casts, log=say).scan(src, want=want))
                     finally:
                         src.close()
             finally:
@@ -3293,32 +3316,40 @@ class App:
         rep["credits_read"] = read
         answer = credits_together(answers)
         win, close = answer.get("winner"), answer.get("window") or []
+        grabs = sum(a.get("grabs") or 0 for a in answers)     # (every title read, not just the one that named it)
         if win:
             di.logger.info(i18n.log("the credits name {film} ({year}), by {how}: {grabs} frames in {seconds:.0f} s",
                                     film=win["name"], year=win.get("year"), how=answer.get("by"),
-                                    grabs=answer.get("grabs"), seconds=time.time() - t0))
+                                    grabs=grabs, seconds=time.time() - t0))
         elif close:
             di.logger.info(i18n.log("the credits name no one film; close: {films} ({grabs} frames in {seconds:.0f} s)",
                                     films=", ".join("%s (%s)" % (f["name"], f.get("year")) for f in close[:5]),
-                                    grabs=answer.get("grabs"), seconds=time.time() - t0))
+                                    grabs=grabs, seconds=time.time() - t0))
         else:
             di.logger.info(i18n.log("the credits named nothing ({grabs} frames in {seconds:.0f} s)",
-                                    grabs=answer.get("grabs"), seconds=time.time() - t0))
+                                    grabs=grabs, seconds=time.time() - t0))
         phrases = [ph for a in answers for ph in a.get("phrases") or []]
         if phrases:                          # (the opening's title, searched as a menu's words are)
             di.logger.info(i18n.log("the opening's title reads: {phrases}", phrases=" / ".join(phrases)))
         if not (win or close or phrases):
             return rep
         args.credits_answer = answer
+        args.credits_per_title = {t["id"]: a for t, a in zip(titles, answers)}   # (each title's own: several films)
         shown = list(getattr(args, "menu_phrases", None) or [])
         args.menu_phrases = shown + [ph for ph in phrases if ph not in shown]
         try:
             again = di.identify(drive, args)
         finally:
-            args.credits_answer, args.menu_phrases = None, shown or None
+            args.credits_answer, args.credits_per_title, args.menu_phrases = None, None, shown or None
+        cuts = again.get("credits_cuts")
+        if cuts:
+            di.logger.info(i18n.log("the credits name {film} on {titles}: its cuts", film=cuts["name"],
+                                    titles=", ".join(cuts["titles"])))
         for k in ("menu_raw", "menu_found", "staked_out", "detected", "bd_project", "more_films", "credits_read"):
             if k in rep and k not in again:
                 again[k] = rep[k]
+        if again.get("more_films") and not self.more_films(again):      # (the other film named now: a
+            again.pop("more_films")                                        #  collection, no film left to add)
         if again.get("menu_raw"):           # (the menus' titles named for the film as it is now)
             again["menu_found"] = self._name_titles(again["menu_raw"], again)
         return again

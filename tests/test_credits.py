@@ -291,7 +291,11 @@ def test_credits_asked_only_when_nothing_is_sure():
     assert not wanted(rep, use_credits=False)
     assert not wanted(dict(rep, candidates=[_cand(1, "A", 80)]))
     assert not wanted(dict(rep, personal_hit=True))
-    assert not wanted(dict(rep, kind="tv"))
+    assert wanted(dict(rep, kind="tv"))                        # (a show nothing named: its first episode's)
+    assert not wanted(dict(rep, kind="tv", candidates=[_cand(1, "A", 80)]))
+    # (one film named for sure, another film's worth of video beside it: read for the other)
+    assert wanted(dict(rep, candidates=[_cand(1, "A", 80)], films_apart=2))
+    assert not wanted(dict(rep, candidates=[_cand(1, "A", 80)], films_apart=2, kind="tv"))
     assert wanted(dict(rep, format="DVD"))                     # (a DVD's through VLC)
     assert not wanted(dict(rep, format="DVD"), vlc=None)
     assert not wanted(dict(rep, format="Ultra HD"))
@@ -385,3 +389,97 @@ def test_one_unlock_a_scan(monkeypatch):
     a.bd_disc(rep)
     a.bd_disc(rep)
     assert len(opened) == 4
+
+
+def _film(n, name, runtime, typ="movie"):
+    return {"imdb_id": "tt%07d" % n, "name": name, "year": 1941, "type": typ, "runtime": runtime, "score": 9.0,
+            "names": 5, "by": "the end credits"}
+
+
+def test_credits_read_for_the_other_film_and_a_shows_first_episode(monkeypatch):
+    """One film named for sure beside another film's worth of video: the other title's credits read, not the named
+    one's. A show's disc: its first episode only."""
+    from disc_detective import app, core
+    from disc_detective.kinds import Role
+    navy = {"id": "Title 1", "role": Role.FEATURE, "duration": 85.5 * 60}
+    ghost = {"id": "Title 2", "role": Role.EXTRA, "duration": 85.9 * 60}
+    monkeypatch.setattr(core, "apart_titles", lambda titles: [t for t in titles if t["duration"] >= 40 * 60])
+    top = dict(_cand(1, "In the Navy", 80), runtime=86)
+    rep = {"kind": "movie", "titles": [navy, ghost], "candidates": [top], "films_apart": 2, "discdb": {"hit": None}}
+    assert app.App.credits_titles(rep) == [navy, ghost]               # (both 86 min: which is In the Navy's, unknown)
+    short = dict(ghost, duration=70 * 60)                             # (only one as long as it: that one skipped)
+    assert app.App.credits_titles(dict(rep, titles=[navy, short])) == [short]
+    assert app.App.credits_titles(dict(rep, films_apart=1)) == [navy]
+    # (the report's titles have no segments: which are their own video, as the scan kept them)
+    monkeypatch.setattr(core, "apart_titles", lambda titles: [])
+    doc = {"id": "Title 3", "role": Role.EXTRA, "duration": 51 * 60}
+    got = app.App.credits_titles(dict(rep, titles=[navy, doc], apart_ids=["Title 1", "Title 3"]))
+    assert got == [doc]                                               # (In the Navy the only one its length fits)
+    # (the film's own titles read first, a title it may be after last: whatever their disc order)
+    early = dict(doc, id="Title 0")
+    got = app.App.credits_titles(dict(rep, titles=[early, navy], apart_ids=["Title 0", "Title 1"], films_apart=2,
+                                      candidates=[_cand(1, "A", 50)]))
+    assert got == [navy, early]
+    e1 = {"id": "Title 2", "role": Role.EPISODE, "duration": 42 * 60}
+    e2 = {"id": "Title 3", "role": Role.EPISODE, "duration": 41 * 60}
+    assert app.App.credits_titles({"kind": "tv", "titles": [e1, e2], "discdb": {"hit": None}}) == [e1]
+
+
+def test_a_second_film_named_by_its_own_credits(monkeypatch):
+    """The scan's film for one title and another film its credits name for the other: the disc's two films. A
+    documentary or video its credits name isn't a second film (Rudolph's); one film on titles of two lengths: its
+    cuts."""
+    from disc_detective import core
+    from disc_detective.kinds import Role
+    navy = {"id": "Title 1", "role": Role.FEATURE, "duration": 85.5 * 60}
+    ghost = {"id": "Title 2", "role": Role.EXTRA, "duration": 85.9 * 60}
+    monkeypatch.setattr(core, "apart_titles", lambda titles: list(titles))
+    top = dict(_cand(1, "In the Navy", 80), runtime=86)
+    per = {"Title 2": {"winner": _film(2, "Hold That Ghost", 86)}}
+    df = core.credits_films([navy, ghost], per, [top])
+    assert df and df["kind"] == "collection" and [i["name"] for i in df["items"]] == ["In the Navy", "Hold That Ghost"]
+    assert [i["title_id"] for i in df["items"]] == ["Title 1", "Title 2"]
+    doc = {"Title 2": {"winner": _film(3, "The Animagic World of Rankin/Bass", 47, "video")}}
+    assert core.credits_films([navy, ghost], doc, [top]) is None
+    far = {"Title 2": {"winner": _film(2, "Hold That Ghost", 120)}}           # (not as long as its title)
+    assert core.credits_films([navy, ghost], far, [top]) is None
+    legend = {"Title 1": {"winner": _film(4, "Legend", 89)}, "Title 2": {"winner": _film(4, "Legend", 89)}}
+    cut = {"id": "Title 2", "role": Role.VERSION, "duration": 113.5 * 60}
+    assert core.credits_cuts([navy, cut], legend) == {"imdb_id": "tt0000004", "name": "Legend",
+                                                       "titles": ["Title 1", "Title 2"]}
+    assert core.credits_films([navy, cut], legend, []) is None
+
+
+def test_an_episode_looks_for_a_show():
+    """An episode's credits: a series is what's looked for (films weighed down), guests count little, "Special
+    Guest Star" is a heading."""
+    s = credits.Scan(None, {})
+    assert s.low_kind("tvSeries", "Buffy") and not s.low_kind("movie", "In the Navy")
+    s.want = "episode"
+    assert not s.low_kind("tvSeries", "Smallville") and s.low_kind("movie", "In the Navy")
+    assert credits.head_of(credits.norm("Special Guest Star")) == "guest"
+    assert credits.head_of(credits.norm("Guest Starring")) == "guest"
+    assert credits.head_of(credits.norm("STARRING")) == "cast"
+
+    class Ix:
+        def roles(self, p):
+            return {7: {"actor"}}, {"actor"}
+    s.ix, s.cast_pts = Ix(), {}
+    assert s.credit_points([1], "cast") == {7: credits.ROLE_MATCH}
+    assert s.credit_points([1], "guest") == {7: credits.ROLE_MATCH * credits.GUEST_W}
+
+
+def test_an_episode_reads_its_opening_first(monkeypatch):
+    """An episode: no MPA card, the opening first; a show named there, the end credits never read."""
+    s = credits.Scan(None, {})
+    calls = []
+    monkeypatch.setattr(s, "card_read", lambda: calls.append("card") or (None, {}, [], None))
+    win = (9.0, 8, "Smallville", 2001, "tvSeries", 44, "tt0279600")
+    monkeypatch.setattr(s, "front_scan", lambda: calls.append("front") or ([win], [win], "the cards are over"))
+    monkeypatch.setattr(s, "end_scan", lambda: calls.append("end") or ([], [], "no end credits"))
+    monkeypatch.setattr(s, "seen", lambda card_at: {"any": True})
+    monkeypatch.setattr(s, "title_phrases", lambda: [])
+    monkeypatch.setattr(s, "people_of", lambda x: [1] * 8)
+    src = type("Src", (), {"grabs": 0})()
+    r = s.scan(src, want="episode")
+    assert calls == ["front"] and r["winner"]["name"] == "Smallville" and r["by"] == "the opening credits"

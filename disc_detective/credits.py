@@ -545,6 +545,9 @@ def mpa_load(imdb_dir):
 # ---- the rules ------------------------------------------------------------------------------------------------
 
 LOW_TYPES = {"video", "tvShort", "tvSpecial", "short", "videoGame", "tvEpisode", "tvMiniSeries", "tvSeries"}
+SERIES_TYPES = {"tvSeries", "tvMiniSeries"}   # (what an episode's credits are looking for: the rest weighed down)
+GUEST_WORDS = {"guest", "guests"}             # ("Guest Starring", "Special Guest Star": actors who guest across
+GUEST_W = 0.25                                #  each other's shows; a show's own cast opens it -- names under it this)
 CAST_WORDS = {"cast", "casting", "starring", "characters"}
 CAST_JOBS = {"actor", "actress", "self"}
 JOB_WORDS = set("""produced producer producers coproducer coproducers directed director directors written writer
@@ -698,6 +701,8 @@ def nums_in(rows):
 def head_of(w):
     """The role a row's words head (or name with it): "cast", a title.principals category, "crew", or None."""
     ws = set(w)
+    if ws & GUEST_WORDS:
+        return "guest"
     if ws & CAST_WORDS or ws & {"featuring", "starring"}:
         return "cast"
     if ws & {"casting"}:
@@ -1036,6 +1041,7 @@ fmt = lambda t: "%d:%02d:%02d" % (t // 3600, t % 3600 // 60, t % 60)
 class Scan:
     """One title's identification by its credits (scan()): the card, the end, the opening. index: an Index;
     certs: mpa_load's table; casts: a Casts (or None: no full-cast tie step); log: a function of one string."""
+    want = "film"               # (what the title is thought to be, scan()'s: "film" or "episode")
 
     def __init__(self, index, certs, casts=None, log=None):
         self.ix, self.certs, self.casts = index, certs or {}, casts
@@ -1121,6 +1127,9 @@ class Scan:
         """title -> the points a name read gives it: 1 a credit; half a documentary's "self" credit, a known-for
         title with no heading to confirm it, or a credit the heading above contradicts (a namesake, most likely)."""
         out = {}
+        guest = h == "guest"
+        if guest:
+            h = "cast"
         for p in pids:
             titles, profs = self.ix.roles(p)
             for t, jobs in titles.items():
@@ -1132,6 +1141,8 @@ class Scan:
                         w = 0.5 if selfonly else ROLE_MATCH if real else 1.0
                     else:
                         w *= 0.5
+                if guest:                # (a guest: his own shows' cast, not this one's)
+                    w *= GUEST_W
                 out[t] = max(out.get(t, 0), w)
                 if real & {"actor", "actress"} or h == "cast" and agrees(h, jobs, profs):
                     self.cast_pts[t] = max(self.cast_pts.get(t, 0), w)
@@ -1188,8 +1199,7 @@ class Scan:
         title, year, typ, rt = self.ix.title(t)
         m = dur / 60
         fits = rt and abs(rt - m) <= 4
-        w = base * self.year_factor(t) * (0.5 if not fits and (typ in LOW_TYPES or re.search(
-            r"making|behind the|documentary", title or "", re.I)) else 1.0)
+        w = base * self.year_factor(t) * (0.5 if not fits and self.low_kind(typ, title) else 1.0)
         w += self.year_points(year)
         if fits:
             w += 1.5
@@ -1238,8 +1248,14 @@ class Scan:
         return r, self.window_of(r)
 
     def low(self, t):
-        """A film the ranking halves: a video, short, special, episode, or a making-of / documentary by its title."""
+        """A film the ranking halves: a video, short, special, episode, or a making-of / documentary by its title;
+        looking for an episode, anything but a series."""
         title, _, typ, _ = self.ix.title(t)
+        return self.low_kind(typ, title)
+
+    def low_kind(self, typ, title):
+        if self.want == "episode":
+            return typ not in SERIES_TYPES
         return typ in LOW_TYPES or bool(re.search(r"making|behind the|documentary", title or "", re.I))
 
     def siblings(self, score, why):
@@ -1931,13 +1947,16 @@ class Scan:
         out["any"] = out["card"] or out["crawl"] or heads > 0 or len(names) >= SEEN_NAMES
         return out
 
-    def scan(self, src):
+    def scan(self, src, want="film"):
         """Identify a title by its credits: {"winner": a film or None, "window": [films], "by": "the MPA card" /
         "the end credits" / "the opening credits" / None, "number", "years", "why", "grabs", "seconds", "steps",
         "seen": what of its credits was seen at all (seen), "phrases": the opening's title words (title_phrases)}.
-        A film: {"imdb_id", "name", "year", "type", "runtime", "score", "names", "by"}."""
+        A film: {"imdb_id", "name", "year", "type", "runtime", "score", "names", "by"}. want: what the title's
+        thought to be -- "film"; or "episode": a series looked for (the rest weighed down), no MPA card (TV carries
+        none), the opening read first (a show's own cast opens it), the end credits after."""
         t0 = time.time()
         self._reset(src)
+        self.want = want
         steps = []
 
         card = [None]
@@ -1949,6 +1968,9 @@ class Scan:
             return {"winner": winner, "window": window, "by": by, "number": self.cert[1], "years": sorted(self.years),
                     "why": why, "grabs": src.grabs, "seconds": round(time.time() - t0, 1), "steps": steps,
                     "seen": seen, "phrases": self.title_phrases()}
+
+        if want == "episode":
+            return self._episode_scan(done, steps)
 
         # 1. the MPA card
         num, ys, reads, card_at = self.card_read()
@@ -1995,6 +2017,27 @@ class Scan:
         both = [x for x in front_win if x["imdb_id"] in ends]
         merged = both + [x for x in front_win if x not in both] + \
             [x for x in end_win if x["imdb_id"] not in {y["imdb_id"] for y in front_win}]
+        return done(None, merged[:CONTENDERS], None, "no clear winner")
+
+    def _episode_scan(self, done, steps):
+        """An episode's credits: the opening first, then the end; no MPA card."""
+        steps.append("the MPA card: skipped (an episode)")
+        r, win, why = self.front_scan()
+        steps.append("the opening credits: %s, %s" % (why, "one show" if len(win) == 1 else "%d close" % len(win)))
+        self.log(steps[-1])
+        front_win = [self._film(x, "the opening credits") for x in win]
+        if len(front_win) == 1:
+            return done(front_win[0], front_win, "the opening credits", "its opening credits (%s)" % why)
+        r, win, why = self.end_scan()
+        steps.append("the end credits: %s, %s" % (why, "one show" if len(win) == 1 else "%d close" % len(win)))
+        self.log(steps[-1])
+        end_win = [self._film(x, "the end credits") for x in win]
+        if len(end_win) == 1:
+            return done(end_win[0], end_win, "the end credits", "its end credits (%s)" % why)
+        fronts = {x["imdb_id"] for x in front_win}
+        both = [x for x in end_win if x["imdb_id"] in fronts]
+        merged = both + [x for x in front_win if x["imdb_id"] not in {y["imdb_id"] for y in both}] + \
+            [x for x in end_win if x not in both]
         return done(None, merged[:CONTENDERS], None, "no clear winner")
 
 
