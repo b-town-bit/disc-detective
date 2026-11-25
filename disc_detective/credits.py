@@ -57,9 +57,14 @@ def _rgb(f):
 
 def rows_boxes(f):
     """The rows read in a frame, top to bottom, words left to right: [(text, (x0, y0, x1, y1))]."""
-    lines = sorted(menus.rapid_lines(_rgb(f)) or [], key=lambda x: (x[1][1] + x[1][3]) / 2)
+    return [(text, box) for text, box, _ in line_rows(menus.rapid_lines(_rgb(f)) or [])]
+
+
+def line_rows(lines):
+    """OCR's lines joined into rows: those side by side on one line, left to right. [(text, box, how many
+    lines)], top to bottom."""
     rows = []
-    for text, (x0, y0, x1, y1), _ in lines:
+    for text, (x0, y0, x1, y1), *_ in sorted(lines, key=lambda x: (x[1][1] + x[1][3]) / 2):
         c, h = (y0 + y1) / 2, y1 - y0
         if rows and abs(c - rows[-1][0]) < h * 0.5:
             r = rows[-1]
@@ -67,7 +72,7 @@ def rows_boxes(f):
             r[2] = (min(r[2][0], x0), min(r[2][1], y0), max(r[2][2], x1), max(r[2][3], y1))
         else:
             rows.append([c, [(x0, text)], (x0, y0, x1, y1)])
-    return [(" ".join(t for _, t in sorted(r[1])), r[2]) for r in rows]
+    return [(" ".join(t for _, t in sorted(r[1])), r[2], len(r[1])) for r in rows]
 
 
 def rows_of(f):
@@ -112,8 +117,9 @@ def card_blocks(f):
 
 def card_rows(blocks):
     """A card's rows to read for names: each block's lines in turn (a block's heading heads the names under it),
-    and after two stacked short lines that aren't headings, the two as one ("ROMEO" over "MULLER": romeo muller).
-    [(text, box)]."""
+    and after two stacked short lines that aren't headings, the two as one ("ROMEO" over "MULLER": romeo muller);
+    and lines side by side on one line, as one row too, after the last of them (hand-lettered "FRED" "ASTAIRE",
+    read apart and blocked apart). [(text, box)]."""
     rows = []
     for blk in blocks:
         for k, (text, box, _, _) in enumerate(blk):
@@ -123,6 +129,12 @@ def card_rows(blocks):
                 a, b = norm(above), norm(text)
                 if 1 <= len(a) <= STACK_WORDS and 1 <= len(b) <= STACK_WORDS and len(a) + len(b) >= 2                         and not head_of(a) and not head_of(b):
                     rows.append(("%s %s" % (above, text), (min(abox[0], box[0]), abox[1], max(abox[2], box[2]), box[3])))
+    lines = [(text, box) for blk in blocks for text, box, _, _ in blk]
+    for text, (x0, y0, x1, y1), n in line_rows(lines):
+        if n < 2:
+            continue
+        parts = [i for i, (_, b) in enumerate(rows) if x0 <= b[0] and b[2] <= x1 and y0 <= b[1] and b[3] <= y1]
+        rows.insert(max(parts) + 1 if parts else len(rows), (text, (x0, y0, x1, y1)))
     return rows
 
 
