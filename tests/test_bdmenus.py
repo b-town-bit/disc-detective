@@ -509,3 +509,25 @@ def test_a_menu_templates_files_name_each_title_by_its_button(tmp_path):
     assert (labels["00306.mpls"]["type"], labels["00306.mpls"]["title"], labels["00306.mpls"]["exact"]) == ("Extra", "Costume Design", True)
     assert (labels["00331.mpls"]["type"], labels["00331.mpls"]["title"]) == ("Trailer", "Amazing")
     assert labels["00009.mpls"]["type"] == "Promo"
+
+
+def test_makemkvs_library_found_on_each_system(monkeypatch, tmp_path):
+    """MakeMKV's libmmbd (the unlock: menus, credits, a Play All's episodes) found on Linux and macOS too: in its
+    usual places, or beside makemkvcon wherever that's installed (its lib folder); none, None."""
+    from disc_detective import bdhdmv, core
+    lib = tmp_path / "usr" / "lib"
+    lib.mkdir(parents=True)
+    monkeypatch.setattr(bdmenus, "MMBD_DIRS", {"posix": (str(lib),), "darwin": (str(tmp_path / "Applications"),)})
+    monkeypatch.setattr(core, "find_makemkvcon", lambda: None)
+    assert bdmenus.mmbd_library("posix") is None
+    (lib / "libmmbd.so.0").write_bytes(b"")
+    assert bdmenus.mmbd_library("posix") == str(lib / "libmmbd.so.0")
+    app = tmp_path / "Tools" / "MakeMKV.app" / "Contents"           # (an app kept outside /Applications)
+    (app / "MacOS").mkdir(parents=True)
+    (app / "lib").mkdir()
+    (app / "lib" / "libmmbd.dylib").write_bytes(b"")
+    assert bdmenus.mmbd_library("darwin") is None
+    monkeypatch.setattr(core, "find_makemkvcon", lambda: str(app / "MacOS" / "makemkvcon"))
+    assert bdmenus.mmbd_library("darwin") == str(app / "lib" / "libmmbd.dylib")
+    monkeypatch.setattr(bdmenus, "mmbd_library", lambda: "found")
+    assert bdhdmv.aacs_library() == "found"                         # (the unlock asks the same lookup)

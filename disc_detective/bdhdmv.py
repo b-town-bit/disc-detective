@@ -26,12 +26,9 @@ def available():
 
 
 def aacs_library():
-    """The user's libaacs-compatible library (MakeMKV's libmmbd, where MakeMKV or VLC keeps it), or None."""
-    for d in bdmenus.decryption_dirs():
-        for name in ("libmmbd64.dll", "libmmbd.dll", "libmmbd.so.0", "libmmbd.dylib"):
-            if os.path.isfile(os.path.join(d, name)):
-                return os.path.join(d, name)
-    return None
+    """The user's libaacs-compatible library (MakeMKV's libmmbd, where MakeMKV or VLC keeps it: bdmenus.mmbd_library,
+    Linux's and macOS's places too), or None."""
+    return bdmenus.mmbd_library()
 
 
 CLEAR = (0, 0, 0, 0)            # a page drawn over nothing: laid over its video's still, the picture Edit titles shows
