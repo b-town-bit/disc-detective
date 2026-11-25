@@ -331,3 +331,23 @@ def test_credits_seen_or_none():
     assert sc.seen(None)["names"] == 3 and sc.seen(None)["any"]
     sc.frames = [{"rows": [row("Directed by", head="director")]}]
     assert sc.seen(None)["any"]
+
+
+def test_stacked_names_on_a_card():
+    """A card's name over two lines (ROMEO / MULLER) is tried as one too, within its own block; a heading line
+    isn't joined to a name."""
+    blocks = [[("WRITTEN BY", (0, 0, 9, 1), 0.04, 0.99), ("ROMEO", (0, 1, 9, 2), 0.06, 0.99), ("MULLER", (0, 2, 9, 3), 0.06, 0.99)],
+              [("AND THE", (20, 5, 29, 6), 0.04, 0.99), ("SONG BY", (20, 6, 29, 7), 0.04, 0.99),
+               ("JOHNNY", (20, 7, 29, 8), 0.06, 0.99), ("MARKS", (20, 8, 29, 9), 0.06, 0.99)]]
+    rows = [t for t, _ in credits.card_rows(blocks)]
+    assert "ROMEO MULLER" in rows and "JOHNNY MARKS" in rows
+    assert "WRITTEN BY ROMEO" not in rows and "ROMEO JOHNNY" not in rows
+
+
+def test_title_on_a_card():
+    """The biggest held lettering is the title, its small joining words kept, a smaller studio line not."""
+    blocks = [[("RUDOLPH", (0, 0, 9, 3), 0.175, 0.92), ("THE", (3, 3, 6, 4), 0.06, 1.0), ("RED-NOSED", (0, 4, 9, 6), 0.117, 0.99),
+               ("REINDEER", (0, 6, 9, 8), 0.104, 0.9), ("VIDEOCRAFT INTL. LTD.", (0, 8, 9, 9), 0.066, 0.85)]]
+    assert credits.title_lines(blocks) == ("RUDOLPH THE RED-NOSED REINDEER", 0.175)
+    assert credits.title_lines([[("n", (0, 0, 1, 1), 0.3, 0.6)]]) == (None, 0.0)          # (a shape, not sure)
+    assert credits.title_lines([[("Directed by", (0, 0, 9, 1), 0.03, 0.99)]]) == (None, 0.0)   # (a credit's size)

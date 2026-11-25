@@ -3267,12 +3267,18 @@ class App:
         else:
             di.logger.info(i18n.log("the credits named nothing ({grabs} frames in {seconds:.0f} s)",
                                     grabs=answer.get("grabs"), seconds=time.time() - t0))
+        phrases = [ph for a in answers for ph in a.get("phrases") or []]
+        if phrases:                          # (the opening's title, searched as a menu's words are)
+            di.logger.info(i18n.log("the opening's title reads: {phrases}", phrases=" / ".join(phrases)))
+        if not (win or close or phrases):
             return rep
         args.credits_answer = answer
+        shown = list(getattr(args, "menu_phrases", None) or [])
+        args.menu_phrases = shown + [ph for ph in phrases if ph not in shown]
         try:
             again = di.identify(drive, args)
         finally:
-            args.credits_answer = None
+            args.credits_answer, args.menu_phrases = None, shown or None
         for k in ("menu_raw", "menu_found", "staked_out", "detected", "bd_project", "more_films", "credits_read"):
             if k in rep and k not in again:
                 again[k] = rep[k]
