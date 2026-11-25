@@ -10,7 +10,7 @@ msgstr ""
 "Project-Id-Version: Disc Detective 0.5.dev0\n"
 "Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
 "\n"
-"POT-Creation-Date: 2026-11-24 17:17-0600\n"
+"POT-Creation-Date: 2026-11-25 07:09-0600\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -94,6 +94,15 @@ msgstr ""
 #: disc_detective/app.py
 #, python-brace-format
 msgid "scan of {drive} failed"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "the disc is already unlocked (this scan's)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the disc opened and unlocked in {seconds:.1f} s"
 msgstr ""
 
 #: disc_detective/app.py
@@ -196,11 +205,6 @@ msgstr ""
 #: disc_detective/app.py
 #, python-brace-format
 msgid "credits: {line}"
-msgstr ""
-
-#: disc_detective/app.py
-#, python-brace-format
-msgid "the disc unlocked in {seconds:.1f} s"
 msgstr ""
 
 #: disc_detective/app.py

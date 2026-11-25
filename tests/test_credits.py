@@ -354,3 +354,34 @@ def test_title_on_a_card():
     assert credits.title_lines(blocks) == ("RUDOLPH THE RED-NOSED REINDEER", 0.175)
     assert credits.title_lines([[("n", (0, 0, 1, 1), 0.3, 0.6)]]) == (None, 0.0)          # (a shape, not sure)
     assert credits.title_lines([[("Directed by", (0, 0, 9, 1), 0.03, 0.99)]]) == (None, 0.0)   # (a credit's size)
+
+
+def test_side_by_side_words_on_a_card():
+    """A hand-lettered name read a word at a time, each word its own block (FRED, ASTAIRE), is tried as one row
+    too, after its words; stacked lines stay as they were."""
+    blocks = [[("TOLD AND SUNG", (380, 440, 1310, 760), 0.1, 0.99), ("By", (690, 705, 835, 820), 0.06, 0.99)],
+              [("FRED", (390, 868, 870, 1113), 0.17, 0.99)], [("ASTAIRE", (826, 830, 1490, 1150), 0.2, 0.99)]]
+    rows = [t for t, _ in credits.card_rows(blocks)]
+    assert rows.index("FRED ASTAIRE") > rows.index("ASTAIRE")
+    assert "TOLD AND SUNG By" in rows and "By FRED" not in rows
+
+
+def test_one_unlock_a_scan(monkeypatch):
+    """A Blu-ray's opened (unlocked) once a scan, its menus and its credits sharing it; another disc, or outside a
+    scan, opened afresh."""
+    import hdmv_menus
+    from disc_detective import app as app_mod
+    opened = []
+    monkeypatch.setattr(hdmv_menus, "Disc", lambda root, aacs=None: opened.append(root) or object())
+    from disc_detective import bdhdmv
+    monkeypatch.setattr(bdhdmv, "aacs_library", lambda: None)
+    a = app_mod.App.__new__(app_mod.App)
+    rep = {"path": "E:\\", "content_hash": "AAAA"}
+    a._bd_open = {}
+    first = a.bd_disc(rep)
+    assert a.bd_disc(rep) is first and opened == ["E:\\"]
+    assert a.bd_disc({"path": "E:\\", "content_hash": "BBBB"}) is not first and len(opened) == 2
+    a._bd_open = None
+    a.bd_disc(rep)
+    a.bd_disc(rep)
+    assert len(opened) == 4

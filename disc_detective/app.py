@@ -2845,6 +2845,7 @@ class App:
         self.run_bg(self._scan_worker, drive, lab)
 
     def _scan_worker(self, drive, lab=None):
+        self._bd_open = {}               # (the Blu-ray unlocked for this scan's steps: bd_disc)
         try:
             self.wait_for_lab(lab)
             import tempfile
@@ -2880,6 +2881,28 @@ class App:
             else:
                 di.logger.exception(i18n.log("scan of {drive} failed", drive=drive))
             self.post(self.tell, lambda: self.scan_done(None, msg, gone))
+        finally:
+            self._bd_open = None
+
+    def bd_disc(self, rep, log=None):
+        """The Blu-ray in rep opened for reading (hdmv_menus.Disc: its files, an encrypted disc unlocked, about
+        14 s), once a scan: its menus' step and its credits' share it, whichever comes first opening it. Kept by
+        the disc's fingerprint, for this scan only (_scan_worker's); outside a scan, opened afresh each time."""
+        import hdmv_menus
+        from . import bdhdmv
+        kept = getattr(self, "_bd_open", None)
+        key = (rep.get("path"), rep.get("content_hash"))
+        say = log or (lambda line: di.logger.info(line))
+        if kept is not None and key in kept:
+            say(i18n.log("the disc is already unlocked (this scan's)"))
+            return kept[key]
+        t0 = time.time()
+        disc = hdmv_menus.Disc(rep["path"], aacs=bdhdmv.aacs_library())
+        say(i18n.log("the disc opened and unlocked in {seconds:.1f} s", seconds=time.time() - t0))
+        if kept is not None:
+            kept.clear()
+            kept[key] = disc
+        return disc
 
     def _program_map(self, drive, rep):
         """What a DVD's program says its menus do (menus.program_map), off the Tk thread: its menu
@@ -3238,6 +3261,8 @@ class App:
                 casts = credits.Casts(args.tmdb_key if not args.offline else None,
                                       os.path.join(args.imdb_dir, credits.CASTS_FILE))
                 certs, disc = credits.mpa_load(args.imdb_dir), None
+                if rep.get("format") != "DVD":        # (unlocked once a scan: the menus' step may have already)
+                    disc = self.bd_disc(rep, say)
                 for title in titles:
                     if rep.get("format") == "DVD":     # (VLC plays it: its own decryption)
                         src = credits.DvdSource(rep["path"], title["id"], self.credits_vlc(),
@@ -3245,9 +3270,6 @@ class App:
                                                 check=self.gone_check(drive))
                     else:
                         src = credits.DiscSource(rep["path"], title["id"], disc=disc, check=self.gone_check(drive))
-                        if disc is None:
-                            say(i18n.log("the disc unlocked in {seconds:.1f} s", seconds=time.time() - t0))
-                        disc = src.disc            # (unlocked once for all its films)
                     say(i18n.log("{title}:", title=title["id"]))
                     try:
                         answers.append(credits.Scan(ix, certs, casts, log=say).scan(src))
@@ -3751,6 +3773,7 @@ class App:
                 raise menus.Unsupported("hdmv-menus isn't installed")
             try:
                 got = bdhdmv.read(root, rep.get("titles") or [], menus.menu_dir(rep["content_hash"]), log, progress=progress,
+                                  opener=lambda: self.bd_disc(rep, log),
                                   tv=rep.get("kind") == "tv",
                                   # (a quick crawl, each title's best button; every one, if Settings ask)
                                   scope="language" if self.settings.get("menu_every_title") else "titles",
