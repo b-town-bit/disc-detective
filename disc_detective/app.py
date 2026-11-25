@@ -436,6 +436,22 @@ def all_labels(rep):
     return dict(rep.get("detected") or {}, **(rep.get("labels") or {}))
 
 
+CREDITS_GUESSES = 6           # (the scan's likeliest guesses handed to the credits: an opening's title they name)
+
+
+def credits_guesses(rep):
+    """What the disc's thought to be already, for the credits (credits.Scan's candidates): the scan's likeliest
+    films, a collection's own films among them, or its shows on a show's disc -- [{imdb_id, name, year, runtime}],
+    the likeliest first."""
+    tv = rep.get("kind") == "tv"
+    out = []
+    for c in rep.get("candidates") or []:
+        for x in (c.get("items") or []) if c.get("kind") == "collection" else [c]:
+            if x.get("imdb_id") and x.get("name") and (c.get("kind") == "tv") == tv and x["imdb_id"] not in                     {y["imdb_id"] for y in out}:
+                out.append({k: x.get(k) for k in ("imdb_id", "name", "year", "runtime")})
+    return out[:CREDITS_GUESSES]
+
+
 def credits_together(answers):
     """The credits of each of a disc's films read (App._credits_seen: credits.Scan's answers) as one: one answer
     as it is; several naming the same film (its cuts), that film, the first's; several films (a double feature),
@@ -3273,6 +3289,9 @@ class App:
             di.logger.info(i18n.log("the film's credits weren't read: IMDb's credits aren't downloaded yet"))
             return rep
         want = "episode" if rep.get("kind") == "tv" else "film"     # (what each title's thought to be)
+        guesses = credits_guesses(rep)
+        words = [re.sub(r"[_.]+", " ", rep.get("label") or "")] + list(getattr(args, "menu_phrases", None) or []) +             [x.get("name") or "" for v in (rep.get("menu_found") or {}).values() if isinstance(v, list)
+             for x in v if isinstance(x, dict)]                # (the disc's own words: its label's, its menus')
         from . import credits
         di.step("footage")
         t0 = time.time()
@@ -3295,7 +3314,8 @@ class App:
                         src = credits.DiscSource(rep["path"], title["id"], disc=disc, check=self.gone_check(drive))
                     say(i18n.log("{title}:", title=title["id"]))
                     try:
-                        answers.append(credits.Scan(ix, certs, casts, log=say).scan(src, want=want))
+                        answers.append(credits.Scan(ix, certs, casts, log=say).scan(src, want=want, candidates=guesses,
+                                                                                    words=words))
                     finally:
                         src.close()
             finally:
