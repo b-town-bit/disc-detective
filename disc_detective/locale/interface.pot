@@ -10,7 +10,7 @@ msgstr ""
 "Project-Id-Version: Disc Detective 0.5.dev0\n"
 "Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
 "\n"
-"POT-Creation-Date: 2026-11-24 16:39-0600\n"
+"POT-Creation-Date: 2026-11-24 19:10-0600\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -2539,9 +2539,9 @@ msgstr ""
 
 #: disc_detective/app.py
 msgid ""
-"When nothing else names a Blu-ray's film for sure, the scan reads its "
-"rating card and credits off the disc (usually under a minute, a few "
-"minutes at most)."
+"When nothing else names a disc's film for sure, the scan reads its rating"
+" card and credits off the disc (usually under a minute, a few minutes at "
+"most; a DVD's through VLC)."
 msgstr ""
 
 #: disc_detective/app.py

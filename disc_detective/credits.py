@@ -21,6 +21,7 @@ known film in the window's order, never as a winner.
 Built from the 2026-11 spike over a Plex library of 333 films: 311 right winners, 12 right in the window,
 0 wrong winners."""
 import collections
+import ctypes
 import json
 import os
 import re
@@ -198,6 +199,9 @@ class FileSource:
             return None
         return np.frombuffer(out[:w * h * 3], np.uint8).reshape(h, w, 3)
 
+    def close(self):
+        pass
+
 
 DISC_AHEAD = 0.7                    # (s past the wanted time, read on to the entry point beyond it)
 DISC_READ_MIN, DISC_READ_MAX = 2 * 2 ** 20, 12 * 2 ** 20   # (bytes read for a frame: at least, and when the map ends)
@@ -269,6 +273,9 @@ class DiscSource(FileSource):
             return None
         return np.frombuffer(out[:w * h * 3], np.uint8).reshape(h, w, 3)
 
+    def close(self):
+        pass
+
     def _decode(self, clip, off, length, delta, w, h):
         """A clip's bytes from off read and decoded on delta s: the picture's raw bytes, or b""."""
         try:
@@ -280,6 +287,89 @@ class DiscSource(FileSource):
                                "-map", "0:v:0", "-frames:v", "1", "-vf", "scale=%d:%d" % (w, h), "-f", "rawvideo",
                                "-pix_fmt", "bgr24", "pipe:"], input=data, capture_output=True,
                               **core.NO_CONSOLE).stdout if data else b""
+
+
+DVD_OPEN_WAIT = 30                  # (s for VLC's first picture of the title: the disc unlocked, its region checked)
+DVD_PLAY_IN = 3                     # (s of the title played before it's paused for seeks)
+DVD_PAUSE = 0.3                     # (s for the pause to settle)
+DVD_SAME = 1.2                      # (s for the picture to change after a seek: paused, a new one comes in about half
+                                    #  a second; none by then, the new place looks as the old did)
+
+
+class _Chapter(ctypes.Structure):
+    _fields_ = [("offset", ctypes.c_int64), ("duration", ctypes.c_int64), ("name", ctypes.c_char_p)]
+
+
+class DvdSource(FileSource):
+    """A DVD's title (a drive or a folder, "Title 3"), its frames read off the disc by the user's own VLC (libvlc,
+    menus.Vlc: its decryption, the film's sectors being scrambled): the title played, then paused, each frame one
+    seek and the picture VLC draws for it (in about half a second), widened from the disc's 720 x 480 to its
+    display shape (16:9 or 4:3). Chapters as VLC lists them. One seek a frame, nothing ripped."""
+
+    def __init__(self, root, title, vlc_dir, aspect=None, check=None):
+        n = int(re.search(r"\d+", str(title)).group())
+        self.path, self.check = "%s Title %d" % (root, n), check
+        self.v = menus.Vlc(vlc_dir)
+        L = self.v.lib
+        L.libvlc_media_player_set_pause.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        try:
+            self.v.open("%s#%d" % (menus.dvd_mrl(root), n))
+            t0 = time.time()
+            # (played a few seconds in first: paused any sooner, a seek's picture never comes, only the black
+            #  it opened on drawn again)
+            while self.v.state()["time_ms"] < DVD_PLAY_IN * 1000 and time.time() - t0 < DVD_OPEN_WAIT:
+                if check:
+                    check()
+                time.sleep(0.05)
+            if not self.v.frames:
+                raise OSError("VLC drew nothing of title %d" % n)
+            self.dur = self.v.length_ms() / 1000.0        # (asked while it plays: asked paused, its seeks
+            self.chapters = self._chapters(n)              #  drew nothing new)
+            L.libvlc_media_player_set_pause(self.v.mp, 1)
+            time.sleep(DVD_PAUSE)
+        except BaseException:
+            self.v.close()
+            raise
+        self.w, self.h = 1920, 1440 if aspect == "4:3" else 1080
+        self.grabs, self.grab_s, self.keyframes = 0, 0.0, False
+
+    def _chapters(self, n):
+        """The title's chapter starts, s (VLC's chapter list), the first (0) left out."""
+        L, v = self.v.lib, self.v
+        arr = ctypes.POINTER(ctypes.POINTER(_Chapter))()
+        L.libvlc_media_player_get_full_chapter_descriptions.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.POINTER(ctypes.POINTER(_Chapter)))]
+        L.libvlc_chapter_descriptions_release.argtypes = [ctypes.POINTER(ctypes.POINTER(_Chapter)), ctypes.c_uint]
+        got = L.libvlc_media_player_get_full_chapter_descriptions(v.mp, -1, ctypes.byref(arr))
+        out = [arr[i].contents.offset / 1000.0 for i in range(max(0, got))]
+        if got > 0:
+            L.libvlc_chapter_descriptions_release(arr, got)
+        return [c for c in out if c > 0]
+
+    def frame(self, t, small=False):
+        import numpy as np
+        if self.check:
+            self.check()
+        s = time.time()
+        self.grabs += 1
+        w, h = (960, self.h // 2) if small else (self.w, self.h)
+        with self.v.lock:
+            before = bytes(self.v.buf)
+        self.v.seek(min(max(0.0, t), self.dur - 0.5) * 1000)
+        # (a paused VLC draws the picture before over and over till the new one's decoded: the picture changing is
+        #  the sign; none in DVD_SAME s, the new place looks the same -- black to black -- and is taken as it is)
+        while time.time() - s < DVD_SAME:
+            time.sleep(0.01)
+            with self.v.lock:
+                if self.v.buf.raw != before:
+                    break
+        img = self.v.frame()
+        self.grab_s += time.time() - s
+        f = _cv2().cvtColor(np.asarray(img), _cv2().COLOR_RGB2BGR)
+        return _cv2().resize(f, (w, h), interpolation=_cv2().INTER_CUBIC)
+
+    def close(self):
+        self.v.close()
 
 
 # ---- the data: IMDb's credits, the MPA numbers, TMDB's casts --------------------------------------------------

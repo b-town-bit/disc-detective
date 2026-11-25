@@ -3185,7 +3185,7 @@ class App:
             di.logger.info(i18n.log("its titles are {films_apart} films' worth of video, one named: another film?", films_apart=rep["films_apart"]))
         return rep
 
-    CREDITS_FORMATS = ("Blu-ray",)       # (a DVD's frames: to come, through VLC)
+    CREDITS_FORMATS = ("Blu-ray", "DVD")  # (a DVD's frames through your VLC: credits.DvdSource)
 
     def credits_wanted(self, rep):
         """Whether the scan reads the film's own credits (Settings > Disc, "Use credits to help identify", on by
@@ -3195,9 +3195,16 @@ class App:
             return False
         if rep.get("format") not in self.CREDITS_FORMATS or rep.get("kind") == "tv" or rep.get("extras_disc"):
             return False
+        if rep.get("format") == "DVD" and not self.credits_vlc():
+            return False
         if rep.get("personal_hit") or (rep.get("discdb") or {}).get("hit"):
             return False
         return not di.is_probable(rep.get("candidates"))
+
+    def credits_vlc(self):
+        """VLC's folder, for a DVD's frames (its decryption, the film's sectors scrambled), or None."""
+        from . import menus
+        return menus.find_vlc(self.settings.get("vlc") or None)
 
     @staticmethod
     def credits_titles(rep):
@@ -3232,12 +3239,20 @@ class App:
                                       os.path.join(args.imdb_dir, credits.CASTS_FILE))
                 certs, disc = credits.mpa_load(args.imdb_dir), None
                 for title in titles:
-                    src = credits.DiscSource(rep["path"], title["id"], disc=disc, check=self.gone_check(drive))
-                    if disc is None:
-                        say(i18n.log("the disc unlocked in {seconds:.1f} s", seconds=time.time() - t0))
-                    disc = src.disc                # (unlocked once for all its films)
+                    if rep.get("format") == "DVD":     # (VLC plays it: its own decryption)
+                        src = credits.DvdSource(rep["path"], title["id"], self.credits_vlc(),
+                                                aspect=(title.get("video_info") or {}).get("aspect"),
+                                                check=self.gone_check(drive))
+                    else:
+                        src = credits.DiscSource(rep["path"], title["id"], disc=disc, check=self.gone_check(drive))
+                        if disc is None:
+                            say(i18n.log("the disc unlocked in {seconds:.1f} s", seconds=time.time() - t0))
+                        disc = src.disc            # (unlocked once for all its films)
                     say(i18n.log("{title}:", title=title["id"]))
-                    answers.append(credits.Scan(ix, certs, casts, log=say).scan(src))
+                    try:
+                        answers.append(credits.Scan(ix, certs, casts, log=say).scan(src))
+                    finally:
+                        src.close()
             finally:
                 ix.close()
         except SystemExit:
@@ -7558,8 +7573,8 @@ class SettingsDialog:
         ttk.Checkbutton(f, text=_("Use credits to help identify"), variable=self.use_credits).grid(
             row=r, column=0, columnspan=3, sticky="w", pady=(6, 0))
         r += 1
-        ttk.Label(f, text=_("When nothing else names a Blu-ray's film for sure, the scan reads its rating card and "
-                          "credits off the disc (usually under a minute, a few minutes at most)."),
+        ttk.Label(f, text=_("When nothing else names a disc's film for sure, the scan reads its rating card and credits "
+                          "off the disc (usually under a minute, a few minutes at most; a DVD's through VLC)."),
                   style="Sub.TLabel", wraplength=420, justify="left").grid(row=r, column=0, columnspan=3, sticky="w")
         r += 1
         self.detect.trace_add("write", lambda *a: self.show_in_scan())

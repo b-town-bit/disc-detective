@@ -285,13 +285,16 @@ def test_credits_asked_only_when_nothing_is_sure():
     feature = {"id": "00800.mpls", "role": Role.FEATURE, "duration": 7200}
     rep = {"path": "E:\\", "format": "Blu-ray", "kind": "movie", "discdb": {"hit": None}, "titles": [feature],
            "candidates": [_cand(1, "A", 62), _cand(2, "B", 58)]}
-    wanted = lambda r, **st: app.App.credits_wanted(types.SimpleNamespace(**dict(vars(me), settings=st)), r)
+    wanted = lambda r, vlc="C:/VLC", **st: app.App.credits_wanted(
+        types.SimpleNamespace(**dict(vars(me), settings=st, credits_vlc=lambda: vlc)), r)
     assert wanted(rep)
     assert not wanted(rep, use_credits=False)
     assert not wanted(dict(rep, candidates=[_cand(1, "A", 80)]))
     assert not wanted(dict(rep, personal_hit=True))
     assert not wanted(dict(rep, kind="tv"))
-    assert not wanted(dict(rep, format="DVD"))
+    assert wanted(dict(rep, format="DVD"))                     # (a DVD's through VLC)
+    assert not wanted(dict(rep, format="DVD"), vlc=None)
+    assert not wanted(dict(rep, format="Ultra HD"))
     assert app.App.credits_titles(rep) == [feature]
     extra = {"id": "00001.mpls", "role": Role.EXTRA, "duration": 1200}
     copy = {"id": "00002.mpls", "role": Role.DUPLICATE, "duration": 7200}
