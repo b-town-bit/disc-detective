@@ -615,3 +615,14 @@ def test_a_series_prefix_set_aside_when_the_disc_shows_it():
     s.disc_words = frozenset()
     s.frames = [{"t": "0:00:10", "rows": [{"text": "WALLACE & GROMIT"}]}]   # (or its opening says so)
     assert s.title_matches() == {112691: "CLOSE SHAVE"}
+
+
+def test_a_title_held_is_credits_seen():
+    """A title with no card, no crawl, no heading and a name or two, but its title held on screen (a short of crew-only
+    cards): credits seen, not "most likely an extra"."""
+    s = _titled([])
+    s.frames, s.crawl_at = [{"t": "0:00:30", "rows": [{"text": "X", "got": ["nick park"], "person": True, "head": None}]}], None
+    assert s.seen(None)["any"] is False
+    s.titles = [[0.3, 20.0, "CLOSE SHAVE", 3]]
+    seen = s.seen(None)
+    assert seen["title"] and seen["any"]

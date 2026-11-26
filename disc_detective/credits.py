@@ -2131,13 +2131,15 @@ class Scan:
     def seen(self, card_at):
         """What of a title's credits was seen, whether or not they named a film: {"card": the rating card's logo,
         "crawl": end credits found, "names": the different people read (named in IMDb's index, any film's),
-        "headings": rows a credit's heading, "any": any of it -- a card, a crawl, a heading, or SEEN_NAMES
-        names}. None of it: a title with no credits, most likely not a film (an extra), never by itself."""
+        "headings": rows a credit's heading, "title": a title held on screen (title_phrases), "any": any of it -- a
+        card, a crawl, a heading, a title, or SEEN_NAMES names}. None of it: a title with no credits, most likely not
+        a film (an extra), never by itself. (A short of crew-only cards, Wallace & Gromit's, has its title.)"""
         names = {k for fr in self.frames for x in fr["rows"] if x.get("person") for k in x["got"]
                  if not k.startswith("char ")}
         heads = sum(1 for fr in self.frames for x in fr["rows"] if x.get("head"))
-        out = {"card": card_at is not None, "crawl": self.crawl_at is not None, "names": len(names), "headings": heads}
-        out["any"] = out["card"] or out["crawl"] or heads > 0 or len(names) >= SEEN_NAMES
+        out = {"card": card_at is not None, "crawl": self.crawl_at is not None, "names": len(names), "headings": heads,
+               "title": bool(getattr(self, "titles", None)) and bool(self.title_phrases())}
+        out["any"] = out["card"] or out["crawl"] or heads > 0 or out["title"] or len(names) >= SEEN_NAMES
         return out
 
     def scan(self, src, want="film", candidates=None, words=None):
