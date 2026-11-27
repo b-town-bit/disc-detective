@@ -279,6 +279,17 @@ TITLE_AWAY_W = 0.6          # (a title with no credit text near it, TITLE_AMONG_
                             #  a sign or a magazine in a scene; a title card sits among the credits)
 TITLE_TYPES = ("movie", "tvMovie", "video", "tvSpecial", "short", "tvShort")
 TITLE_SERIES = ("tvSeries", "tvMiniSeries")
+TV_SLOT_TYPES = ("tvMovie", "tvSpecial")
+TV_SLOT_SHORT = 0.25        # (a TV movie's or special's IMDb runtime is often its broadcast slot, ads in: its file
+                            #  may be this much shorter -- Cricket on the Hearth, 60 in IMDb, 49.5 on the disc)
+
+
+def runtime_fits(runtime, minutes, typ=None):
+    """A title's IMDb runtime fits a file of these minutes: within max(6 min, 10%); a TV movie or special's also up
+    to TV_SLOT_SHORT longer than the file (its broadcast slot), never the file longer."""
+    if abs(runtime - minutes) <= max(6, 0.1 * runtime):
+        return True
+    return typ in TV_SLOT_TYPES and minutes < runtime <= minutes / (1 - TV_SLOT_SHORT)
 
 
 class TitleWords:
@@ -454,7 +465,8 @@ def name_scores(con, text, minutes, types=TITLE_TYPES):
     lo, hi = min(minutes - 6, minutes / 1.1), max(minutes + 6, minutes / 0.9)
     sql = ("SELECT t.id, t.title, t.alt, COALESCE(r.votes, 0) FROM titles_fts f JOIN titles t ON t.id = f.rowid "
            "LEFT JOIN ratings r ON r.id = t.id WHERE titles_fts MATCH ? AND t.type IN (%s) "
-           "AND t.runtime BETWEEN ? AND ? ORDER BY 4 DESC LIMIT %d" % (",".join("?" * len(types)), TITLE_ROWS))
+           "AND (t.runtime BETWEEN ? AND ? OR t.type IN %s AND t.runtime BETWEEN ? AND ?) ORDER BY 4 DESC LIMIT %d"
+           % (",".join("?" * len(types)), repr(TV_SLOT_TYPES), TITLE_ROWS))   # (a TV slot: the file shorter)
     queries = []
     for words in reads:
         slots = []
@@ -472,7 +484,7 @@ def name_scores(con, text, minutes, types=TITLE_TYPES):
     rows = {}
     for fq in dict.fromkeys(queries):
         try:
-            for r in con.execute(sql, (fq, *types, lo, hi)):
+            for r in con.execute(sql, (fq, *types, lo, hi, minutes, minutes / (1 - TV_SLOT_SHORT))):
                 rows[r[0]] = r
         except Exception:
             pass
@@ -1528,8 +1540,8 @@ class Scan:
     def _weigh(self, t, dur, base, people):
         title, year, typ, rt = self.ix.title(t)
         m = dur / 60
-        fits = rt and abs(rt - m) <= 4
-        w = base * self.year_factor(t) * (0.5 if not fits and self.low_kind(typ, title) else 1.0)
+        fits = rt and (abs(rt - m) <= 4 or typ in TV_SLOT_TYPES and m < rt <= m / (1 - TV_SLOT_SHORT))
+        w = base                                    # (a TV special's IMDb runtime its broadcast slot, ads in) * self.year_factor(t) * (0.5 if not fits and self.low_kind(typ, title) else 1.0)
         w += self.year_points(year)
         if fits:
             w += 1.5
@@ -2479,7 +2491,8 @@ class Scan:
         read = list(dict.fromkeys(x[2] for x in self.titles
                                   if held[x[2]] >= TITLE_HELD and not self.not_titles(x[2])))
         m = self.src.dur / 60
-        fits = lambda c: not c.get("runtime") or abs(c["runtime"] - m) <= max(6, 0.1 * c["runtime"])
+        fits = lambda c: not c.get("runtime") or runtime_fits(c["runtime"], m) or c["runtime"] > m and runtime_fits(
+            c["runtime"], m, c.get("type") or self.ix.title(int(c["imdb_id"][2:]))[2])   # (its type: a TV slot)
         out = {}
         for text in read:                 # (as long as the title too: "Santa Claus" isn't The Santa Clause's, 97 min)
             hits = [c for c in self.candidates if self.named_like(text, c["name"]) >= TITLE_MATCH and fits(c)]

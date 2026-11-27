@@ -580,7 +580,8 @@ NAMED = [(1, "Wait Until Dark", None, "movie", 108, 37000), (2, "Dark", None, "m
          42000), (7, "Peter Pan", None, "movie", 77, 168000), (8, "Arsenic and Old Lace", None, "movie", 118, 78000),
          (9, "Results", None, "movie", 110, 8000), (10, "Help", None, "tvSeries", 25, 900),
          (11, "Wallace & Gromit: A Close Shave", None, "short", 30, 48000),
-         (12, "Timmy's Gift: A Precious Moments Christmas", None, "video", 23, 120)]
+         (12, "Timmy's Gift: A Precious Moments Christmas", None, "video", 23, 120),
+         (13, "Cricket on the Hearth", None, "tvMovie", 60, 400), (14, "Hearth and Home", None, "movie", 60, 900)]
 
 
 @pytest.fixture(scope="module")
@@ -624,6 +625,11 @@ def test_films_named_by_a_title_misread(named):
     assert credits.films_named(named, "CLOSE SHAVE", 30, seen={"with", "wallace", "gromlt"})[0] == (1.0, 11)
     assert credits.films_named(named, "Timmy's Gift", 23, seen={"timmy", "gift"}) == []
     assert credits.films_named(named, "Timmy's Gift", 23, seen={"precious", "moments", "christmas"})[0][1] == 12
+    # (a TV movie's IMDb runtime, its broadcast slot: the file up to a quarter shorter, never longer; a film's not)
+    assert first("GRICKET On The HEARTH", 49.5) == 13
+    assert credits.films_named(named, "HEARTH AND HOME", 49.5) == []
+    assert credits.runtime_fits(60, 49.5, "tvMovie") and not credits.runtime_fits(60, 49.5, "movie")
+    assert not credits.runtime_fits(60, 44, "tvSpecial") and not credits.runtime_fits(40, 49.5, "tvMovie")
     assert credits.name_score(credits.norm("CHARLIE hristmas"), credits.norm("A Charlie Brown Christmas")) > \
         credits.name_score(credits.norm("CHARLIE hristmas"), credits.norm("Charlie"))
     # (a title read is all or part of a real title: a word between the name's words that it lacks, no; most of the
@@ -686,6 +692,11 @@ def test_a_title_named_like_a_guess_boosts_its_film():
     assert s.title_matches() == {}
     s.years = {1990: 1.0}                                           # (its copyright year picks one)
     assert s.title_matches() == {2: "RUDALPH THE RED-NOSED REINDEER"}
+    s.src.dur, s.years = 38 * 60, {}                                # (a TV special's IMDb runtime its broadcast
+    s.candidates = [dict(rudolph, type="tvMovie")]                  #  slot: the file shorter fits; a film's not)
+    assert s.title_matches() == {58536: "RUDALPH THE RED-NOSED REINDEER"}
+    s.candidates = [dict(rudolph, type="movie")]
+    assert s.title_matches() == {}
 
 
 def test_a_short_or_an_old_film_reads_its_opening_first(monkeypatch):
