@@ -794,3 +794,19 @@ def test_an_anti_piracy_warning_is_no_credits():
                                      "Unauthorized duplication is prohibited"])
     assert not credits.warning_card(["THE WARNING", "Directed by"])
     assert not credits.warning_card(["FBI Code 98"])
+
+
+def test_end_credits_on_still_cards_are_found():
+    """End credits on still cards over film, no crawl (The Scarlet Pimpernel's cast and crew pages): a credits card
+    near the end starts them as a crawl would; a frame of film or a name or two doesn't."""
+    s = credits.Scan.__new__(credits.Scan)
+    s.src = type("Src", (), {"dur": 1000.0, "chapters": []})()
+    s.head_start = lambda: (None, 0.0, set())
+    s.crawl = lambda t: (False, 0.0, t)
+    s.credits_at = lambda t: (t >= 920, 0.0)
+    s.back_over_breaks = lambda start, speed: (start, speed)
+    s.still_kind = lambda t, a: "card" if a >= 920 else "film"
+    start, speed = s.find_start()
+    assert 918 <= start <= 922 and speed == 0.0
+    s.still_kind = lambda t, a: "sparse"
+    assert s.find_start() == (None, 0.0)

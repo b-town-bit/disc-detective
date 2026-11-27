@@ -1465,23 +1465,28 @@ class Scan:
             if self.first_crawl is None or t < self.first_crawl:
                 self.first_crawl = t
             return "crawl", sp
+        return self.still_kind(t, a), 0.0
+
+    def still_kind(self, t, a):
+        """What a still frame a (at t) is: "card" a card of credits (RICH_ROWS name rows or more, or a cast
+        heading), "sparse" a name or two (kept in self.sparse: searched past), or "film"."""
         if a is None or len(lines_of(a, self.src.h)) < 1:
-            return "film", 0.0
+            return "film"
         rows = [r for r in rows_of(a) if norm(r)]
         if warning_card(rows):
-            return "film", 0.0           # (an anti-piracy warning: no credits)
+            return "film"                # (an anti-piracy warning: no credits)
         names = [r for r in rows if sum(1 for x in norm(r) if len(x) >= 2) >= 2]
         known = [r for r in names if self.ix.names_person(r)]
         jobs = [r for r in rows if set(norm(r)) & JOB_WORDS]
         heading = any(set(norm(r)) & CAST_WORDS for r in rows)
         if heading and (known or names) or len(names) >= RICH_ROWS and (len(known) >= 2 or jobs):
-            return "card", 0.0
+            return "card"
         names = known if known or not jobs else [r for r in names if r not in jobs]
         if names:
             if not any(abs(t - x) < 1 for x, _ in self.sparse):
                 self.sparse.append((t, rows))
-            return "sparse", 0.0
-        return "film", 0.0
+            return "sparse"
+        return "film"
 
     def credits_at(self, t):
         """Is t in the credits proper (a crawl or a full card); a sparse card is passed over, not the start."""
@@ -2078,9 +2083,9 @@ class Scan:
         return hi, speed
 
     def find_start(self):
-        """The credits' start: a crawl near the end (the card walk's, else probes 15 s, 30 s ... from it), then back
-        chapter by chapter while a chapter's start is credits (two without: they begin after the later), halved,
-        then back over breaks. (start or None, speed)"""
+        """The credits' start: a crawl or a card of credits near the end (the card walk's crawl, else probes 15 s,
+        30 s ... from it), then back chapter by chapter while a chapter's start is credits (two without: they begin
+        after the later), halved, then back over breaks. (start or None, speed)"""
         src = self.src
         floor = src.dur * 0.80
         hi, speed, blank = self.head_start()
@@ -2090,8 +2095,10 @@ class Scan:
                 break
             if any(abs(back - d) <= 1 for d in blank):     # (the card walk saw no text here: no crawl to find)
                 continue
-            on, speed, _ = self.crawl(t)
-            if on:
+            on, speed, a = self.crawl(t)
+            if not on and self.still_kind(t, a) == "card":
+                on, speed = True, 0.0     # (credits on still cards: as much the credits as a crawl, the crawl only
+            if on:                        #  the usual sign -- The Scarlet Pimpernel's cast and crew pages over film)
                 hi = t
                 break
         if hi is None:
