@@ -850,16 +850,21 @@ MMBD_DIRS = {"darwin": ("/Applications/MakeMKV.app/Contents/lib",), "posix": ("/
 # (macOS and Linux names and places as MakeMKV installs them: untested)
 
 
-def mmbd_library():
-    """MakeMKV's libmmbd, as installed with it: the file (the 64-bit one for a 64-bit Python), or None."""
+def mmbd_library(system=None):
+    """MakeMKV's libmmbd, as installed with it: the file (the 64-bit one for a 64-bit Python), or None. Linux and
+    macOS: its usual places, and beside makemkvcon wherever it is (its lib folder: MakeMKV.app/Contents/lib from
+    Contents/MacOS, /usr/local/lib from /usr/local/bin). system: "nt", "darwin" or "posix" (this one's, if None)."""
     import sys
-    system = "nt" if os.name == "nt" else ("darwin" if sys.platform == "darwin" else "posix")
+    from . import core
+    system = system or ("nt" if os.name == "nt" else ("darwin" if sys.platform == "darwin" else "posix"))
     names = MMBD_NAMES[system]
     if system == "nt":
         names = names[:1] if sys.maxsize > 2 ** 32 else names[1:]
         dirs = decryption_dirs()
     else:
-        dirs = list(MMBD_DIRS[system])
+        exe = core.find_makemkvcon()
+        here = os.path.dirname(exe) if exe else None
+        dirs = list(MMBD_DIRS[system]) + ([here, os.path.join(os.path.dirname(here), "lib")] if here else [])
     for d in dirs:
         for n in names:
             if os.path.isfile(os.path.join(d, n)):

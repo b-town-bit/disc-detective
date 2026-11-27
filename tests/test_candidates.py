@@ -493,6 +493,13 @@ def test_each_title_searched_by_its_own_menu(monkeypatch):
     assert [(i["title_id"], i["year"]) for i in df["items"]] == [("Title 1", 1974), ("Title 2", 2000)]
     assert [m for _, m in asked] == [103, 118]                       # (each its own length)
     assert df["why"].startswith("each film named by its own menu")
+    assert df["sure"]                                               # (each title's words name it clearly: probable)
+    # (named, but only just: a best guess still)
+    loose = [dict(f, name="Gone in Sixty Secs", name_score=0.8) for f in films]
+    monkeypatch.setattr(core, "imdb_candidates", lambda con, q, k, f: sorted(
+        loose, key=lambda c: abs(c["runtime"] - f["feature_minutes"])))
+    df = core.films_by_title(None, titles, {"Title 1": ["GONE IN 60 SECONDS"], "Title 2": ["GONE IN 60 SECONDS"]}, {})
+    assert df is None or not df["sure"]
     monkeypatch.setattr(core, "imdb_candidates", lambda con, q, k, f: [dict(films[0], name_score=0.5)])
     assert core.films_by_title(None, titles, {"Title 1": ["X"], "Title 2": ["Y"]}, {}) is None
 

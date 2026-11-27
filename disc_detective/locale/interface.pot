@@ -7,17 +7,17 @@
 #, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: Disc Detective 0.4.dev0\n"
+"Project-Id-Version: Disc Detective 0.5.dev0\n"
 "Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
 "\n"
-"POT-Creation-Date: 2026-11-18 11:02-0600\n"
+"POT-Creation-Date: 2026-11-27 11:40-0600\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.18.0\n"
+"Generated-By: Babel 2.19.0\n"
 
 #: disc_detective/app.py
 msgid "Disc Detective — Optical Forensics · 221B"
@@ -1064,10 +1064,6 @@ msgid "Hindi"
 msgstr ""
 
 #: disc_detective/app.py
-msgid "lang"
-msgstr ""
-
-#: disc_detective/app.py
 #, python-brace-format
 msgid "{language} commentary"
 msgstr ""
@@ -1224,10 +1220,6 @@ msgstr ""
 #: disc_detective/app.py
 #, python-brace-format
 msgid "Copy of {title}"
-msgstr ""
-
-#: disc_detective/app.py disc_detective/core.py
-msgid "role"
 msgstr ""
 
 #: disc_detective/app.py
@@ -1768,10 +1760,6 @@ msgstr ""
 
 #: disc_detective/app.py
 msgid "Pick the film from the IMDb list."
-msgstr ""
-
-#: disc_detective/app.py
-msgid "type"
 msgstr ""
 
 #: disc_detective/app.py
@@ -2410,10 +2398,6 @@ msgstr ""
 msgid "Step {step} of {total}"
 msgstr ""
 
-#: disc_detective/app.py disc_detective/core.py
-msgid "head"
-msgstr ""
-
 #: disc_detective/app.py
 msgid "Find its TMDB id"
 msgstr ""
@@ -2531,6 +2515,17 @@ msgstr ""
 msgid ""
 "Read menus for copies and Play Alls too (slower: a picture for every "
 "title)"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "Use credits to help identify"
+msgstr ""
+
+#: disc_detective/app.py
+msgid ""
+"When nothing else names a disc's film for sure, the scan reads its rating"
+" card and credits off the disc (usually under a minute, a few minutes at "
+"most; a DVD's through VLC)."
 msgstr ""
 
 #: disc_detective/app.py
@@ -2693,10 +2688,6 @@ msgid "Found at {path}, but it won't run: its install may not have finished."
 msgstr ""
 
 #: disc_detective/app.py
-msgid "for"
-msgstr ""
-
-#: disc_detective/app.py
 msgid "Download page"
 msgstr ""
 
@@ -2803,6 +2794,13 @@ msgstr ""
 #: disc_detective/core.py
 #, python-brace-format
 msgid "downloading IMDb dataset {name} ..."
+msgstr ""
+
+#: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"couldn't fetch the MPA certificate numbers ({error}): tried again next "
+"time"
 msgstr ""
 
 #: disc_detective/core.py
@@ -3986,6 +3984,15 @@ msgstr[1] ""
 msgid ""
 "give a disc path, or one of --list, --to-submit, --to-improve, --corpus, "
 "--set-truth, --import-samples, --packet"
+msgstr ""
+
+#: disc_detective/credits.py
+msgid "fetching the MPA certificate numbers ..."
+msgstr ""
+
+#: disc_detective/credits.py
+#, python-brace-format
+msgid "MPA certificate numbers: {count}"
 msgstr ""
 
 #: disc_detective/tools.py

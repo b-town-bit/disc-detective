@@ -20,7 +20,7 @@ dependencies = ["Pillow", "rapidocr", "onnxruntime", "hdmv-menus>=0.1.3,<0.2"]
 
 [project.optional-dependencies]
 # Babel: the translations' templates and catalogs (release/messages.py)
-dev = ["pytest", "pytest-timeout", "ruff", "babel"]
+dev = ["pytest", "pytest-timeout", "ruff", "babel>=2.19"]   # (2.19: no key inside _(TABLE["key"]) taken as a message)
 # Windows' own OCR for menu buttons (after RapidOCR; tesseract when neither finds words)
 windows-ocr = [
     "winrt-runtime; sys_platform == 'win32'",

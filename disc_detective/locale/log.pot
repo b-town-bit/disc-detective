@@ -7,17 +7,17 @@
 #, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: Disc Detective 0.4.dev0\n"
+"Project-Id-Version: Disc Detective 0.5.dev0\n"
 "Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
 "\n"
-"POT-Creation-Date: 2026-11-19 14:48-0600\n"
+"POT-Creation-Date: 2026-11-27 11:40-0600\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.18.0\n"
+"Generated-By: Babel 2.19.0\n"
 
 #: disc_detective/app.py
 #, python-brace-format
@@ -74,6 +74,10 @@ msgid "refreshing IMDb's credits failed"
 msgstr ""
 
 #: disc_detective/app.py
+msgid "refreshing the MPA certificate numbers failed"
+msgstr ""
+
+#: disc_detective/app.py
 msgid "saving the answer failed"
 msgstr ""
 
@@ -90,6 +94,15 @@ msgstr ""
 #: disc_detective/app.py
 #, python-brace-format
 msgid "scan of {drive} failed"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "the disc is already unlocked (this scan's)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the disc opened and unlocked in {seconds:.1f} s"
 msgstr ""
 
 #: disc_detective/app.py
@@ -183,6 +196,60 @@ msgstr ""
 msgid ""
 "its titles are {films_apart} films' worth of video, one named: another "
 "film?"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "the film's credits weren't read: IMDb's credits aren't downloaded yet"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "credits: {line}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "{title}:"
+msgstr ""
+
+#: disc_detective/app.py
+msgid "reading the film's credits failed: the scan goes on without them"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"{title} shows no credits at all (no rating card, no end crawl, no names):"
+" most likely an extra, not the film"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"the credits name {film} ({year}), by {how}: {grabs} frames in "
+"{seconds:.0f} s"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid ""
+"the credits name no one film; close: {films} ({grabs} frames in "
+"{seconds:.0f} s)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the credits named nothing ({grabs} frames in {seconds:.0f} s)"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the opening's title reads: {phrases}"
+msgstr ""
+
+#: disc_detective/app.py
+#, python-brace-format
+msgid "the credits name {film} on {titles}: its cuts"
 msgstr ""
 
 #: disc_detective/app.py
@@ -632,6 +699,13 @@ msgid "downloading IMDb dataset {name} ..."
 msgstr ""
 
 #: disc_detective/core.py
+#, python-brace-format
+msgid ""
+"couldn't fetch the MPA certificate numbers ({error}): tried again next "
+"time"
+msgstr ""
+
+#: disc_detective/core.py
 msgid "indexing IMDb titles (one-time, takes a few minutes) ..."
 msgstr ""
 
@@ -754,7 +828,9 @@ msgid "running MakeMKV on the disc"
 msgstr ""
 
 #: disc_detective/core.py
-msgid "scanning the titles' video"
+msgid ""
+"reading the film's own credits off the disc (nothing else named it for "
+"sure)"
 msgstr ""
 
 #: disc_detective/core.py
@@ -845,6 +921,52 @@ msgstr ""
 msgid ""
 "MakeMKV couldn't read the disc: using an older saved reading, which "
 "leaves out its shortest titles"
+msgstr ""
+
+#: disc_detective/credits.py
+#, python-format
+msgid "the card walk saw a crawl %d s before the end"
+msgstr ""
+
+#: disc_detective/credits.py
+msgid "no end credits found"
+msgstr ""
+
+#: disc_detective/credits.py
+#, python-format
+msgid "the end credits start at %s"
+msgstr ""
+
+#: disc_detective/credits.py
+msgid "the end credits are a restoration's, not the film's"
+msgstr ""
+
+#: disc_detective/credits.py
+#, python-format
+msgid "%s: only a weak title for it, no names: listed, not won"
+msgstr ""
+
+#: disc_detective/credits.py
+#, python-format
+msgid "the title %s names %s (%.1f)"
+msgstr ""
+
+#: disc_detective/credits.py
+msgid "no credits seen: no rating card, no end crawl, no names"
+msgstr ""
+
+#: disc_detective/credits.py
+#, python-format
+msgid "%s: its opening read first"
+msgstr ""
+
+#: disc_detective/credits.py
+msgid "fetching the MPA certificate numbers ..."
+msgstr ""
+
+#: disc_detective/credits.py
+#, python-brace-format
+msgid "MPA certificate numbers: {count}"
 msgstr ""
 
 #: disc_detective/makemkv.py

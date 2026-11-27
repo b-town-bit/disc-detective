@@ -406,30 +406,52 @@ def rapid_text(image):
     return " ".join(t for t, _, _ in sorted(lines, key=lambda x: (x[1][1], x[1][0])))
 
 
+def _rapid_engine():
+    """The one RapidOCR (made on first use, under _rapid_lock), or False when it can't be had."""
+    global _rapid
+    if _rapid is None:
+        try:
+            import logging
+            from rapidocr import LangDet, LangRec, ModelType, OCRVersion, RapidOCR
+            logging.getLogger("RapidOCR").setLevel(logging.ERROR)
+            _rapid = RapidOCR(params={
+                "Det.ocr_version": OCRVersion.PPOCRV6, "Det.lang_type": LangDet.EN,
+                "Det.model_type": ModelType.SMALL, "Det.limit_type": "max", "Det.limit_side_len": 960,
+                "Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.lang_type": LangRec.EN,
+                "Rec.model_type": ModelType.MOBILE})
+        except Exception:                   # (not installed, or its models can't be had)
+            _rapid = False
+    return _rapid
+
+
+def rapid_boxes(pixels):
+    """Where RapidOCR finds text in a picture (an RGB or BGR array), nothing read: its boxes as
+    (x0, y0, x1, y1) in pixels, [] for none, or None when RapidOCR isn't installed. The quick look
+    (credits.py: is there text here at all, and where) before anything is read."""
+    with _rapid_lock:
+        if not _rapid_engine():
+            return None
+        try:
+            got = _rapid(pixels, use_det=True, use_cls=False, use_rec=False)
+        except Exception:
+            return None
+    if got.boxes is None:
+        return []
+    return [(float(b[:, 0].min()), float(b[:, 1].min()), float(b[:, 0].max()), float(b[:, 1].max())) for b in got.boxes]
+
+
 def rapid_lines(image, least=None, corners=None):
     """rapid_text's lines it's sure of (least: RAPID_LEAST): [(text, (x0, y0, x1, y1), how sure)], or
     None when RapidOCR isn't installed. corners: a list given gets the same lines with their four
     corners as RapidOCR found them ((x, y) top left, top right, bottom right, bottom left): a line's
     slant (_keystone)."""
-    global _rapid
     with _rapid_lock:
-        if _rapid is None:
-            try:
-                import logging
-                from rapidocr import LangDet, LangRec, ModelType, OCRVersion, RapidOCR
-                logging.getLogger("RapidOCR").setLevel(logging.ERROR)
-                _rapid = RapidOCR(params={
-                    "Det.ocr_version": OCRVersion.PPOCRV6, "Det.lang_type": LangDet.EN,
-                    "Det.model_type": ModelType.SMALL, "Det.limit_type": "max", "Det.limit_side_len": 960,
-                    "Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.lang_type": LangRec.EN,
-                    "Rec.model_type": ModelType.MOBILE})
-            except Exception:                   # (not installed, or its models can't be had)
-                _rapid = False
-        if not _rapid:
+        if not _rapid_engine():
             return None
         try:
             import numpy as np
-            got = _rapid(np.array(image.convert("RGB")), use_det=True, use_cls=False)
+            # (use_rec said each time: RapidOCR keeps the last call's, and rapid_boxes turns it off)
+            got = _rapid(np.array(image.convert("RGB")), use_det=True, use_cls=False, use_rec=True)
         except Exception:
             return None
     if got.boxes is None:

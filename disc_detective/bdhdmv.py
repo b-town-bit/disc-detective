@@ -26,12 +26,9 @@ def available():
 
 
 def aacs_library():
-    """The user's libaacs-compatible library (MakeMKV's libmmbd, where MakeMKV or VLC keeps it), or None."""
-    for d in bdmenus.decryption_dirs():
-        for name in ("libmmbd64.dll", "libmmbd.dll", "libmmbd.so.0", "libmmbd.dylib"):
-            if os.path.isfile(os.path.join(d, name)):
-                return os.path.join(d, name)
-    return None
+    """The user's libaacs-compatible library (MakeMKV's libmmbd, where MakeMKV or VLC keeps it: bdmenus.mmbd_library,
+    Linux's and macOS's places too), or None."""
+    return bdmenus.mmbd_library()
 
 
 CLEAR = (0, 0, 0, 0)            # a page drawn over nothing: laid over its video's still, the picture Edit titles shows
@@ -424,10 +421,10 @@ SCOPES = ("titles", "language", "all")
 
 
 def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=None, tv=False, scope="titles",
-         is_word=None, anchored=None):
+         is_word=None, anchored=None, opener=None):
     """The disc's HDMV menus as a crawl's result (a DVD crawl's shape: its pages as a DVD's, "found" by the
     shared rules), nothing played. None when the library isn't installed or the disc has no HDMV menus.
-    aacs: a libaacs-compatible library (MakeMKV's, by default); read_words: a picture to its words
+    aacs: a libaacs-compatible library (MakeMKV's, by default); opener: the disc opened, when asked (the scan's, its unlock shared); read_words: a picture to its words
     (RapidOCR's, by default); progress: menus.CRAWL_STAGES, as a DVD's crawl tells them: "setup" (the disc
     opened, unlocked), "start", then "page", k, n for each menu page questioned. tv: a show's disc, whose scene buttons may name its
     episodes (a film's name only its scenes: not read, but in scope "titles", where they may be one).
@@ -452,8 +449,11 @@ def read(root, titles, out_dir, log=print, aacs=None, read_words=None, progress=
     tell("setup")                       # (opening it: its files read, an encrypted disc unlocked)
     # (each step timed in the log, the user's: where a slow scan's time went -- Order of the Phoenix's opening)
     t_open = time.time()
-    disc = hdmv_menus.Disc(root, aacs=aacs)
-    log(i18n.log("hdmv-menus: the disc opened and unlocked in {seconds:.1f} s", seconds=time.time() - t_open))
+    if opener is not None:              # (opener: the scan's disc, unlocked once a scan -- App.bd_disc)
+        disc = opener()
+    else:
+        disc = hdmv_menus.Disc(root, aacs=aacs)
+        log(i18n.log("hdmv-menus: the disc opened and unlocked in {seconds:.1f} s", seconds=time.time() - t_open))
     tell("start")
     t_plan = time.time()
     plan = disc.crawl(scope)
