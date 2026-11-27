@@ -445,4 +445,4 @@ def test_a_path_on_another_drive_is_printed_whole(monkeypatch):
         raise ValueError("path is on mount 'C:', start on mount 'D:'")
     assert messages.shown(os.path.join(messages.ROOT, "disc_detective")) == "disc_detective"
     monkeypatch.setattr(os.path, "relpath", two_drives)
-    assert messages.shown("C:\Temp\locale\de\LC_MESSAGES\interface.po") == "C:\Temp\locale\de\LC_MESSAGES\interface.po"
+    assert messages.shown(r"C:\Temp\locale\de\LC_MESSAGES\interface.po") == r"C:\Temp\locale\de\LC_MESSAGES\interface.po"

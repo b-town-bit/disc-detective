@@ -10,14 +10,14 @@ msgstr ""
 "Project-Id-Version: Disc Detective 0.5.dev0\n"
 "Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
 "\n"
-"POT-Creation-Date: 2026-11-27 06:48-0600\n"
+"POT-Creation-Date: 2026-11-27 11:40-0600\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.18.0\n"
+"Generated-By: Babel 2.19.0\n"
 
 #: disc_detective/app.py
 #, python-brace-format

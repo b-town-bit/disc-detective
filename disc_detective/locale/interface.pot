@@ -10,14 +10,14 @@ msgstr ""
 "Project-Id-Version: Disc Detective 0.5.dev0\n"
 "Report-Msgid-Bugs-To: https://github.com/b-town-bit/disc-detective/issues"
 "\n"
-"POT-Creation-Date: 2026-11-24 19:10-0600\n"
+"POT-Creation-Date: 2026-11-27 11:40-0600\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.18.0\n"
+"Generated-By: Babel 2.19.0\n"
 
 #: disc_detective/app.py
 msgid "Disc Detective — Optical Forensics · 221B"
@@ -1064,10 +1064,6 @@ msgid "Hindi"
 msgstr ""
 
 #: disc_detective/app.py
-msgid "lang"
-msgstr ""
-
-#: disc_detective/app.py
 #, python-brace-format
 msgid "{language} commentary"
 msgstr ""
@@ -1224,10 +1220,6 @@ msgstr ""
 #: disc_detective/app.py
 #, python-brace-format
 msgid "Copy of {title}"
-msgstr ""
-
-#: disc_detective/app.py disc_detective/core.py
-msgid "role"
 msgstr ""
 
 #: disc_detective/app.py
@@ -1768,10 +1760,6 @@ msgstr ""
 
 #: disc_detective/app.py
 msgid "Pick the film from the IMDb list."
-msgstr ""
-
-#: disc_detective/app.py
-msgid "type"
 msgstr ""
 
 #: disc_detective/app.py
@@ -2410,10 +2398,6 @@ msgstr ""
 msgid "Step {step} of {total}"
 msgstr ""
 
-#: disc_detective/app.py disc_detective/core.py
-msgid "head"
-msgstr ""
-
 #: disc_detective/app.py
 msgid "Find its TMDB id"
 msgstr ""
@@ -2701,10 +2685,6 @@ msgstr ""
 #: disc_detective/app.py
 #, python-brace-format
 msgid "Found at {path}, but it won't run: its install may not have finished."
-msgstr ""
-
-#: disc_detective/app.py
-msgid "for"
 msgstr ""
 
 #: disc_detective/app.py
