@@ -1,5 +1,6 @@
 """The credits witness's reading rules (credits.py): years and certificate numbers off a film's cards, the close
 window, the number's pick, and the MPA numbers' table against a small IMDb index of its own."""
+import collections
 import json
 import sqlite3
 
@@ -485,7 +486,7 @@ def test_an_episode_reads_its_opening_first(monkeypatch):
     monkeypatch.setattr(s, "front_scan", lambda: calls.append("front") or ([win], [win], "the cards are over"))
     monkeypatch.setattr(s, "end_scan", lambda: calls.append("end") or ([], [], "no end credits"))
     monkeypatch.setattr(s, "seen", lambda card_at: {"any": True})
-    monkeypatch.setattr(s, "title_phrases", lambda: [])
+    monkeypatch.setattr(s, "title_readings", lambda: [])
     monkeypatch.setattr(s, "people_of", lambda x: [1] * 8)
     src = type("Src", (), {"grabs": 0})()
     r = s.scan(src, want="episode")
@@ -510,9 +511,12 @@ def test_a_title_seen_once_looked_at_again(monkeypatch):
     monkeypatch.setattr(credits, "card_blocks", lambda f: f)
     monkeypatch.setattr(credits, "title_lines", lambda t: reads.get(t, (None, 0.0)))
     s.second_look()
+    assert asked == []                         # (like no guess, no film found for it: not a title, no time spent)
+    s.candidates = [{"imdb_id": "tt0059026", "name": "A Charlie Brown Christmas"}]
+    s.second_look()
     assert asked == [131.0, 131.5, 132.5, 133.0]                    # (only the once-read one: THE DOCTOR's held)
     assert s.titles[0][2] == "A CHARLIE BROWN Christmas" and s.titles[0][3] == 3
-    assert s.title_phrases()[0] == "A CHARLIE BROWN Christmas"
+    assert s.title_readings()[0] == "A CHARLIE BROWN Christmas"
 
 
 def test_titles_among_credits_far_bigger_no_studio_no_billing():
@@ -521,28 +525,144 @@ def test_titles_among_credits_far_bigger_no_studio_no_billing():
     and a billing card are no titles, a name inside a title is."""
     s = _titled([[0.183, 178.0, "RUDOLPH THE RED-NOSED REINDEER", 4], [0.206, 10.0, "We're FrOzen", 3]])
     s.frames = [{"t": "0:02:50", "rows": [{"person": True}]}]
-    assert s.title_phrases()[0] == "RUDOLPH THE RED-NOSED REINDEER"
+    assert s.title_readings()[0] == "RUDOLPH THE RED-NOSED REINDEER"
     s = _titled([[0.183, 178.0, "RUDOLPH THE RED-NOSED REINDEER", 4, 1], [0.206, 10.0, "We're FrOzen", 3, 7]])
-    assert s.title_phrases()[0] == "RUDOLPH THE RED-NOSED REINDEER"  # (the headline in a page of 7 other lines)
+    assert s.title_readings()[0] == "RUDOLPH THE RED-NOSED REINDEER"  # (the headline in a page of 7 other lines)
     assert credits.title_lines([[("RUDOLPH", (0, 0, 9, 2), 0.175, 0.95), ("STUDIO", (0, 2, 9, 3), 0.06, 0.9)],
-                                [("a", (0, 5, 1, 6), 0.01, 0.9)]], others=True) == ("RUDOLPH", 0.175, 2, 1.0)
+                                [("a", (0, 5, 1, 6), 0.01, 0.9)]], others=True) == ("RUDOLPH", 0.175, 2, 1.0, 0.06)
     s = _titled([[0.30, 40.0, "Little Giant", 1], [0.12, 200.0, "MAIN STREET", 2]])
-    assert s.title_phrases()[0] == "Little Giant"                   # (2.5 times bigger, early: kept)
+    assert "Little Giant" in s.title_readings()                     # (2.5 times bigger, early: kept, the one
+                                                                    #  held longer first -- sizes not compared)
     s = _titled([[0.30, 250.0, "Little Giant", 1], [0.12, 200.0, "MAIN STREET", 2]])
-    assert s.title_phrases() == ["MAIN STREET"]                     # (late: read once isn't enough)
+    assert s.title_readings() == ["MAIN STREET"]                     # (late: read once isn't enough)
     s = _titled([[0.58, 18.0, "UNIVERSA", 3], [0.3, 10.0, "BuenaVista", 2], [0.25, 12.0, "Walt Dianey", 2],
                  [0.2, 20.0, "Peter Pan", 2]])
-    assert s.title_phrases() == ["Peter Pan"]
+    assert s.title_readings() == ["Peter Pan"]
     s = _titled([[0.3, 30.0, "EFREM ZIMBALIST,JR. as SAM", 3], [0.29, 132.0, "CHARLIE BROWN hrisimas", 5]],
                 people={"efrem zimbalist", "charlie brown"})
-    assert s.title_phrases() == ["CHARLIE BROWN hrisimas"]
+    assert s.title_readings() == ["CHARLIE BROWN hrisimas"]
     s = _titled([[0.3, 60.0, "DICK FORAN BUTCH AND BUDDY SHEMP HOWARD CONDOS BROTHERS", 3],
                  [0.3, 30.0, "EFREM ZIMBALIST,JR. as SAM", 3], [0.2, 20.0, "IN THE NAVY", 2]],
                 people={"dick foran", "shemp howard", "efrem zimbalist jr"})
-    assert s.title_phrases() == ["IN THE NAVY"]                     # (two people on a card, a name with its "Jr.")
+    assert s.title_readings() == ["IN THE NAVY"]                     # (two people on a card, a name with its "Jr.")
     assert credits.alike("CHARLIE hristmas", "A CHARLIE BROWN Christmas") >= credits.TITLE_LIKE
     assert credits.alike("THE DOCTOR", "A CHARLIE BROWN Christmas") < credits.TITLE_LIKE
     assert credits.alike("w", "A CHARLIE BROWN Christmas") == 0.0
+
+
+def test_title_signs_sentences_and_credit_text_near():
+    """A sentence (a narration's line) is weighed down below a title; a title counts as credits seen with credit
+    text near it, or when it named a guess -- a magazine in a scene, far from any name, doesn't."""
+    assert credits.sentence("recounts His ministry among the inhabitants of ancient America.")
+    assert credits.sentence("anything about our hidden fr")
+    assert not credits.sentence("OF ONE FOLDAND ONE SHEPHERD") and not credits.sentence("A Court Jester")
+    assert not credits.sentence("Abbott and Costello Meet Dr. Jekyll and Mr. Hyde")
+    s = _titled([[0.11, 84.0, "OF ONE FOLDAND ONE SHEPHERD", 2], [0.08, 24.0, "recounts His ministry among the inhabitants", 5]])
+    s.frames = [{"t": "0:00:26", "rows": [{"head": "narrator"}]}]
+    assert s.title_readings()[0] == "OF ONE FOLDAND ONE SHEPHERD"
+    s = _titled([[0.19, 42.0, "A Gvand Day Out", 2], [0.40, 64.0, "RAVEL Magagine", 3, 0, 0.7]])
+    s.frames = [{"t": "0:00:38", "rows": [{"person": True}]}]
+    assert s.title_readings()[0] == "A Gvand Day Out" and s.titled()
+    s = _titled([[0.14, 302.0, "PSYCHIATRIC HELP 5", 6, 2, 1.0, 0.13], [0.29, 132.0, "CHARLIE BROWN hrisimas", 2, 0, 1.0, 0.0],
+                 [0.17, 174.0, "Wolfgang Reitherman", 8, 2, 1.0, 0.16]])
+    assert s.title_readings()[0] == "CHARLIE BROWN hrisimas"      # (alone on its screen; a sign, a director's card
+                                                                 #  among lettering their size, held longer)
+    s = _titled([[0.40, 64.0, "RAVEL Magagine", 3, 0, 0.7]])
+    s.frames = [{"t": "0:00:38", "rows": [{"person": True}]}]
+    assert not s.titled()
+    s.boosted = {58536: 0.0}
+    assert s.titled()
+
+
+NAMED = [(1, "Wait Until Dark", None, "movie", 108, 37000), (2, "Dark", None, "movie", 108, 1300),
+         (3, "Rear Window", None, "movie", 112, 570000), (4, "A Charlie Brown Christmas", None, "tvMovie", 25, 51000),
+         (5, "Charlie", None, "movie", 25, 60), (6, "Wallace & Gromit: A Grand Day Out", "A Grand Day Out", "short", 23,
+         42000), (7, "Peter Pan", None, "movie", 77, 168000), (8, "Arsenic and Old Lace", None, "movie", 118, 78000),
+         (9, "Results", None, "movie", 110, 8000), (10, "Help", None, "tvSeries", 25, 900),
+         (11, "Wallace & Gromit: A Close Shave", None, "short", 30, 48000),
+         (12, "Timmy's Gift: A Precious Moments Christmas", None, "video", 23, 120)]
+
+
+@pytest.fixture(scope="module")
+def named(tmp_path_factory):
+    db = sqlite3.connect(str(tmp_path_factory.mktemp("named") / "imdb.sqlite"))
+    db.executescript("CREATE TABLE titles (id INTEGER PRIMARY KEY, type TEXT, title TEXT, year INT, end_year INT, "
+                     "runtime INT, norm TEXT, alt TEXT); CREATE TABLE ratings (id INTEGER PRIMARY KEY, votes INT);"
+                     "CREATE VIRTUAL TABLE titles_fts USING fts5(title, alt, content='titles', content_rowid='id');")
+    rows = list(NAMED)
+    words = {w for r in NAMED for w in credits.norm(r[1])}       # (each word in 3 titles: the index's title words)
+    for k, w in enumerate(sorted(words)):
+        rows += [(100 + 3 * k + i, "%s Story %d" % (w.capitalize(), i), None, "movie", 500, 5) for i in range(3)]
+    for i, title, alt, typ, rt, votes in rows:
+        db.execute("INSERT INTO titles VALUES (?, ?, ?, 2000, NULL, ?, '', ?)", (i, typ, title, rt, alt))
+        db.execute("INSERT INTO ratings VALUES (?, ?)", (i, votes))
+    db.execute("INSERT INTO titles_fts(titles_fts) VALUES('rebuild')")
+    db.commit()
+    yield db
+    db.close()
+
+
+def test_films_named_by_a_title_misread(named):
+    """A title read names films as the end credits' names do: its words in order, a slip allowed, a word read as two
+    run together, a possessive credit in front, either side of a name's colon; as long as the title; the reading's
+    other words count against a film too (Charlie, 2015, isn't "CHARLIE hristmas")."""
+    first = lambda text, m: (credits.films_named(named, text, m) or [(0, None)])[0][1]
+    assert first("UNTL DARK", 108) == 1                              # (Wait Until Dark, not Dark: both ways)
+    assert first("ALFRED HITCHCOCK'S REAR WINDOW", 112) == 3
+    assert first("A Gvand Day Out", 23) == 6                         # (its other title; the slip)
+    assert first("PeierPan", 77) == 7                                # (two words run together, one slipped)
+    assert first('Capra\'s "ARSENIC AND OLDLACE"', 118) == 8
+    assert first("CHARLIE hristmas", 25) == 4
+    assert first("Rear Window", 30) is None                          # (not the title's length)
+    assert credits.films_named(named, "PSYCHIATRIC HELP 5", 25) == []   # (a sign: no film; a series isn't one)
+    assert first("HELP", 25) is None
+    assert credits.films_named(named, "HELP", 25, credits.TITLE_SERIES)[0][1] == 10
+    # (a side of a name's colon alone: only with the rest of the name read elsewhere -- a slip allowed)
+    assert first("CLOSE SHAVE", 30) == 11
+    alone = credits.films_named(named, "CLOSE SHAVE", 30, seen=set())          # (its whole name half read: weakly)
+    assert alone[0][1] == 11 and alone[0][0] < 0.7
+    assert credits.films_named(named, "CLOSE SHAVE", 30, seen={"with", "wallace", "gromlt"})[0] == (1.0, 11)
+    assert credits.films_named(named, "Timmy's Gift", 23, seen={"timmy", "gift"}) == []
+    assert credits.films_named(named, "Timmy's Gift", 23, seen={"precious", "moments", "christmas"})[0][1] == 12
+    assert credits.name_score(credits.norm("CHARLIE hristmas"), credits.norm("A Charlie Brown Christmas")) > \
+        credits.name_score(credits.norm("CHARLIE hristmas"), credits.norm("Charlie"))
+    # (a title read is all or part of a real title: a word between the name's words that it lacks, no; most of the
+    #  reading outside the name, no; billing before it or text after, only weighed against it)
+    sc = lambda r, n: credits.name_score(credits.norm(r), credits.norm(n))
+    assert sc("CHARLIE BROWN hrisimas", "Charlie's Christmas") == 0.0
+    assert sc("CHARLIE BROWN hrisimas", "The Making of 'A Charlie Brown Christmas'") >= credits.TITLE_FOUND
+    assert sc("THE DOCTOR REALIN", "Oh Doctor!") == 0.0
+    assert sc("PeterPan Presents", "Peter Pan") >= credits.TITLE_FOUND
+    assert sc("Buck Privates Come Home BEDDOE", "Buck Privates Come Home") >= credits.TITLE_FOUND
+
+
+def test_titles_give_the_films_they_name_evidence(monkeypatch):
+    """Each title read gives the films it names points by how well (TITLE_BOOST at best), a sign in a scene less; a
+    film's best once; a guess it names the whole boost; the list is those films' names, the most evidence first."""
+    found = {"UNTL DARK": [(1, 1000, [(0.82, ())]), (2, 1000, [(0.67, ())])],
+             "WAIT UNTIL DARK": [(1, 1000, [(1.0, ())])], "PSYCHIATRIC HELP 5": []}
+    monkeypatch.setattr(credits, "name_scores", lambda con, text, m, types=None: found.get(text, []))
+    s = _titled([[0.2, 30.0, "UNTL DARK", 2, 0, 1.0, 0.0], [0.2, 40.0, "PSYCHIATRIC HELP 5", 3, 5, 0.7, 0.1]])
+    s.ix.ti = None
+    s.ix.title = lambda n: {1: ("Wait Until Dark", 1967, "movie", 108), 2: ("Dark", 2026, "movie", 108)}[n]
+    s.ix.votes = lambda n: 1000
+    s.src = type("Src", (), {"dur": 108 * 60})()
+    s.want, s.candidates, s.boosted, s.title_pts, s._found, s.disc_words = "film", [], {}, {}, {}, frozenset()
+    s.cast, s.log = collections.Counter(), lambda m: None
+    s.frames = [{"t": "0:00:40", "rows": [{"person": True, "text": "ALAN ARKIN"}]}]   # (credit text near both)
+    score, why = collections.Counter(), collections.defaultdict(set)
+    assert sorted(s.title_evidence(score, why, 30.0)) == [1, 2]
+    assert round(score[1], 2) == round(3 * 0.82, 2) and round(s.cast[2], 2) == round(3 * 0.67 / 2 ** 0.5, 2)   # (Dark: as well named as one more, at best)
+    assert s.boosted == {1: 30.0, 2: 30.0} and "title untl dark" in why[1]
+    assert s.title_evidence(score, why, 34.0) == [] and round(score[1], 2) == 2.46   # (given once)
+    s.titles.append([0.2, 50.0, "WAIT UNTIL DARK", 2, 0, 1.0, 0.0])
+    s.title_evidence(score, why, 50.0)
+    assert round(score[1], 2) == 3.0 and s.boosted[1] == 30.0        # (read better: only what's new added)
+    assert s.title_phrases() == ["Wait Until Dark", "Dark"] and s.titled()
+    s.titles[-1][4] = 6                                              # (the same in a busy scene: weighed down)
+    s.title_pts, s._weighed, score = {}, set(), collections.Counter()
+    s.title_evidence(score, why, 50.0)
+    assert round(score[1], 2) == round(3 * 0.82, 2)
 
 
 def test_a_title_named_like_a_guess_boosts_its_film():
@@ -577,7 +697,7 @@ def test_a_short_or_an_old_film_reads_its_opening_first(monkeypatch):
         monkeypatch.setattr(s, "front_scan", lambda: calls.append("front") or ([], [], "the cap"))
         monkeypatch.setattr(s, "end_scan", lambda: calls.append("end") or ([], [], "no end credits"))
         monkeypatch.setattr(s, "seen", lambda card_at: {"any": False})
-        monkeypatch.setattr(s, "title_phrases", lambda: [])
+        monkeypatch.setattr(s, "title_readings", lambda: [])
         src = type("Src", (), {"grabs": 0, "dur": dur})()
         s.scan(src, candidates=[{"imdb_id": "tt0000001", "name": "A", "year": year, "runtime": 95}])
         assert calls == ["front", "end", "card"]
@@ -587,7 +707,7 @@ def test_a_short_or_an_old_film_reads_its_opening_first(monkeypatch):
     monkeypatch.setattr(s, "front_scan", lambda: calls.append("front") or ([], [], "the cap"))
     monkeypatch.setattr(s, "end_scan", lambda: calls.append("end") or ([], [], "no end credits"))
     monkeypatch.setattr(s, "seen", lambda card_at: {"any": False})
-    monkeypatch.setattr(s, "title_phrases", lambda: [])
+    monkeypatch.setattr(s, "title_readings", lambda: [])
     s.scan(type("Src", (), {"grabs": 0, "dur": 95 * 60})(), candidates=[{"imdb_id": "tt1", "name": "A", "year": 1999}])
     assert calls == ["card", "end", "front"]
 

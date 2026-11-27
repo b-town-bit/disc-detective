@@ -23,6 +23,7 @@ Built from the 2026-11 spike over a Plex library of 333 films: 311 right winners
 import collections
 import ctypes
 import json
+import math
 import os
 import re
 import sqlite3
@@ -150,22 +151,31 @@ TITLE_SURE = 0.85           # (OCR this sure of a title's lines, at least: a big
 TITLE_LETTERS = 3           # (letters in a title's biggest line, at least)
 TITLE_WORDS = (1, 10)
 TITLE_NOT = re.compile(r"\b(presents?|presentation|production|release[sd]?|releasing|distribut\w*)\b", re.I)   # (a company's card)
-TITLE_PHRASES = 3           # (the opening's titles kept, biggest lettering first (each searched: junk finds nothing),
-TITLE_KEEP = 0.8            #  and this near the biggest's size: a song's name on a later card isn't one)
+TITLE_PHRASES = 3           # (the opening's titles kept, the likeliest by their signs first -- each searched: junk
+                            #  finds nothing; their sizes against each other don't matter, only against their screen's)
+TITLE_OVER = 3.0            # (a title's letters against its screen's next biggest line, up to this: a title card's
+                            #  lettering stands far above the rest of its screen, a sign's or a credit card's names
+                            #  don't -- titles on different screens never compared by size)
+TITLE_SENTENCE_W = 0.3      # (a sentence -- mostly small-letter words, or ended by a full stop -- weighed this much: a
+                            #  narration's or a caption's line, Testaments' "recounts His ministry among...", not a title)
 TITLE_LOOKS = 3             # (big lettering read once: this many of the biggest looked at again, TITLE_AROUND s
 TITLE_AROUND = (-1.0, -0.5, 0.5, 1.0)   #  either side -- a title card up 3-5 s may fall between FRONT_STEPs:
 TITLE_LIKE = 0.6            #  A Charlie Brown Christmas' at 2:12 -- a re-read this like it counts as held)
 TITLE_FAR = 1.5             # (read once, but this many times bigger than any other lettering of the opening, in
                             #  its first half: a title still)
-TITLE_AMONG = 0.5           # (a title card sits among the credits, a sign or a headline in a scene doesn't: this
+TITLE_AMONG = 1.0           # (a title card sits among the credits, a sign or a headline in a scene doesn't: up to
 TITLE_BUSY = 3              # (a title stands mostly alone: more of the frame's other lines than this -- a newspaper,
 TITLE_BUSY_W = 0.6          #  a sign in a scene -- weighs it this much; Rudolph's "We're FrOzen" sat among 7)
 TITLE_MIDDLE = 0.6          # (a title's middle in the frame's central this-share, across and down: front and centre;
 TITLE_ASIDE_W = 0.7         #  else weighed this much -- off in a corner, a sign in a scene)
 TITLE_SLANT = 15            # (a line this many degrees off level, or more: at a slant -- a booth's sign,
-TITLE_SLANT_W = 0.7         #  a pennant -- weighed this much; a title card's is level)
-TITLE_AMONG_S = 30          #  much more weight within this many s of a card naming people -- Rudolph's title beside
-                            #  "BURL IVES TELLS THE STORY", not its cold open's "We're FrOzen")
+TITLE_SLANT_W = 0.1         #  a pennant -- weighed this much; a title card's is level: Charlie Brown's booth,
+                            #  "THE DOCTOR", at -32 degrees, names Oh Doctor! in full)
+TITLE_AMONG_S = (10, 30)    #  this much more weight: in full within the first s of a card naming people or a
+                            #  credit's heading, fading to none by the second -- Rudolph's title beside "BURL IVES
+                            #  TELLS THE STORY", not its cold open's "We're FrOzen"; A Grand Day Out's title 4 s from
+                            #  its name card, not the magazine 26 s on)
+TITLE_WITH_S = 12           # (a title counts as credits seen with credit text this near it, a name or a heading)
 STUDIO_NAMES = ("universal", "universal international", "international", "universal pictures", "buena vista",
                 "walt disney", "walt disney pictures", "disney", "paramount", "paramount pictures", "columbia",
                 "columbia pictures", "warner bros", "warner brothers", "metro goldwyn mayer", "mgm", "twentieth century fox",
@@ -193,7 +203,8 @@ def title_lines(blocks, others=False, frame=None):
     ("RUDOLPH / THE RED-NOSED REINDEER"), with its letters' size; (None, 0) when its letters are a credit's size.
     others: and how many of the frame's other lines aren't the title's (a title stands mostly alone; a headline sits
     in a page of text), and, frame given ((width, height)), how it's placed (title_place: 1.0 front and centre, less
-    off in a corner or at a slant) -- (text, size, others, place)."""
+    off in a corner or at a slant), and the letters' size of the frame's biggest other line (0.0: none) -- (text,
+    size, others, place, next)."""
     best = (None, 0.0)
     used, lines = 0, []
     for blk in blocks:
@@ -211,8 +222,9 @@ def title_lines(blocks, others=False, frame=None):
             best, used = (text, top), len(keep)
             lines = [x for k, x in enumerate(blk) if x[0] in keep]
     if others:
+        rest = [x[2] for b in blocks for x in b if not any(x is y for y in lines)] if best[0] else []
         return best + (sum(len(b) for b in blocks) - used if best[0] else 0,
-                       title_place(lines, frame) if best[0] and frame else 1.0)
+                       title_place(lines, frame) if best[0] and frame else 1.0, max(rest, default=0.0))
     return best
 
 
@@ -248,6 +260,230 @@ def title_like(read, name):
     strip = lambda x: re.sub(r"[^a-z0-9]", "", re.sub(r"^\s*(the|a|an)\s+", "", x.lower()))
     la, lb = strip(read), strip(name)
     return difflib.SequenceMatcher(None, la, lb).ratio() if la and lb else 0.0
+
+
+# ---- films named by a title read ---------------------------------------------------------------------------------
+# (as the end credits' names: a reading's words looked up in IMDb's titles, a letter slipped allowed; each film
+#  named so given evidence by how well it's named, the names read to agree)
+
+TITLE_FOUND = 0.6           # (a reading this alike a film's name names it: its words in order, slips allowed, scored
+                            #  both ways -- how much of the name was read, how much of the reading is the name)
+TITLE_READ_MOST = 0.5       # (a title read is all or part of a real title: at least this much of the reading must
+                            #  be in the name -- "THE DOCTOR REALIN", a booth's sign, isn't Oh Doctor!; words beside
+                            #  it, billing before or text after, count only against it, as Peter Pan's "Presents")
+TITLE_FILMS = 10            # (films a reading names, the likeliest, at most)
+TITLE_ROWS = 300            # (films a word search brings, the best known first)
+TITLE_TIED = 0.05           # (films a reading names within this of each other: as well; their evidence shared --
+                            #  "VACATION", a sign in A Grand Day Out, names three Vacations, each a third as surely)
+TITLE_AWAY_W = 0.6          # (a title with no credit text near it, TITLE_AMONG_S: its evidence weighed this much --
+                            #  a sign or a magazine in a scene; a title card sits among the credits)
+TITLE_TYPES = ("movie", "tvMovie", "video", "tvSpecial", "short", "tvShort")
+TITLE_SERIES = ("tvSeries", "tvMiniSeries")
+
+
+class TitleWords:
+    """The IMDb index's title words (core.title_vocabulary) and the words near a misread one, kept a session."""
+    _kept = {}
+
+    def __init__(self, con):
+        self.vocab, self.by_len = core.title_vocabulary(con)
+        self._near, self._splits = {}, {}
+
+    @classmethod
+    def of(cls, con):
+        try:
+            key = next((r[2] for r in con.execute("PRAGMA database_list") if r[1] == "main"), "") or id(con)
+        except Exception:
+            key = id(con)
+        if key not in cls._kept:
+            cls._kept[key] = cls(con)
+        return cls._kept[key]
+
+    def near(self, w, most=3):
+        """Title words a letter or two from w, the nearest first (w itself when it's one); a first or second letter
+        kept, or one lost or gained in front."""
+        if w in self.vocab or len(w) < 3 or not self.vocab:
+            return [w]
+        if (w, most) not in self._near:
+            import difflib
+            got = []
+            for n in range(len(w) - 1, len(w) + 2):
+                for t in self.by_len.get(n, ()):
+                    if t[0] != w[0] and t[1:2] != w[:1] and t[:1] != w[1:2] and t[1:2] != w[1:2]:
+                        continue
+                    m = difflib.SequenceMatcher(None, w, t)
+                    if m.real_quick_ratio() >= 0.7 and m.quick_ratio() >= 0.7:
+                        r = m.ratio()
+                        if r >= _slip_least(w, t):
+                            got.append((r, self.vocab[t], t))
+            self._near[(w, most)] = [t for _, _, t in sorted(got, reverse=True)[:most]]
+        return self._near[(w, most)]
+
+    def nearest(self, w):
+        return (self.near(w, 1) or [w])[0]
+
+    def splits(self, w):
+        """A word that's two title words run together ("oldlace", "peierpan"): its splits, one half read right."""
+        if w not in self._splits:
+            out = []
+            for i in range(3, len(w) - 2):
+                a, b = w[:i], w[i:]
+                if a not in self.vocab and b not in self.vocab:
+                    continue
+                na, nb = (a if a in self.vocab else self.nearest(a)), (b if b in self.vocab else self.nearest(b))
+                if na in self.vocab and nb in self.vocab:
+                    out.append((na, nb))
+            self._splits[w] = out
+        return self._splits[w]
+
+
+def _slip_least(a, b):
+    return 0.7 if min(len(a), len(b)) >= 6 else 0.75
+
+
+def word_like(a, b):
+    """How alike two words are (0, or difflib's ratio when a letter or two off)."""
+    if a == b:
+        return 1.0
+    if len(a) < 3 or len(b) < 3:
+        return 0.0
+    import difflib
+    r = difflib.SequenceMatcher(None, a, b).ratio()
+    return r if r >= _slip_least(a, b) else 0.0
+
+
+def title_readings(text):
+    """A title's word lists to try: as read; and after a possessive credit in front ("ALFRED HITCHCOCK'S REAR
+    WINDOW", "Capra's ARSENIC AND OLD LACE")."""
+    out = [norm(text)]
+    m = re.match(r"^\W*((?:\S+\s+){0,2}\S+?(?:'s|s'|’s))\s+(.+)$", text, re.I)
+    if m:
+        out.append(norm(m.group(2)))
+    return [w for w in out if w]
+
+
+def film_names(title, alt=None):
+    """A film's names to match a reading to, each with the words the rest of its name needs read elsewhere: its
+    whole name and its other titles (none needed); either side of a colon, the other side's words needed ("CLOSE
+    SHAVE" is "Wallace & Gromit: A Close Shave" on a disc that says Wallace & Gromit, "Timmy's Gift" is "Timmy's
+    Gift: A Precious Moments Christmas" with Precious Moments read). [(words, words needed)]"""
+    whole = [title or ""] + [a for a in (alt or "").split("|") if a]
+    out = [(norm(n), ()) for n in dict.fromkeys(whole)]
+    for n in whole:
+        if ":" in n:
+            a, b = n.split(":", 1)
+            out += [(norm(a), tuple(w for w in norm(b) if w not in TITLE_SMALL)),
+                    (norm(b), tuple(w for w in norm(a) if w not in TITLE_SMALL))]
+    return [(w, need) for w, need in out if w]
+
+
+def words_read(need, seen):
+    """The words a name needs all read elsewhere (seen), each or a word a slip from it ("Gronuil": Gromit)."""
+    return all(w in seen or any(word_like(w, x) for x in seen if abs(len(x) - len(w)) <= 2) for w in need)
+
+
+def name_match(read, name):
+    """A reading's words matched to a name's in order, a slip allowed; one word read for two run together
+    ("peierpan": peter pan), two read for one split ("westmins ter"); small words free. (name letters matched,
+    reading letters matched, the reading's words matched: their places)."""
+    big = lambda x: x not in TITLE_SMALL
+    n, m = len(read), len(name)
+    dp = [[(0.0, 0.0, frozenset())] * (m + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            ways = [dp[i - 1][j], dp[i][j - 1]]
+            s = word_like(read[i - 1], name[j - 1])
+            if s and big(name[j - 1]):
+                d = dp[i - 1][j - 1]
+                ways.append((d[0] + s * len(name[j - 1]), d[1] + s * len(read[i - 1]), d[2] | {i - 1}))
+            if j >= 2:
+                s = word_like(read[i - 1], name[j - 2] + name[j - 1])
+                if s:
+                    d = dp[i - 1][j - 2]
+                    ways.append((d[0] + s * sum(len(x) for x in name[j - 2:j] if big(x)),
+                                 d[1] + s * len(read[i - 1]), d[2] | {i - 1}))
+            if i >= 2:
+                s = word_like(read[i - 2] + read[i - 1], name[j - 1])
+                if s and big(name[j - 1]):
+                    d = dp[i - 2][j - 1]
+                    ways.append((d[0] + s * len(name[j - 1]), d[1] + s * (len(read[i - 2]) + len(read[i - 1])),
+                                 d[2] | {i - 2, i - 1}))
+            dp[i][j] = max(ways, key=lambda x: x[:2])
+    return dp[n][m]
+
+
+def name_score(read, name):
+    """How well a reading names a film (0..1): how much of its name was read and how much of the reading is its
+    name, both (their harmonic mean: "CHARLIE hristmas" isn't Charlie, 2015's; "UNTL DARK" is Wait Until Dark)."""
+    total = sum(len(x) for x in name if x not in TITLE_SMALL)
+    rtot = sum(len(x) for x in read if x not in TITLE_SMALL)
+    if not total or not rtot:
+        return 0.0
+    a, b, used = name_match(read, name)
+    if used and any(k not in used and read[k] not in TITLE_SMALL and len(read[k]) >= 3
+                    for k in range(min(used), max(used) + 1)):
+        return 0.0          # (a word read between the name's words that the name lacks: not this name --
+                            #  "CHARLIE BROWN hrisimas" isn't Charlie's Christmas)
+    cn, cr = a / total, min(1.0, b / rtot)
+    if cr < TITLE_READ_MOST:
+        return 0.0
+    return 2 * cn * cr / (cn + cr) if cn + cr else 0.0
+
+
+def films_named(con, text, minutes, types=TITLE_TYPES, seen=None):
+    """The films a title read names, as long as the title (its runtime in IMDb within max(6 min, 10%)):
+    [(how well, IMDb number)], the best named first, the better known among equals (TITLE_FILMS at most). seen: the
+    words read elsewhere (the disc's, the opening's), a name's side of a colon counting alone only when the rest of
+    the name is among them (film_names; None: any side counts)."""
+    out = []
+    for n, votes, scores in name_scores(con, text, minutes, types):
+        best = max([0.0] + [s for s, need in scores if seen is None or words_read(need, seen)])
+        if best >= TITLE_FOUND:
+            out.append((round(best, 3), votes, n))
+    return [(s, t) for s, _, t in sorted(out, reverse=True)[:TITLE_FILMS]]
+
+
+def name_scores(con, text, minutes, types=TITLE_TYPES):
+    """The films a title read might name, as long as the title: [(IMDb number, votes, [(how well it names one of
+    its names, the words that name needs read elsewhere)])]. Its words searched one by one and all but one together
+    (a misread word skipped), each with the title words near it."""
+    reads = title_readings(text)
+    if not reads or not minutes:
+        return []
+    tw = TitleWords.of(con)
+    lo, hi = min(minutes - 6, minutes / 1.1), max(minutes + 6, minutes / 0.9)
+    sql = ("SELECT t.id, t.title, t.alt, COALESCE(r.votes, 0) FROM titles_fts f JOIN titles t ON t.id = f.rowid "
+           "LEFT JOIN ratings r ON r.id = t.id WHERE titles_fts MATCH ? AND t.type IN (%s) "
+           "AND t.runtime BETWEEN ? AND ? ORDER BY 4 DESC LIMIT %d" % (",".join("?" * len(types)), TITLE_ROWS))
+    queries = []
+    for words in reads:
+        slots = []
+        for w in words:
+            if w in TITLE_SMALL or len(w) < 3:
+                continue
+            alts = tw.near(w)
+            if len(w) >= 6 and w not in tw.vocab:
+                alts = alts + [x for p in tw.splits(w) for x in p]
+            if alts:
+                slots.append(alts)
+        queries += ['"%s"' % a for s in slots for a in s]
+        if len(slots) >= 2:
+            queries += [" AND ".join('"%s"' % s[0] for k, s in enumerate(slots) if k != i) for i in range(len(slots))]
+    rows = {}
+    for fq in dict.fromkeys(queries):
+        try:
+            for r in con.execute(sql, (fq, *types, lo, hi)):
+                rows[r[0]] = r
+        except Exception:
+            pass
+    fixed = [[w if w in tw.vocab or len(w) < 3 else tw.nearest(w) for w in words] for words in reads]
+    out = []
+    for r in rows.values():
+        scores = [(max(name_score(x, nm) for x in reads + fixed), need) for nm, need in film_names(r[1], r[2])]
+        scores = [x for x in scores if x[0] >= TITLE_FOUND]
+        if scores:
+            out.append((r[0], r[3], scores))
+    return out
 
 
 # ---- the title's frames ---------------------------------------------------------------------------------------
@@ -1116,6 +1352,16 @@ fmt = lambda t: "%d:%02d:%02d" % (t // 3600, t % 3600 // 60, t % 60)
 
 # ---- one title, read -------------------------------------------------------------------------------------------
 
+def sentence(text):
+    """A line that reads as a sentence, not a title: ended by a full stop (4 words or more), or most of its words
+    (3 or more, the small joining words left out) starting with a small letter."""
+    words = [w for w in re.findall(r"[^\W\d_][\w'-]*", text)]
+    if len(words) >= 4 and text.rstrip().endswith("."):
+        return True
+    big = [w for w in words if w.lower() not in TITLE_SMALL]
+    return len(big) >= 3 and sum(1 for w in big if w[0].islower()) > len(big) / 2
+
+
 class Scan:
     """One title's identification by its credits (scan()): the card, the end, the opening. index: an Index;
     certs: mpa_load's table; casts: a Casts (or None: no full-cast tie step); log: a function of one string."""
@@ -1137,6 +1383,9 @@ class Scan:
         self.cert = [None, None, []]
         self.walk_f = {}
         self.boosted = {}           # (films an opening's title named, boosted: when)
+        self.title_pts = {}         # (films an opening's title named: the points it gave them)
+        self._looked, self._found = set(), {}   # (readings looked at again; readings searched: the films named)
+        self._weighed, self._not_title, self._seen_key = set(), {}, None
 
     def _cast(self, t):
         return self.casts.cast(t) if self.casts else set()
@@ -1426,10 +1675,10 @@ class Scan:
                 if cards:
                     blocks = card_blocks(f)
                     boxed = card_rows(blocks)
-                    title, size, crowd, place = title_lines(blocks, others=True, frame=(f.shape[1], f.shape[0]))
+                    title, size, crowd, place, nxt = title_lines(blocks, others=True, frame=(f.shape[1], f.shape[0]))
                     if title:
-                        self.titles.append([size, here_t, title, 1, crowd, place])   # (frames on screen:
-                                                        #  _front_scan adds; the frame's other lines; its placing)
+                        self.titles.append([size, here_t, title, 1, crowd, place, nxt])   # (frames on screen:
+                                                        #  _front_scan adds; the frame's other lines; its placing; its next biggest line)
                 else:
                     boxed = rows_boxes(f)
                 if back is not None:
@@ -1923,36 +2172,43 @@ class Scan:
         finally:
             src.keyframes = False
         self.second_look()
-        new = {n: text for n, text in self.title_matches().items() if n not in self.boosted}
-        if new and self.decided is None and len(out[1]) != 1:   # (a title the second look made held: its boost, and
-            score, why = self._front                            #  the opening decided again)
-            for n, text in new.items():
-                self.boosted[n] = 0.0
-                score[n] += TITLE_BOOST
-                self.cast[n] += TITLE_BOOST
-                why[n].add("title " + " ".join(norm(text)))
-                self.log("the title %s, as a guess named it (read again)" % text)
-            r, win = self.close_window(score, why, src.dur)
-            out = (r, win, out[2] if len(win) != 1 else "its title read again, as a guess named it")
+        if self.decided is None and len(out[1]) != 1:          # (titles the second look read better or made held:
+            score, why = self._front                            #  their evidence, and the opening decided again)
+            before = dict(self.title_pts)
+            self.title_evidence(score, why, 0.0)
+            if self.title_pts != before:
+                r, win = self.close_window(score, why, src.dur)
+                out = (r, win, out[2] if len(win) != 1 else "its title read again")
         return out
 
-    def second_look(self):
-        """Big lettering read in one frame only (TITLE_HELD not met), the biggest TITLE_LOOKS of it: its card read
-        again TITLE_AROUND s either side (exact frames); each re-read like it (TITLE_LIKE) counts as a frame held,
-        and the fuller reading is kept ("CHARLIE hristmas" at 2:12, the card animating on and off)."""
+    def second_look(self, among=None):
+        """Big lettering read in one frame only (TITLE_HELD not met) that reads like a film (film_like: a reading that
+        finds none isn't a title, and costs no more frames), the biggest of it (TITLE_LOOKS a scan at most, each
+        looked at once): its card read again TITLE_AROUND s either side (exact frames); each re-read like it
+        (TITLE_LIKE) counts as a frame held, and the fuller reading is kept ("CHARLIE hristmas" at 2:12, the card
+        animating on and off). among: these readings only -- the opening's newest card, looked at on the spot, so a
+        title's boost comes when it's read, not after the opening's end."""
+        looked = self.__dict__.setdefault("_looked", set())
         held = self.held_titles()
-        once = sorted((x for x in self.titles if held[x[2]] < TITLE_HELD and not self.not_titles(x[2])),
-                      key=lambda x: -x[0])[:TITLE_LOOKS]
-        for x in once:
-            for dt in TITLE_AROUND:
-                f = self.src.frame(x[1] + dt)
-                if f is None:
-                    continue
-                text, size = title_lines(card_blocks(f))
-                if text and alike(text, x[2]) >= TITLE_LIKE:
-                    x[3] += 1
-                    if len(re.sub(r"[^A-Za-z]", "", text)) > len(re.sub(r"[^A-Za-z]", "", x[2])):
-                        x[2], x[0] = text, max(x[0], size)
+        once = sorted((x for x in (self.titles if among is None else among) if id(x) not in looked
+                       and held[x[2]] < TITLE_HELD and not self.not_titles(x[2]) and self.film_like(x[2])),
+                      key=lambda x: -x[0])[:max(0, TITLE_LOOKS - len(looked))]
+        keys = getattr(self.src, "keyframes", False)
+        self.src.keyframes = False                                    # (exact frames: a card up a second or two)
+        try:
+            for x in once:
+                looked.add(id(x))
+                for dt in TITLE_AROUND:
+                    f = self.src.frame(x[1] + dt)
+                    if f is None:
+                        continue
+                    text, size = title_lines(card_blocks(f))
+                    if text and alike(text, x[2]) >= TITLE_LIKE:
+                        x[3] += 1
+                        if len(re.sub(r"[^A-Za-z]", "", text)) > len(re.sub(r"[^A-Za-z]", "", x[2])):
+                            x[2], x[0] = text, max(x[0], size)
+        finally:
+            self.src.keyframes = keys
 
     def _front_scan(self):
         src = self.src
@@ -1987,11 +2243,14 @@ class Scan:
             if not any(norm(x) for x in rows_of(_cv2().resize(f, (src.w, src.h)))):   # (the small frame read first,
                 t += FRONT_STEP                                                         #  no grab: scenery, not a card)
                 continue
-            n0 = len(self.frames)
+            n0, n_titles = len(self.frames), len(self.titles)
             card_t = t
             score, why, _, _ = self.read_crawl(t, 0.3, state=st, most=1, early=True, cards=True)   # (the card read
                                                                                                   #  in full, scored)
-            seen_names = seen_names or sum(score.values()) > 0
+            if len(self.titles) > n_titles:              # (a title read once that names a film: looked at again
+                self.second_look(self.titles[n_titles:]) #  now, its evidence on this card)
+            # (names read, not a title's points: a logo naming a film ("COLLECTION") starts no cards-over count)
+            seen_names = seen_names or any(not k.startswith("title ") for ks in why.values() for k in ks)
             if self.cert[0]:              # (a number read before, no year to back it: 2 of its film's names do)
                 named = [x for x in self.cert[0] if len([k for k in why[x] if not k.startswith("char ")]) >= 2]
                 if named:
@@ -2011,18 +2270,14 @@ class Scan:
                 if pick:
                     self.decided, stop = pick, "the number %s" % self.cert[1]
                     break
-            for n, text in self.title_matches().items():   # (the opening's title, a guess named so: its film
-                if n not in self.boosted:                    #  boosted once, the names still to agree)
-                    self.boosted[n] = t
-                    score[n] += TITLE_BOOST
-                    self.cast[n] += TITLE_BOOST
-                    why[n].add("title " + " ".join(norm(text)))
-                    self.log("the title %s, as a guess named it" % text)
+            self.title_evidence(score, why, t)   # (the opening's titles: the films they name, the names to agree)
             _, win = self.close_window(score, why, src.dur)
             lid = int(win[0][6][2:]) if len(win) == 1 else None
             held = held + 1 if lid is not None and lid == last else 0
             last = lid
             settling = lid in self.boosted and t - self.boosted[lid] < TITLE_SETTLE
+            # (a title's boost counts as cast read, CAST_MIN: a boosted film alone in the window once settled wins
+            #  with no names read -- A Charlie Brown Christmas, whose opening's names go unread)
             if lid is not None and held >= 3 and self.known(lid) and self.cast_read() and not settling:
                 stop = "the window held one film %d cards" % held
                 break
@@ -2040,23 +2295,61 @@ class Scan:
                 "names": len(self.people_of(x)), "by": by}
 
     def title_phrases(self, most=TITLE_PHRASES):
-        """The opening's title words (its cards' biggest lettering, title_lines), the biggest first: to search for
-        as a menu's are, never a winner by themselves."""
+        """The films the opening's titles named (title_evidence), by their IMDb names: the most evidence first -- the
+        title's and the names' together (self.cast), then the title's, then the better known. Only real films' names:
+        a reading that names none (a sign, a caption) is no title. To search for as a menu's words are."""
+        pts = getattr(self, "title_pts", None) or {}
+        cast = getattr(self, "cast", None) or {}
+        order = sorted(pts, key=lambda n: (-round(cast.get(n, 0) or pts[n], 3), -pts[n], -self.ix.votes(n)))
+        return list(dict.fromkeys(self.ix.title(n)[0] for n in order if self.ix.title(n)[0]))[:most]
+
+    def title_readings(self, most=TITLE_PHRASES):
+        """The opening's title lettering as read (its cards' biggest, title_lines), the likeliest first by their
+        signs (far bigger than the rest of its own screen, near credit text, standing alone, front and centre, not a
+        sentence; then held longest)."""
         held = self.held_titles()
         ok = [x for x in self.titles if not self.not_titles(x[2])]
-        secs = lambda t: sum(int(v) * m for v, m in zip(t.split(":"), (3600, 60, 1)))
-        people_at = [secs(f["t"]) for f in getattr(self, "frames", ()) if any(r.get("person") for r in f["rows"])]
+        credit_at = self.credit_times()
+        over = lambda x: (min(TITLE_OVER, x[0] / x[6]) if x[6] > 0 else TITLE_OVER) if len(x) > 6 else 1.0
 
         def far(x):                      # (read once, far bigger than the rest, early: a title still)
             others = [y[0] for y in ok if " ".join(norm(y[2])) != " ".join(norm(x[2]))]
             return x[1] <= FRONT_CAP / 2 and x[0] >= TITLE_FAR * max(others, default=0)
         kept = [x for x in ok if held[x[2]] >= TITLE_HELD or far(x)]
-        weigh = lambda x: x[0] * (1 + TITLE_AMONG * any(abs(x[1] - t) <= TITLE_AMONG_S for t in people_at)) *             (TITLE_BUSY_W if len(x) > 4 and x[4] > TITLE_BUSY else 1.0) * (x[5] if len(x) > 5 else 1.0)
-        out, top = [], max((weigh(x) for x in kept), default=0)
-        for x in sorted(kept, key=lambda x: -weigh(x)):
-            if x[2] not in out and weigh(x) >= TITLE_KEEP * top:
+        signs = lambda x: over(x) * (1 + TITLE_AMONG * self.among(x[1], credit_at)) *             (TITLE_BUSY_W if len(x) > 4 and x[4] > TITLE_BUSY else 1.0) * (x[5] if len(x) > 5 else 1.0) *             (TITLE_SENTENCE_W if sentence(x[2]) else 1.0)
+        out = []
+        for x in sorted(kept, key=lambda x: (-round(signs(x), 3), -held[x[2]], -x[0])):
+            if x[2] not in out:
                 out.append(x[2])
         return out[:most]
+
+    def credit_times(self):
+        """The times (s) of the frames read with credit text on them: a person named or a credit's heading."""
+        secs = lambda t: sum(int(v) * m for v, m in zip(reversed(t.split(":")), (1, 60, 3600)))
+        return [secs(f["t"]) for f in getattr(self, "frames", ())
+                if any(r.get("person") or r.get("head") for r in f["rows"])]
+
+    @staticmethod
+    def among(t, credit_at):
+        """How much a title at t sits among the credits: 1 within TITLE_AMONG_S[0] s of credit text, fading to 0 by
+        TITLE_AMONG_S[1]."""
+        near, far = TITLE_AMONG_S
+        d = min((abs(t - c) for c in credit_at), default=far)
+        return 1.0 if d <= near else max(0.0, (far - d) / (far - near))
+
+    def titled(self):
+        """A title held on screen with credit text near it (TITLE_WITH_S), one that named a guess (boosted), or one
+        whose search found a film (film_found): a title card, not a sign or a magazine in a scene (A Grand Day Out's "RAVEL
+        Magagine"). A Charlie Brown Christmas: no names read, its title naming it."""
+        if getattr(self, "boosted", None) or getattr(self, "title_pts", None):
+            return True
+        phrases = self.title_readings() if getattr(self, "titles", None) else []
+        if not phrases:
+            return False
+        credit_at = self.credit_times()
+        return any(abs(x[1] - c) <= TITLE_WITH_S for p in phrases for x in self.titles
+                   if x[2] == p or alike(p, x[2]) >= TITLE_LIKE for c in credit_at) \
+            or any(self.film_found(p) for p in phrases)
 
     def held_titles(self):
         """{a title's reading: the frames it was on screen}, readings alike (alike >= TITLE_LIKE) counted as one
@@ -2065,6 +2358,103 @@ class Scan:
         for x in self.titles:
             out[x[2]] = sum(y[3] for y in self.titles if y[2] == x[2] or alike(x[2], y[2]) >= TITLE_LIKE)
         return out
+
+    def title_films(self, text):
+        """The films this reading names (films_named: as long as the title; a series' looking for an episode), a
+        side of a name's colon only with the rest of its name read elsewhere (seen_words): [(how well, IMDb number)].
+        The search kept a scan."""
+        cache = self.__dict__.setdefault("_found", {})
+        if text not in cache:
+            dur = getattr(getattr(self, "src", None), "dur", None)
+            types = TITLE_SERIES if getattr(self, "want", "film") == "episode" else TITLE_TYPES
+            try:
+                cache[text] = name_scores(self.ix.ti, text, dur / 60 if dur else None, types)
+            except Exception:
+                cache[text] = []
+        if not cache[text]:
+            return []
+        seen = self.seen_words()
+        out = []
+        for n, votes, scores in cache[text]:
+            best = max([0.0] + [s for s, need in scores if words_read(need, seen)])
+            if best >= TITLE_FOUND:
+                out.append((round(best, 3), votes, n))
+        return [(s, n) for s, _, n in sorted(out, reverse=True)[:TITLE_FILMS]]
+
+    def _needs(self, text):
+        """The reading's search found a name that needs words read elsewhere (a side of its colon)."""
+        return any(need for _, _, scores in self.__dict__.get("_found", {}).get(text) or () for _, need in scores)
+
+    def not_a_title_kept(self, text):
+        """not_titles, kept a scan by the reading (one card read several ways, each looked at once)."""
+        kept = self.__dict__.setdefault("_not_title", {})
+        if text not in kept:
+            kept[text] = self.not_titles(text)
+        return kept[text]
+
+    def seen_words(self):
+        """The words read so far, a name's other words looked for among them: the disc's own (its label's, its
+        menus'), the opening's lettering and rows."""
+        frames, titles = getattr(self, "frames", ()), getattr(self, "titles", ())
+        key = (len(frames), len(titles), tuple(x[2] for x in titles))
+        if getattr(self, "_seen_key", None) != key:
+            self._seen_key = key
+            self._seen = set(getattr(self, "disc_words", ())) | {w for x in titles for w in norm(x[2])} | \
+                {w for fr in frames for r in fr["rows"] for w in norm(r.get("text") or "")}
+        return self._seen
+
+    def film_found(self, text):
+        """A reading names a film (title_films): the scan's time spent on it, and the title counted as credits seen."""
+        return bool(self.title_films(text))
+
+    def title_evidence(self, score, why, t):
+        """Each title read gives the films it names evidence, as the end credits' names do: TITLE_BOOST by how well
+        it names them (title_films), weighed down when it sits in a scene (busy, off in a corner, a sentence); a guess
+        it names (title_matches) the whole boost. A film's best only, given once: score and cast raised by what's new
+        (the title's counts as cast read, CAST_MIN: names unread, a title can win -- once settled, TITLE_SETTLE s on,
+        the names to disagree first). An episode's: its guesses' only (its show is the names' to find). The films
+        newly named."""
+        best, said = {}, {}
+        done = self.__dict__.setdefault("_weighed", set())   # (readings weighed already: each once, a scan)
+        seen_n = len(self.seen_words())
+        credit_at = self.credit_times()
+        for x in self.titles if getattr(self, "want", "film") != "episode" else ():
+            w = (TITLE_BUSY_W if len(x) > 4 and x[4] > TITLE_BUSY else 1.0) * (x[5] if len(x) > 5 else 1.0) * \
+                (TITLE_SENTENCE_W if sentence(x[2]) else 1.0) * \
+                (TITLE_AWAY_W + (1 - TITLE_AWAY_W) * self.among(x[1], credit_at))
+            k = (x[2], round(w, 3), seen_n if self._needs(x[2]) else 0)   # (again once more words are read, when
+            if k in done:                                                 #  a name's other side wants them)
+                continue
+            done.add(k)
+            if self.not_a_title_kept(x[2]):
+                continue
+            films = self.title_films(x[2])
+            for s, n in films:                 # (named as well as others: a word many films' names are, weaker)
+                share = math.sqrt(sum(1 for s2, _ in films if s2 >= s - TITLE_TIED))
+                if TITLE_BOOST * s * w / share > best.get(n, 0.0):
+                    best[n], said[n] = TITLE_BOOST * s * w / share, x[2]
+        for n, text in self.title_matches().items():
+            best[n], said[n] = TITLE_BOOST, text
+        new = []
+        for n, pts in best.items():
+            more = pts - self.title_pts.get(n, 0.0)
+            if more <= 0.01:
+                continue
+            if n not in self.title_pts:
+                new.append(n)
+                self.boosted.setdefault(n, t)
+                why[n].add("title " + " ".join(norm(said[n])))
+                self.log("the title %s names %s (%.1f)" % (said[n], self.ix.title(n)[0], pts))
+            self.title_pts[n] = pts
+            score[n] += more
+            self.cast[n] += more
+        return new
+
+    def film_like(self, text):
+        """A reading worth more of the scan's time: alike a guess's name (TITLE_LIKE: a misreading still --
+        "CHARLIE hristmas"), or a film found for it (film_found)."""
+        return any(alike(text, c["name"]) >= TITLE_LIKE for c in getattr(self, "candidates", None) or ()) \
+            or self.film_found(text)
 
     def named_like(self, text, name):
         """title_like of a title read and a guess's name, or of its name after a colon when the words before it are
@@ -2131,14 +2521,14 @@ class Scan:
     def seen(self, card_at):
         """What of a title's credits was seen, whether or not they named a film: {"card": the rating card's logo,
         "crawl": end credits found, "names": the different people read (named in IMDb's index, any film's),
-        "headings": rows a credit's heading, "title": a title held on screen (title_phrases), "any": any of it -- a
+        "headings": rows a credit's heading, "title": a title held on screen with credit text near it (titled), "any": any of it -- a
         card, a crawl, a heading, a title, or SEEN_NAMES names}. None of it: a title with no credits, most likely not
         a film (an extra), never by itself. (A short of crew-only cards, Wallace & Gromit's, has its title.)"""
         names = {k for fr in self.frames for x in fr["rows"] if x.get("person") for k in x["got"]
                  if not k.startswith("char ")}
         heads = sum(1 for fr in self.frames for x in fr["rows"] if x.get("head"))
         out = {"card": card_at is not None, "crawl": self.crawl_at is not None, "names": len(names), "headings": heads,
-               "title": bool(getattr(self, "titles", None)) and bool(self.title_phrases())}
+               "title": self.titled()}
         out["any"] = out["card"] or out["crawl"] or heads > 0 or out["title"] or len(names) >= SEEN_NAMES
         return out
 
