@@ -190,6 +190,8 @@ TITLE_MATCH = 0.85          # (a title held on screen this like a guess's whole 
                             #  "Rudalph the Red-Nosed Reindeer" is Rudolph's, "Rudolph" isn't Rudolph's Shiny New Year)
 TITLE_BOOST = 3.0           # (that boost: about three names' worth -- the names still have the last word, as an
                             #  opening's gag of a wrong title raised and corrected, In the Navy's Buck Privates flag)
+TITLE_ALONE = 1.0           # (a film no names back wins the opening on its title only with this many points --
+                            #  a lone sign in a scene, "FBI", a third of a name's FBI Code 98, is no win; listed)
 TITLE_SETTLE = 20           # (a film can't win the opening on a title's boost sooner than this many s after it,
                             #  unless the credits end first)
 SHORT_FILM = 60 * 60        # (a title shorter: a short or a special, its credits read from the opening first)
@@ -396,45 +398,51 @@ def words_read(need, seen):
 def name_match(read, name):
     """A reading's words matched to a name's in order, a slip allowed; one word read for two run together
     ("peierpan": peter pan), two read for one split ("westmins ter"); small words free. (name letters matched,
-    reading letters matched, the reading's words matched: their places)."""
+    reading letters matched, the reading's words matched: their places, the name's words matched: theirs)."""
     big = lambda x: x not in TITLE_SMALL
     n, m = len(read), len(name)
-    dp = [[(0.0, 0.0, frozenset())] * (m + 1) for _ in range(n + 1)]
+    dp = [[(0.0, 0.0, frozenset(), frozenset())] * (m + 1) for _ in range(n + 1)]
     for i in range(1, n + 1):
         for j in range(1, m + 1):
             ways = [dp[i - 1][j], dp[i][j - 1]]
             s = word_like(read[i - 1], name[j - 1])
             if s and big(name[j - 1]):
                 d = dp[i - 1][j - 1]
-                ways.append((d[0] + s * len(name[j - 1]), d[1] + s * len(read[i - 1]), d[2] | {i - 1}))
+                ways.append((d[0] + s * len(name[j - 1]), d[1] + s * len(read[i - 1]), d[2] | {i - 1}, d[3] | {j - 1}))
             if j >= 2:
                 s = word_like(read[i - 1], name[j - 2] + name[j - 1])
                 if s:
                     d = dp[i - 1][j - 2]
                     ways.append((d[0] + s * sum(len(x) for x in name[j - 2:j] if big(x)),
-                                 d[1] + s * len(read[i - 1]), d[2] | {i - 1}))
+                                 d[1] + s * len(read[i - 1]), d[2] | {i - 1}, d[3] | {j - 2, j - 1}))
             if i >= 2:
                 s = word_like(read[i - 2] + read[i - 1], name[j - 1])
                 if s and big(name[j - 1]):
                     d = dp[i - 2][j - 1]
                     ways.append((d[0] + s * len(name[j - 1]), d[1] + s * (len(read[i - 2]) + len(read[i - 1])),
-                                 d[2] | {i - 2, i - 1}))
+                                 d[2] | {i - 2, i - 1}, d[3] | {j - 1}))
             dp[i][j] = max(ways, key=lambda x: x[:2])
     return dp[n][m]
 
 
-def name_score(read, name):
+def name_score(read, name, cut=False):
     """How well a reading names a film (0..1): how much of its name was read and how much of the reading is its
-    name, both (their harmonic mean: "CHARLIE hristmas" isn't Charlie, 2015's; "UNTL DARK" is Wait Until Dark)."""
+    name, both (their harmonic mean: "CHARLIE hristmas" isn't Charlie, 2015's; "UNTL DARK" is Wait Until Dark).
+    cut: the reading with a possessive credit cut from its front (title_readings): words read there still."""
     total = sum(len(x) for x in name if x not in TITLE_SMALL)
     rtot = sum(len(x) for x in read if x not in TITLE_SMALL)
     if not total or not rtot:
         return 0.0
-    a, b, used = name_match(read, name)
-    if used and any(k not in used and read[k] not in TITLE_SMALL and len(read[k]) >= 3
-                    for k in range(min(used), max(used) + 1)):
+    a, b, used, nused = name_match(read, name)
+    big = lambda w: w not in TITLE_SMALL and len(w) >= 3
+    if used and any(k not in used and big(read[k]) for k in range(min(used), max(used) + 1)):
         return 0.0          # (a word read between the name's words that the name lacks: not this name --
                             #  "CHARLIE BROWN hrisimas" isn't Charlie's Christmas)
+    if used and ((cut or any(big(w) for w in read[:min(used)])) and any(big(w) for w in name[:min(nused)]) or
+                 any(big(w) for w in read[max(used) + 1:]) and any(big(w) for w in name[max(nused) + 1:])):
+        return 0.0          # (words read before the name's, or after, where the name has words of its own: other
+                            #  words in its place -- "Victor Borge's Funniest Moments" isn't Les Dawson's; billing
+                            #  before a name with none there still allowed, "Frank Capras ... ARSENIC")
     cn, cr = a / total, min(1.0, b / rtot)
     if cr < TITLE_READ_MOST:
         return 0.0
@@ -491,7 +499,8 @@ def name_scores(con, text, minutes, types=TITLE_TYPES):
     fixed = [[w if w in tw.vocab or len(w) < 3 else tw.nearest(w) for w in words] for words in reads]
     out = []
     for r in rows.values():
-        scores = [(max(name_score(x, nm) for x in reads + fixed), need) for nm, need in film_names(r[1], r[2])]
+        scores = [(max(name_score(x, nm, k % len(reads) > 0) for k, x in enumerate(reads + fixed)), need)
+                  for nm, need in film_names(r[1], r[2])]   # (a credit cut from the front: still read there)
         scores = [x for x in scores if x[0] >= TITLE_FOUND]
         if scores:
             out.append((r[0], r[3], scores))
@@ -961,6 +970,19 @@ def row_years(text):
         if v and 1900 <= v <= 2035:
             out.add(v)
     return out
+
+
+WARNING_SIGNS = re.compile(r"\b(warning|fbi|interpol|piracy)\b")
+WARNING_LAW = re.compile(r"\b(copyrights?|infringement|unauthori[sz]ed|prohibit(ed|s)?|imprisonment|federal law|"
+                         r"criminal|prosecut\w*)\b")
+
+
+def warning_card(texts):
+    """A frame of an anti-piracy warning (an FBI seal, "WARNING", the law): read as a frame of its own film when a
+    disc's title holds it all, its seal's big letters no title ("FBI": FBI Code 98). A warning named and the law's
+    words: a film's own copyright notice at its end, no warning named, isn't one."""
+    low = " ".join(texts).lower()
+    return bool(WARNING_SIGNS.search(low) and WARNING_LAW.search(low))
 
 
 def copyright_row(text):
@@ -1446,6 +1468,8 @@ class Scan:
         if a is None or len(lines_of(a, self.src.h)) < 1:
             return "film", 0.0
         rows = [r for r in rows_of(a) if norm(r)]
+        if warning_card(rows):
+            return "film", 0.0           # (an anti-piracy warning: no credits)
         names = [r for r in rows if sum(1 for x in norm(r) if len(x) >= 2) >= 2]
         known = [r for r in names if self.ix.names_person(r)]
         jobs = [r for r in rows if set(norm(r)) & JOB_WORDS]
@@ -1687,12 +1711,17 @@ class Scan:
                 if cards:
                     blocks = card_blocks(f)
                     boxed = card_rows(blocks)
-                    title, size, crowd, place, nxt = title_lines(blocks, others=True, frame=(f.shape[1], f.shape[0]))
-                    if title:
-                        self.titles.append([size, here_t, title, 1, crowd, place, nxt])   # (frames on screen:
+                    if warning_card([r for r, _ in boxed]):
+                        boxed = []               # (an anti-piracy warning: nothing on it the film's)
+                    else:
+                        title, size, crowd, place, nxt = title_lines(blocks, others=True, frame=(f.shape[1], f.shape[0]))
+                        if title:
+                            self.titles.append([size, here_t, title, 1, crowd, place, nxt])   # (frames on screen:
                                                         #  _front_scan adds; the frame's other lines; its placing; its next biggest line)
                 else:
                     boxed = rows_boxes(f)
+                    if warning_card([r for r, _ in boxed]):
+                        boxed = []
                 if back is not None:
                     self.head = None             # (read backwards: a heading only heads its own frame)
             rowlog, named = [], False
@@ -2302,6 +2331,15 @@ class Scan:
                 [(99.0, score[self.decided], title, year, typ, rt, "tt%07d" % self.decided)]
         return r, win, stop or ("the cap" if t > FRONT_CAP else "the opening's end")
 
+    def backed(self, x):
+        """A film alone in the opening's window has enough to win: a number decided it, names read back it, or its
+        title gave it TITLE_ALONE points or more (else it's listed, a weak title alone)."""
+        n = int(x[6][2:])
+        ok = self.decided == n or bool(self.people_of(x)) or             (getattr(self, "title_pts", None) or {}).get(n, 0.0) >= TITLE_ALONE
+        if not ok:
+            self.log("%s: only a weak title for it, no names: listed, not won" % x[2])
+        return ok
+
     def _film(self, x, by):
         return {"imdb_id": x[6], "name": x[2], "year": x[3], "type": x[4], "runtime": x[5], "score": round(x[0], 1),
                 "names": len(self.people_of(x)), "by": by}
@@ -2601,7 +2639,7 @@ class Scan:
         self.log(steps[-1])
         self.years = card_years or self.years
         front_win = [self._film(x, "the opening credits") for x in win]
-        if len(front_win) == 1:
+        if len(front_win) == 1 and self.backed(win[0]):
             return done(front_win[0], front_win, "the opening credits", "its opening credits (%s)" % why)
         # (no winner: the films both windows hold first, then the opening's, then the end's)
         ends = {x["imdb_id"] for x in end_win}
@@ -2617,7 +2655,7 @@ class Scan:
         steps.append("the opening credits: %s, %s" % (why, "one film" if len(win) == 1 else "%d close" % len(win)))
         self.log(steps[-1])
         front_win = [self._film(x, "the opening credits") for x in win]
-        if len(front_win) == 1:
+        if len(front_win) == 1 and self.backed(win[0]):
             return done(front_win[0], front_win, "the opening credits", "its opening credits (%s)" % why)
         front_years = dict(self.years)
         r, win, why = self.end_scan()
@@ -2666,7 +2704,7 @@ class Scan:
         steps.append("the opening credits: %s, %s" % (why, "one show" if len(win) == 1 else "%d close" % len(win)))
         self.log(steps[-1])
         front_win = [self._film(x, "the opening credits") for x in win]
-        if len(front_win) == 1:
+        if len(front_win) == 1 and self.backed(win[0]):
             return done(front_win[0], front_win, "the opening credits", "its opening credits (%s)" % why)
         r, win, why = self.end_scan()
         steps.append("the end credits: %s, %s" % (why, "one show" if len(win) == 1 else "%d close" % len(win)))

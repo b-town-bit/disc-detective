@@ -640,6 +640,31 @@ def test_films_named_by_a_title_misread(named):
     assert sc("THE DOCTOR REALIN", "Oh Doctor!") == 0.0
     assert sc("PeterPan Presents", "Peter Pan") >= credits.TITLE_FOUND
     assert sc("Buck Privates Come Home BEDDOE", "Buck Privates Come Home") >= credits.TITLE_FOUND
+    # (other words read where the name has its own, before or after: not this name; none there, billing still)
+    assert sc("Victor Borge's FUNNIEST MOMENTS", "Les Dawson's Funniest Moments") == 0.0
+    assert sc("Victor Borge's FUNNIEST MOMENTS", "Victor Borge's Funniest Moments") == 1.0
+    assert sc("WAIT UNTIL DARK Results", "Wait Until Dark Again") == 0.0
+    assert credits.name_score(credits.norm("FUNNIEST MOMENTS"), credits.norm("Les Dawson's Funniest Moments"), cut=True) == 0.0
+    assert credits.name_score(credits.norm("REAR WINDOW"), credits.norm("Rear Window"), cut=True) == 1.0
+    assert sc("Frank Capras T SARSENIC AND OLD LACE", "Arsenic and Old Lace") >= credits.TITLE_FOUND
+
+
+def test_a_weak_title_alone_wins_nothing():
+    """A film alone in the opening's window wins with names read for it, a number deciding it, or TITLE_ALONE of a
+    title's points; a lone sign ("FBI", FBI Code 98's) only lists it."""
+    s = credits.Scan.__new__(credits.Scan)
+    s.log, s.decided = lambda m: None, None
+    x = (2.0, 0.45, "FBI Code 98", 1963, "tvMovie", 104, "tt0058077")
+    s.why_of, s.title_pts = {"tt0058077": ["title fbi"]}, {58077: 0.45}
+    assert not s.backed(x)
+    s.title_pts[58077] = credits.TITLE_ALONE
+    assert s.backed(x)
+    s.title_pts[58077] = 0.45
+    s.why_of["tt0058077"].append("efrem zimbalist jr")
+    assert s.backed(x)
+    s.why_of["tt0058077"] = ["title fbi"]
+    s.decided = 58077
+    assert s.backed(x)
 
 
 def test_titles_give_the_films_they_name_evidence(monkeypatch):
@@ -757,3 +782,15 @@ def test_a_title_held_is_credits_seen():
     s.titles = [[0.3, 20.0, "CLOSE SHAVE", 3]]
     seen = s.seen(None)
     assert seen["title"] and seen["any"]
+
+
+def test_an_anti_piracy_warning_is_no_credits():
+    """An FBI warning read as a frame of the film (a disc's one title holding it all): no title, no rows; a film's
+    own copyright notice, or a title with no law's words beside it, still read."""
+    assert credits.warning_card(["FBI", "WARNING", "MOTION PICTURES AND VIDEO TAPES", "ARE PROTECTED BY COPYRIGHTS ISSUED",
+                                 "FBI INVESTIGATES ALLEGATIONS OF", "COPYRIGHT INFRINGEMENT DONE WILL-"])
+    assert credits.warning_card(["WARNING", "Unauthorized duplication is prohibited by federal law"])
+    assert not credits.warning_card(["Copyright 1990 Victor Borge", "All rights reserved",
+                                     "Unauthorized duplication is prohibited"])
+    assert not credits.warning_card(["THE WARNING", "Directed by"])
+    assert not credits.warning_card(["FBI Code 98"])
